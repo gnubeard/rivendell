@@ -60,6 +60,11 @@ func main() {
 
 	srv := httpapi.New(cfg, st)
 
+	// On an empty install, create the first admin and log a setup link so the
+	// operator can get in without running a separate command (handy in a
+	// container, where there's no host Go toolchain to `go run` the bootstrap).
+	maybeBootstrap(ctx, cfg, st)
+
 	// Background session sweeper.
 	go func() {
 		t := time.NewTicker(time.Hour)
@@ -104,15 +109,66 @@ func runCreateAdmin(ctx context.Context, cfg config.Config, st *store.Store, arg
 		log.Fatalf("create admin: %v", err)
 	}
 
-	token, err := auth.NewToken()
+	url, expires, err := mintSetPasswordLink(ctx, cfg, st, u.ID)
 	if err != nil {
-		log.Fatalf("token: %v", err)
-	}
-	expires := time.Now().Add(cfg.MagicLinkTTL)
-	if err := st.CreateMagicLink(ctx, u.ID, auth.HashToken(token), "set_password", u.ID, expires); err != nil {
 		log.Fatalf("create magic link: %v", err)
 	}
 
+	fmt.Println()
+	fmt.Printf("Created admin %q (id %d).\n", username, u.ID)
+	fmt.Println("Open this one-time link to set the password:")
+	fmt.Println()
+	fmt.Printf("  %s\n", url)
+	fmt.Println()
+	fmt.Printf("Link expires %s.\n", expires.Format(time.RFC1123))
+}
+
+// maybeBootstrap creates the first admin on an empty install and logs a
+// set-password link. It only fires when there are zero admins, so it's a no-op
+// on every subsequent start. If the chosen username is somehow already taken,
+// it logs and moves on rather than failing startup.
+func maybeBootstrap(ctx context.Context, cfg config.Config, st *store.Store) {
+	n, err := st.CountAdmins(ctx)
+	if err != nil {
+		log.Printf("bootstrap: admin count check failed: %v", err)
+		return
+	}
+	if n > 0 {
+		return
+	}
+
+	username := cfg.BootstrapAdmin
+	if username == "" {
+		username = "admin"
+	}
+	u, err := st.CreateUser(ctx, username, username, store.RoleAdmin)
+	if err != nil {
+		log.Printf("bootstrap: could not create admin %q: %v", username, err)
+		return
+	}
+	url, expires, err := mintSetPasswordLink(ctx, cfg, st, u.ID)
+	if err != nil {
+		log.Printf("bootstrap: could not mint setup link: %v", err)
+		return
+	}
+
+	log.Printf("bootstrap: no admins found; created %q (id %d)", username, u.ID)
+	log.Printf("bootstrap: open this one-time link to set the password (expires %s):",
+		expires.Format(time.RFC1123))
+	log.Printf("bootstrap:   %s", url)
+}
+
+// mintSetPasswordLink creates a single-use set_password magic link for a user
+// and returns the full URL to open along with its expiry.
+func mintSetPasswordLink(ctx context.Context, cfg config.Config, st *store.Store, userID int64) (string, time.Time, error) {
+	token, err := auth.NewToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expires := time.Now().Add(cfg.MagicLinkTTL)
+	if err := st.CreateMagicLink(ctx, userID, auth.HashToken(token), "set_password", userID, expires); err != nil {
+		return "", time.Time{}, err
+	}
 	base := cfg.PublicURL
 	if base == "" {
 		base = "http://localhost" + cfg.Addr
@@ -120,12 +176,5 @@ func runCreateAdmin(ctx context.Context, cfg config.Config, st *store.Store, arg
 	for len(base) > 0 && base[len(base)-1] == '/' {
 		base = base[:len(base)-1]
 	}
-
-	fmt.Println()
-	fmt.Printf("Created admin %q (id %d).\n", username, u.ID)
-	fmt.Println("Open this one-time link to set the password:")
-	fmt.Println()
-	fmt.Printf("  %s/set-password#%s\n", base, token)
-	fmt.Println()
-	fmt.Printf("Link expires %s.\n", expires.Format(time.RFC1123))
+	return base + "/set-password#" + token, expires, nil
 }

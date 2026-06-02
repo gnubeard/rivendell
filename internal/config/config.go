@@ -20,6 +20,7 @@ type Config struct {
 	PublicURL       string        // base URL used to build magic links for the admin to copy
 	MaxMessageBytes int           // reject messages larger than this
 	MaxAvatarBytes  int           // reject avatar uploads larger than this
+	BootstrapAdmin  string        // username created on first boot if no admins exist
 }
 
 func Load() (Config, error) {
@@ -33,6 +34,7 @@ func Load() (Config, error) {
 		MagicLinkTTL:    envDur("SNUG_MAGIC_LINK_TTL", 72*time.Hour),
 		MaxMessageBytes: envInt("SNUG_MAX_MESSAGE_BYTES", 8000),
 		MaxAvatarBytes:  envInt("SNUG_MAX_AVATAR_BYTES", 512*1024),
+		BootstrapAdmin:  env("SNUG_BOOTSTRAP_ADMIN", "admin"),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("config: SNUG_DATABASE_URL is required")

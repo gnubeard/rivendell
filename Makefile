@@ -6,6 +6,7 @@ SNUG_ADDR            ?= :8080
 SNUG_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable
 TEST_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat_test?sslmode=disable
 SNUG_WEB_DIR         ?= ./web
+SNUG_PUBLIC_URL      ?= http://localhost:8080
 IMAGE                ?= snug:latest
 BIN                  ?= ./bin/snug
 
@@ -14,7 +15,7 @@ GOFLAGS_BUILD        := -trimpath -ldflags "-s -w"
 
 export GOFLAGS := -mod=mod
 
-.PHONY: help build run migrate create-admin test test-go test-web vet fmt tidy \
+.PHONY: help build run migrate create-admin podman-create-admin test test-go test-web vet fmt tidy \
         docker-build docker-run podman-build podman-test clean
 
 help: ## Show this help
@@ -33,10 +34,19 @@ run: ## Run the server (needs Postgres up; see SNUG_DATABASE_URL)
 migrate: ## Apply database migrations and exit
 	SNUG_DATABASE_URL=$(SNUG_DATABASE_URL) go run ./cmd/server -migrate
 
-create-admin: ## Create first admin + print magic link: make create-admin USER=alice NAME="Alice"
+create-admin: ## Create first admin + print magic link (needs host Go): make create-admin USER=alice NAME="Alice"
 	@test -n "$(USER)" || (echo "set USER=<username> (and optional NAME=...)"; exit 1)
 	SNUG_DATABASE_URL=$(SNUG_DATABASE_URL) SNUG_ADDR=$(SNUG_ADDR) \
 		go run ./cmd/server -create-admin "$(USER)" "$(NAME)"
+
+podman-create-admin: ## Create an admin using the built image (no host Go): make podman-create-admin USER=alice NAME="Alice"
+	@test -n "$(USER)" || (echo "set USER=<username> (and optional NAME=...)"; exit 1)
+	podman run --rm --network host \
+		-e SNUG_DATABASE_URL="$(SNUG_DATABASE_URL)" \
+		-e SNUG_PUBLIC_URL="$(SNUG_PUBLIC_URL)" \
+		$(IMAGE) -create-admin "$(USER)" "$(NAME)"
+	@echo "Note: on an empty install you don't need this at all — the server"
+	@echo "creates the first admin and logs a setup link on first boot."
 
 test: test-go test-web ## Run all tests (Go + web)
 
