@@ -1,0 +1,14 @@
+# Build artifacts
+/bin/
+snug
+
+# Environment
+.env
+.env.local
+
+# Node
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+*.swp

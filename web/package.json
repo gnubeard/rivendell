@@ -1,0 +1,10 @@
+{
+  "name": "snug-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Snug web client (vanilla ES modules, no dependencies)",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
