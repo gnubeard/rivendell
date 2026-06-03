@@ -346,7 +346,6 @@ async function startDM(userId) {
   try {
     const ch = await api.createDM(userId);
     state = S.upsertChannel(state, ch);
-    setMembersDrawer(false); // close the mobile drawer if it was open
     await selectChannel(ch.id);
   } catch (ex) {
     alert(ex.message);
@@ -376,6 +375,7 @@ async function selectChannel(id) {
   state = S.clearUnread(state, id);
   renderChannels();
   renderDMs();
+  closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
 }
 
@@ -585,16 +585,30 @@ function wireControls() {
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
 
-  // Mobile: the members panel is a slide-in drawer toggled from the header.
-  $("#members-toggle").onclick = () => setMembersDrawer(!document.body.classList.contains("members-open"));
-  $("#members-backdrop").onclick = () => setMembersDrawer(false);
+  // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
+  // toggled from the header; they share one tap-to-close backdrop.
+  $("#sidebar-toggle").onclick = () => toggleDrawer("sidebar");
+  $("#members-toggle").onclick = () => toggleDrawer("members");
+  $("#drawer-backdrop").onclick = closeDrawers;
 }
 
-// setMembersDrawer opens/closes the mobile members drawer (no-op visual on
-// desktop, where the panel is always shown by the grid).
-function setMembersDrawer(open) {
-  document.body.classList.toggle("members-open", open);
-  $("#members-backdrop").hidden = !open;
+// Drawer helpers. Only one drawer is open at a time; the backdrop shows whenever
+// either is open. No-ops visually on desktop, where both panels are permanent
+// grid columns and the toggles are hidden.
+function openDrawer(which) {
+  document.body.classList.toggle("sidebar-open", which === "sidebar");
+  document.body.classList.toggle("members-open", which === "members");
+  $("#drawer-backdrop").hidden = false;
+}
+
+function closeDrawers() {
+  document.body.classList.remove("sidebar-open", "members-open");
+  $("#drawer-backdrop").hidden = true;
+}
+
+function toggleDrawer(which) {
+  if (document.body.classList.contains(which + "-open")) closeDrawers();
+  else openDrawer(which);
 }
 
 // openInviteModal lists everyone and lets you add non-members to the active
@@ -602,6 +616,7 @@ function setMembersDrawer(open) {
 async function openInviteModal() {
   const ch = state.channels[state.activeChannelId];
   if (!ch || !ch.is_private || ch.is_dm) return;
+  closeDrawers(); // get the mobile members drawer out from behind the modal
   $("#invite-subtitle").textContent = `Add people to 🔒 ${ch.name}`;
   $("#invite-modal").hidden = false;
   await refreshInviteList(ch.id);
@@ -651,6 +666,7 @@ async function refreshInviteList(channelId) {
 }
 
 function openChannelModal() {
+  closeDrawers(); // get the mobile drawer out from behind the modal
   $("#channel-create-error").textContent = "";
   $("#channel-new-name").value = "";
   $("#channel-new-topic").value = "";
@@ -660,6 +676,7 @@ function openChannelModal() {
 }
 
 function openProfileModal() {
+  closeDrawers(); // get the mobile drawer out from behind the modal
   const me = state.users[state.me.id] || state.me;
   $("#profile-error").textContent = "";
   $("#profile-display").value = me.display_name || "";
@@ -671,6 +688,7 @@ function openProfileModal() {
 // --- admin panel ---------------------------------------------------------
 
 async function openAdmin() {
+  closeDrawers(); // get the mobile drawer out from behind the modal
   $("#admin-modal").hidden = false;
   await refreshAdminUsers();
 

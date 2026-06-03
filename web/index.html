@@ -88,11 +88,12 @@
 
     <main class="main">
       <header class="channel-header">
-        <div>
+        <button id="sidebar-toggle" class="icon-btn" title="Channels" aria-label="Channels">☰</button>
+        <div class="channel-header-main">
           <span id="channel-title" class="channel-title"></span>
           <span id="channel-topic" class="channel-topic"></span>
         </div>
-        <button id="members-toggle" class="icon-btn" title="Members" aria-label="Members">☰</button>
+        <button id="members-toggle" class="icon-btn" title="Members" aria-label="Members">👥</button>
       </header>
       <div id="message-list" class="message-list"></div>
       <div class="composer">
@@ -107,7 +108,7 @@
       </div>
       <ul id="member-list" class="member-list"></ul>
     </aside>
-    <div id="members-backdrop" class="members-backdrop" hidden></div>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
   </section>
 
   <!-- INVITE MODAL -->
