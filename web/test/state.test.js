@@ -2,6 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as S from "../static/state.js";
 
+test("setChannels tolerates a null response (JSON null) without throwing", () => {
+  const s = S.setChannels(S.initialState(), null);
+  assert.deepEqual(s.channelOrder, []);
+  assert.deepEqual(s.channels, {});
+});
+
+test("setUsers and setMessages tolerate null", () => {
+  assert.deepEqual(S.setUsers(S.initialState(), null).users, {});
+  assert.deepEqual(S.setMessages(S.initialState(), 1, null).messages[1], []);
+});
+
 test("initialState is empty but well-formed", () => {
   const s = S.initialState();
   assert.equal(s.me, null);

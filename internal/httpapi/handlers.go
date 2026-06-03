@@ -293,8 +293,9 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not list channels")
 		return
 	}
-	// Filter private channels the user can't see.
-	visible := channels[:0]
+	// Filter private channels the user can't see. Fresh non-nil slice so an
+	// empty result serializes as [] (JSON null breaks the client's iteration).
+	visible := make([]store.Channel, 0, len(channels))
 	for _, ch := range channels {
 		if !ch.IsPrivate {
 			visible = append(visible, ch)

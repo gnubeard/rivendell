@@ -65,7 +65,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []User
+	out := []User{}
 	for rows.Next() {
 		u, err := scanUser(rows)
 		if err != nil {
@@ -225,7 +225,7 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Channel
+	out := []Channel{}
 	for rows.Next() {
 		var c Channel
 		if err := rows.Scan(&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.Position, &c.CreatedAt); err != nil {
@@ -277,7 +277,7 @@ func (s *Store) ListChannelMemberIDs(ctx context.Context, channelID int64) ([]in
 		return nil, err
 	}
 	defer rows.Close()
-	var out []int64
+	out := []int64{}
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
@@ -319,7 +319,7 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Message
+	out := []Message{}
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID,

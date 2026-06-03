@@ -118,9 +118,15 @@ async function enterApp() {
   renderMembers();
   renderAdminVisibility();
   if (state.activeChannelId) await loadChannel(state.activeChannelId);
-  startRealtime();
+  // Wire interactive controls BEFORE realtime, so a transport problem can never
+  // leave the composer/admin/avatar handlers unattached.
   wireComposer();
   wireControls();
+  try {
+    startRealtime();
+  } catch (e) {
+    console.warn("snug: realtime unavailable:", e && e.message);
+  }
 }
 
 // --- realtime ------------------------------------------------------------

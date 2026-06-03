@@ -119,6 +119,36 @@ func seedAdmin(t *testing.T, ts *httptest.Server, st *store.Store) (*http.Client
 	return c, u
 }
 
+func TestEmptyListsReturnArraysNotNull(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	// A fresh install has no channels; the body must be "[]", never "null",
+	// or the client's for...of iteration throws and the whole UI fails to wire.
+	resp, body := doJSON(t, adminC, "GET", ts.URL+"/api/channels", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("channels: %d", resp.StatusCode)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("empty channels must serialize as [], got %q", string(body))
+	}
+
+	// Same contract for messages in a brand-new empty channel.
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel: %d %s", resp.StatusCode, body)
+	}
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("messages: %d", resp.StatusCode)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("empty messages must serialize as [], got %q", string(body))
+	}
+}
+
 func TestHealth(t *testing.T) {
 	ts, _, _ := newTestServer(t)
 	c := newClient(t)

@@ -21,6 +21,10 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute must win over class-level `display` rules (.modal,
+   .centered, .app all set display, which would otherwise defeat [hidden]). */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;

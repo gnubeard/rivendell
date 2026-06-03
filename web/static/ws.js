@@ -15,7 +15,21 @@ export function connectRealtime(onEvent, onStatusChange) {
   }
 
   function open() {
-    ws = new WebSocket(url());
+    try {
+      ws = new WebSocket(url());
+    } catch (e) {
+      // Some browsers (notably Firefox under a CSP that doesn't allow the
+      // wss: origin) throw synchronously from the constructor. Treat that like
+      // any other failed connection: report disconnected and retry, rather
+      // than letting it bubble up and break the caller.
+      console.warn("snug: websocket connect failed:", e && e.message);
+      onStatusChange && onStatusChange(false);
+      if (!closedByUs) {
+        setTimeout(open, backoff);
+        backoff = Math.min(backoff * 2, 15000);
+      }
+      return;
+    }
     ws.onopen = () => {
       backoff = 500;
       onStatusChange && onStatusChange(true);

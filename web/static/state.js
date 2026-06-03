@@ -21,7 +21,7 @@ export function setMe(state, me) {
 
 export function setUsers(state, list) {
   const users = {};
-  for (const u of list) users[u.id] = u;
+  for (const u of list || []) users[u.id] = u;
   return { ...state, users };
 }
 
@@ -47,7 +47,7 @@ function sortChannels(channels) {
 
 export function setChannels(state, list) {
   const channels = {};
-  for (const c of list) channels[c.id] = c;
+  for (const c of list || []) channels[c.id] = c;
   return { ...state, channels, channelOrder: sortChannels(channels) };
 }
 
@@ -70,7 +70,7 @@ export function setActiveChannel(state, channelId) {
 
 // setMessages replaces the message list for a channel (used on initial load).
 export function setMessages(state, channelId, list) {
-  const sorted = [...list].sort((a, b) => a.id - b.id);
+  const sorted = [...(list || [])].sort((a, b) => a.id - b.id);
   return { ...state, messages: { ...state.messages, [channelId]: sorted } };
 }
 
@@ -78,7 +78,7 @@ export function setMessages(state, channelId, list) {
 export function prependMessages(state, channelId, older) {
   const existing = state.messages[channelId] || [];
   const seen = new Set(existing.map((m) => m.id));
-  const merged = [...older.filter((m) => !seen.has(m.id)), ...existing].sort((a, b) => a.id - b.id);
+  const merged = [...(older || []).filter((m) => !seen.has(m.id)), ...existing].sort((a, b) => a.id - b.id);
   return { ...state, messages: { ...state.messages, [channelId]: merged } };
 }
 
