@@ -203,8 +203,18 @@ async function enterApp() {
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
   state = S.setUsers(state, users);
   state = S.setChannels(state, channels);
-  // Prefer opening a real channel over a DM on first load.
-  const firstChannel = regularChannelOrder()[0] || state.channelOrder[0];
+  // Restore the channel the user last had open (if it's still accessible);
+  // otherwise prefer a real channel over a DM on first load.
+  let saved = null;
+  try {
+    saved = localStorage.getItem("snug.activeChannel");
+  } catch (e) {
+    /* localStorage may be unavailable (private mode / blocked) */
+  }
+  // Use the channel's own id (a number) — localStorage hands back a string,
+  // which would fail the `===` comparisons used throughout rendering/realtime.
+  const restore = saved && state.channels[saved] ? state.channels[saved].id : null;
+  const firstChannel = restore || regularChannelOrder()[0] || state.channelOrder[0];
   if (firstChannel) {
     state = S.setActiveChannel(state, firstChannel);
   }
@@ -463,6 +473,11 @@ async function refreshActiveMembers() {
 
 async function selectChannel(id) {
   state = S.setActiveChannel(state, id);
+  try {
+    localStorage.setItem("snug.activeChannel", id);
+  } catch (e) {
+    /* non-fatal: persistence is best-effort */
+  }
   state = S.clearUnread(state, id);
   state = S.clearMention(state, id);
   renderChannels();
