@@ -34,9 +34,72 @@ function show(view) {
   }
 }
 
+// --- mobile viewport height ----------------------------------------------
+// Pin a --app-height var to the *visual* viewport so the app fits the area not
+// covered by the on-screen keyboard. Without this, focusing the composer makes
+// the browser scroll the whole page and the header disappears off the top.
+function trackViewportHeight() {
+  const vv = window.visualViewport;
+  const set = () => {
+    const h = Math.round(vv ? vv.height : window.innerHeight);
+    document.documentElement.style.setProperty("--app-height", `${h}px`);
+  };
+  set();
+  if (vv) {
+    vv.addEventListener("resize", set);
+    vv.addEventListener("scroll", set);
+  }
+  window.addEventListener("orientationchange", set);
+}
+
+// --- notification chime ---------------------------------------------------
+// A small, soft "boop" synthesized with the Web Audio API (no asset to ship).
+// Browsers require a user gesture before audio can play, so we lazily create and
+// resume the context on the first interaction.
+let audioCtx = null;
+function primeAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch {
+    /* no Web Audio; chime simply won't play */
+  }
+}
+function boop() {
+  // Only use a context that a prior user gesture already created — never create
+  // one here, or the browser logs "AudioContext was prevented from starting".
+  if (!audioCtx) return;
+  // Browsers auto-suspend the context when the tab is idle/backgrounded; resume
+  // is allowed because the page has already had a gesture (primeAudio ran).
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = "sine";
+  // A gentle downward bend reads as a rounded, low-key "boop". Kept a touch
+  // baritone, but not so low that small speakers (which roll off bass) swallow
+  // it; the gain is nudged up to compensate for reduced low-frequency loudness.
+  osc.frequency.setValueAtTime(520, t);
+  osc.frequency.exponentialRampToValueAtTime(380, t + 0.18);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.16, t + 0.015); // soft attack
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22); // quick gentle decay
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + 0.23);
+}
+
 // --- bootstrapping -------------------------------------------------------
 
 async function boot() {
+  trackViewportHeight();
+  // Unlock/keep-alive audio on user gestures (autoplay policy). Several event
+  // types because browsers differ on which one grants audio activation (Safari
+  // favours click/touchend over pointerdown). Not {once} so a context the
+  // browser auto-suspended (idle/backgrounded tab) is resumed on next interaction.
+  for (const ev of ["pointerdown", "keydown", "click", "touchend"]) {
+    window.addEventListener(ev, primeAudio);
+  }
   await applyInstanceName();
   // Set-password route: /set-password#<token>
   if (location.pathname === "/set-password") {
@@ -179,6 +242,9 @@ function startRealtime() {
           state = S.bumpUnread(state, cid);
           renderChannels();
           renderDMs();
+          // Chime for DMs (directed at you); channels get the silent badge only.
+          const ch = state.channels[cid];
+          if (ch && ch.is_dm) boop();
         }
       }
     },

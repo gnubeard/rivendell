@@ -30,6 +30,10 @@
 html, body {
   margin: 0;
   height: 100%;
+  /* The page itself never scrolls — the message list / drawers scroll inside a
+     viewport-sized app. This stops mobile keyboards from scrolling the header
+     off the top when the composer is focused. */
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -45,7 +49,7 @@ input, textarea, select { font-family: inherit; font-size: 14px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  height: var(--app-height, 100%);
   padding: 1rem;
 }
 .card {
@@ -92,7 +96,7 @@ button.primary:hover { filter: brightness(1.08); }
   display: grid;
   grid-template-columns: 240px 1fr 200px;
   grid-template-rows: 100%;
-  height: 100%;
+  height: var(--app-height, 100%);
   overflow: hidden; /* the page itself never scrolls; columns scroll internally */
 }
 /* Grid/flex children default to min-height:auto, which lets tall content push the
