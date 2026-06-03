@@ -556,6 +556,29 @@ func TestInstanceName(t *testing.T) {
 	}
 }
 
+// TestInstanceNameInHTML checks the instance name is threaded into the served
+// index.html (title + social-card meta), so non-JS scrapers get the brand.
+func TestInstanceNameInHTML(t *testing.T) {
+	ts, _, cfg := newTestServer(t)
+	// newTestServer points WebDir at a temp dir; drop a minimal index.html there.
+	if err := os.WriteFile(cfg.WebDir+"/index.html",
+		[]byte(`<title>__SNUG_INSTANCE__</title><meta property="og:title" content="__SNUG_INSTANCE__">`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := newClient(t)
+	resp, body := doJSON(t, c, "GET", ts.URL+"/", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("index: %d", resp.StatusCode)
+	}
+	s := string(body)
+	if strings.Contains(s, "__SNUG_INSTANCE__") {
+		t.Fatalf("placeholder not substituted: %s", s)
+	}
+	if !strings.Contains(s, "<title>rivendell-test</title>") || !strings.Contains(s, `content="rivendell-test"`) {
+		t.Fatalf("instance name not threaded into html: %s", s)
+	}
+}
+
 // TestStatusDurableAcrossReconnect guards the regression where a websocket
 // connect/disconnect overwrote the user's chosen status. A connect followed by a
 // disconnect must leave the stored status untouched.

@@ -6,6 +6,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"log"
 	"net/http"
 	"os"
@@ -275,6 +276,10 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 
 // --- static files --------------------------------------------------------
 
+// instanceNamePlaceholder is the token in index.html replaced with the
+// configured instance name at serve time (so non-JS scrapers see the brand).
+const instanceNamePlaceholder = "__SNUG_INSTANCE__"
+
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean(r.URL.Path)
 	if clean == "/" {
@@ -286,12 +291,25 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if info, err := os.Stat(full); err == nil && !info.IsDir() {
+	// Serve real static assets as-is — except index.html, which we template.
+	if info, err := os.Stat(full); err == nil && !info.IsDir() && filepath.Base(full) != "index.html" {
 		http.ServeFile(w, r, full)
 		return
 	}
-	// SPA fallback.
-	http.ServeFile(w, r, filepath.Join(s.cfg.WebDir, "index.html"))
+	// index.html (explicit, "/", or the SPA fallback) gets the instance name
+	// threaded into its title + social-card meta tags.
+	s.serveIndex(w, r)
+}
+
+func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(filepath.Join(s.cfg.WebDir, "index.html"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	out := strings.ReplaceAll(string(data), instanceNamePlaceholder, html.EscapeString(s.cfg.InstanceName))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(out))
 }
 
 // --- JSON helpers --------------------------------------------------------
