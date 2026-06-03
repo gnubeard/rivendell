@@ -161,4 +161,6 @@ type Message struct {
 	CreatedAt time.Time  `json:"created_at"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	PinnedAt  *time.Time `json:"pinned_at,omitempty"`
+	PinnedBy  *int64     `json:"pinned_by,omitempty"`
 }

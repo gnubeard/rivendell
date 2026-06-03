@@ -79,6 +79,9 @@ export const api = {
     req("POST", `/api/channels/${channelId}/messages`, { content, reply_to_id: replyTo || null }),
   editMessage: (id, content) => req("PATCH", `/api/messages/${id}`, { content }),
   deleteMessage: (id) => req("DELETE", `/api/messages/${id}`),
+  pinnedMessages: (channelId) => req("GET", `/api/channels/${channelId}/pins`),
+  pinMessage: (id) => req("PUT", `/api/messages/${id}/pin`),
+  unpinMessage: (id) => req("DELETE", `/api/messages/${id}/pin`),
 
   // admin
   createUser: (username, displayName, role) =>

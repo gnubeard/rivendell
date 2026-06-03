@@ -237,6 +237,7 @@ function startRealtime() {
         const cid = evt.payload.channel_id;
         if (cid === state.activeChannelId) {
           renderMessages();
+          refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
         } else if (evt.type === "message.new" && evt.payload.user_id !== state.me.id) {
           // A new message in a channel we're not looking at: flag it unread.
           state = S.bumpUnread(state, cid);
@@ -456,6 +457,7 @@ async function loadChannel(id) {
   }
   // Invite affordance only makes sense for a real private channel (not DMs/public).
   $("#invite-btn").hidden = !(ch && ch.is_private && !ch.is_dm);
+  $("#pins-btn").hidden = !ch;
   await refreshActiveMembers();
   try {
     const msgs = await api.messages(id, { limit: 50 });
@@ -472,6 +474,7 @@ function renderMessages() {
   const atBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
   wrap.innerHTML = "";
   const msgs = state.messages[state.activeChannelId] || [];
+  const isMod = state.me.role === "admin" || state.me.role === "moderator";
   let lastUser = null;
   let lastTime = 0;
   let i = 0;
@@ -503,26 +506,30 @@ function renderMessages() {
 
     const body = el("div", { class: "msg-body", html: formatMessage(m.content) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
 
-    const canManage = m.user_id === state.me.id || state.me.role === "admin" || state.me.role === "moderator";
+    const canManage = m.user_id === state.me.id || isMod;
     const actions = canManage
       ? el("div", { class: "msg-actions" },
           m.user_id === state.me.id ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
+          isMod ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
           el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete"))
       : null;
+    const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
+    const cls = m.pinned_at ? "msg pinned" : "msg";
 
     if (grouped) {
-      wrap.append(el("div", { class: "msg grouped" }, el("div", { class: "msg-gutter" }), el("div", { class: "msg-main" }, body, actions)));
+      wrap.append(el("div", { class: cls + " grouped" }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, actions)));
     } else {
       const avatar = author && author.has_avatar
         ? el("div", { class: "msg-avatar", style: `background-image:url(${api.avatarURL(author.id)})` })
         : el("div", { class: "msg-avatar" }, initials(author ? author.display_name : "?"));
       wrap.append(
-        el("div", { class: "msg" },
+        el("div", { class: cls },
           avatar,
           el("div", { class: "msg-main" },
             el("div", { class: "msg-head" },
               el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
-              el("span", { class: "msg-time" }, formatTime(m.created_at))
+              el("span", { class: "msg-time" }, formatTime(m.created_at)),
+              pinMark
             ),
             body,
             actions
@@ -571,6 +578,66 @@ async function deleteMessage(m) {
     await api.deleteMessage(m.id);
   } catch (ex) {
     alert(ex.message);
+  }
+}
+
+// togglePin pins/unpins a message (mod+). The resulting message.update broadcast
+// refreshes the message list and any open pins panel.
+async function togglePin(m) {
+  try {
+    if (m.pinned_at) await api.unpinMessage(m.id);
+    else await api.pinMessage(m.id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// --- pinned messages -----------------------------------------------------
+
+async function openPinsModal() {
+  if (!state.channels[state.activeChannelId]) return;
+  closeDrawers();
+  $("#pins-modal").hidden = false;
+  await refreshPins();
+}
+
+function refreshPinsIfOpen() {
+  if (!$("#pins-modal").hidden) refreshPins();
+}
+
+async function refreshPins() {
+  const ch = state.channels[state.activeChannelId];
+  const list = $("#pins-list");
+  list.innerHTML = "";
+  if (!ch) return;
+  let pins;
+  try {
+    pins = await api.pinnedMessages(ch.id);
+  } catch (ex) {
+    list.append(el("li", { class: "notice" }, ex.message));
+    return;
+  }
+  if (!pins.length) {
+    list.append(el("li", { class: "notice" }, "No pinned messages yet."));
+    return;
+  }
+  const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  for (const m of pins) {
+    const author = state.users[m.user_id];
+    list.append(
+      el("li", { class: "pin-row" },
+        el("div", { class: "pin-head" },
+          el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
+          el("span", { class: "msg-time" }, formatTime(m.created_at)),
+          isMod
+            ? el("button", {
+                class: "link", onclick: async () => {
+                  try { await api.unpinMessage(m.id); await refreshPins(); } catch (ex) { alert(ex.message); }
+                },
+              }, "unpin")
+            : null),
+        el("div", { class: "msg-body", html: formatMessage(m.content) }))
+    );
   }
 }
 
@@ -650,6 +717,9 @@ function wireControls() {
 
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
+
+  $("#pins-btn").onclick = openPinsModal;
+  $("#pins-close").onclick = () => ($("#pins-modal").hidden = true);
 
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
   // toggled from the header; they share one tap-to-close backdrop.

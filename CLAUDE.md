@@ -192,10 +192,19 @@ These were the requested next-work items; all are now implemented and tested.
   The **members panel is scoped to the active channel's membership** for private
   channels/DMs (public channels show everyone); `refreshActiveMembers()` re-fetches
   on channel open, on invite, and on realtime channel events for the active channel.
+- **Pinned messages.** `pinned_at`/`pinned_by` on `messages` (migration `0004`,
+  mirrors `edited_at`/`deleted_at`; `pinned_at IS NOT NULL` = pinned). Pin/unpin is
+  **moderator+** (`PUT`/`DELETE /api/messages/{id}/pin`); listing
+  (`GET /api/channels/{id}/pins`) is any member with channel access. Pin/unpin
+  broadcasts a plain `message.update`, so the client folds `pinned_at` in via the
+  existing `addMessage` reducer — no new event type. The pins panel
+  (`#pins-modal`, 📌 in the channel header) fetches its own list since a pin may be
+  older than the loaded message window; deleting a message also clears its pin.
 - **In-app unread indicators.** `state.unread` (channelId→count, pure
   `bumpUnread`/`clearUnread`, unit-tested). `message.new` for a non-active channel
   that isn't your own bumps it; selecting a channel clears it. Rendered as a count
-  pill + bold name on channel/DM rows. (No browser Notification API yet.)
+  pill + bold name on channel/DM rows. A soft DM chime (Web Audio) plays for DMs.
+  (No browser Notification API yet.)
 - **Deleted messages** collapse: a run of consecutive soft-deleted messages
   renders as one compact "N messages deleted" line (`renderMessages`).
 - **Status text is visible** in the member list (stacked under the name, falling

@@ -93,6 +93,7 @@
           <span id="channel-title" class="channel-title"></span>
           <span id="channel-topic" class="channel-topic"></span>
         </div>
+        <button id="pins-btn" class="icon-btn" title="Pinned messages" aria-label="Pinned messages">📌</button>
         <button id="members-toggle" class="icon-btn" title="Members" aria-label="Members">👥</button>
       </header>
       <div id="message-list" class="message-list"></div>
@@ -110,6 +111,17 @@
     </aside>
     <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
   </section>
+
+  <!-- PINNED MESSAGES MODAL -->
+  <div id="pins-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Pinned messages</h2>
+        <button id="pins-close" class="icon-btn">×</button>
+      </header>
+      <ul id="pins-list" class="pins-list"></ul>
+    </div>
+  </div>
 
   <!-- INVITE MODAL -->
   <div id="invite-modal" class="modal" hidden>

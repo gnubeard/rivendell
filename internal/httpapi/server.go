@@ -71,8 +71,11 @@ func (s *Server) Handler() http.Handler {
 	// Messages.
 	mux.HandleFunc("GET /api/channels/{id}/messages", s.auth(s.handleListMessages))
 	mux.HandleFunc("POST /api/channels/{id}/messages", s.auth(s.handleCreateMessage))
+	mux.HandleFunc("GET /api/channels/{id}/pins", s.auth(s.handleListPinnedMessages))
 	mux.HandleFunc("PATCH /api/messages/{id}", s.auth(s.handleEditMessage))
 	mux.HandleFunc("DELETE /api/messages/{id}", s.auth(s.handleDeleteMessage))
+	mux.HandleFunc("PUT /api/messages/{id}/pin", s.requireRole(store.RoleModerator, s.handlePinMessage))
+	mux.HandleFunc("DELETE /api/messages/{id}/pin", s.requireRole(store.RoleModerator, s.handleUnpinMessage))
 
 	// Admin.
 	mux.HandleFunc("POST /api/admin/users", s.requireRole(store.RoleAdmin, s.handleCreateUser))

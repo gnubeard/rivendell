@@ -589,6 +589,59 @@ func TestStatusDurableAcrossReconnect(t *testing.T) {
 	}
 }
 
+func TestPinMessages(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	memberC, _ := seedMember(t, ts, st, "sam", "Sam", store.RoleMember)
+
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel: %d %s", resp.StatusCode, body)
+	}
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]string{"content": "read me"})
+	var msg store.Message
+	json.Unmarshal(body, &msg)
+
+	// A plain member cannot pin (mod+ only).
+	resp, _ = doJSON(t, memberC, "PUT", ts.URL+"/api/messages/"+itoa(msg.ID)+"/pin", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member pin should be 403, got %d", resp.StatusCode)
+	}
+
+	// Admin pins it; the returned message carries pinned_at.
+	resp, body = doJSON(t, adminC, "PUT", ts.URL+"/api/messages/"+itoa(msg.ID)+"/pin", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin pin: %d %s", resp.StatusCode, body)
+	}
+	var pinned store.Message
+	json.Unmarshal(body, &pinned)
+	if pinned.PinnedAt == nil {
+		t.Fatalf("pinned message should have pinned_at set: %s", body)
+	}
+
+	// The pins list (readable by any member) now contains it.
+	resp, body = doJSON(t, memberC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/pins", nil)
+	var pins []store.Message
+	json.Unmarshal(body, &pins)
+	if len(pins) != 1 || pins[0].ID != msg.ID {
+		t.Fatalf("expected 1 pinned message, got %s", body)
+	}
+
+	// Unpin and confirm the list empties.
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/messages/"+itoa(msg.ID)+"/pin", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unpin: %d", resp.StatusCode)
+	}
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/pins", nil)
+	json.Unmarshal(body, &pins)
+	if len(pins) != 0 {
+		t.Fatalf("pins should be empty after unpin, got %s", body)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

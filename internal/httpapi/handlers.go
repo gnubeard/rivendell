@@ -684,6 +684,77 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// handleListPinnedMessages lists a channel's pinned messages (any member who can
+// access the channel may view them).
+func (s *Server) handleListPinnedMessages(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	msgs, err := s.st.ListPinnedMessages(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list pinned messages")
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+// setMessagePinned is shared by the pin (PUT) and unpin (DELETE) handlers, both
+// gated to moderator+ at the route. The pinned/unpinned message is broadcast as
+// a message.update so clients fold the pinned_at change into their state.
+func (s *Server) setMessagePinned(w http.ResponseWriter, r *http.Request, pinned bool) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid message id")
+		return
+	}
+	msg, err := s.st.GetMessage(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "message not found")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), msg.ChannelID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	updated, err := s.st.SetMessagePinned(r.Context(), id, u.ID, pinned)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "message not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not update pin")
+		return
+	}
+	s.broadcast("message.update", updated, s.audienceForChannel(r.Context(), ch))
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handlePinMessage(w http.ResponseWriter, r *http.Request) {
+	s.setMessagePinned(w, r, true)
+}
+
+func (s *Server) handleUnpinMessage(w http.ResponseWriter, r *http.Request) {
+	s.setMessagePinned(w, r, false)
+}
+
 // --- admin ---------------------------------------------------------------
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {

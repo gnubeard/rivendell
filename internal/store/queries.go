@@ -377,15 +377,26 @@ func (s *Store) ListChannelMemberIDs(ctx context.Context, channelID int64) ([]in
 
 // --- Messages ------------------------------------------------------------
 
-func (s *Store) CreateMessage(ctx context.Context, channelID, userID int64, content string, replyTo *int64) (Message, error) {
+// messageCols is the canonical projection used by scanMessage; keep the scan
+// order in sync.
+const messageCols = `id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at, pinned_at, pinned_by`
+
+func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
-	err := s.db.QueryRowContext(ctx,
+	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID,
+		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+func (s *Store) CreateMessage(ctx context.Context, channelID, userID int64, content string, replyTo *int64) (Message, error) {
+	return scanMessage(s.db.QueryRowContext(ctx,
 		`INSERT INTO messages (channel_id, user_id, content, reply_to_id)
 		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at`,
-		channelID, userID, content, replyTo).Scan(
-		&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID, &m.CreatedAt, &m.EditedAt, &m.DeletedAt)
-	return m, err
+		 RETURNING `+messageCols,
+		channelID, userID, content, replyTo))
 }
 
 // ListMessages returns up to limit messages in a channel with id < beforeID
@@ -398,7 +409,7 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 		beforeID = 1<<62 - 1
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at
+		`SELECT `+messageCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND id < $2
 		 ORDER BY id DESC LIMIT $3`, channelID, beforeID, limit)
@@ -408,9 +419,8 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID,
-			&m.CreatedAt, &m.EditedAt, &m.DeletedAt); err != nil {
+		m, err := scanMessage(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -422,50 +432,69 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 	return out, rows.Err()
 }
 
-func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
-	var m Message
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at
-		 FROM messages WHERE id = $1`, id).Scan(
-		&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID, &m.CreatedAt, &m.EditedAt, &m.DeletedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return m, ErrNotFound
+// ListPinnedMessages returns a channel's pinned (non-deleted) messages, most
+// recently pinned first.
+func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+messageCols+`
+		 FROM messages
+		 WHERE channel_id = $1 AND pinned_at IS NOT NULL AND deleted_at IS NULL
+		 ORDER BY pinned_at DESC`, channelID)
+	if err != nil {
+		return nil, err
 	}
-	return m, err
+	defer rows.Close()
+	out := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
+	return scanMessage(s.db.QueryRowContext(ctx,
+		`SELECT `+messageCols+` FROM messages WHERE id = $1`, id))
 }
 
 func (s *Store) EditMessage(ctx context.Context, id, userID int64, content string) (Message, error) {
-	var m Message
-	err := s.db.QueryRowContext(ctx,
+	return scanMessage(s.db.QueryRowContext(ctx,
 		`UPDATE messages SET content = $3, edited_at = now()
 		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
-		 RETURNING id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at`,
-		id, userID, content).Scan(
-		&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID, &m.CreatedAt, &m.EditedAt, &m.DeletedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return m, ErrNotFound
+		 RETURNING `+messageCols,
+		id, userID, content))
+}
+
+// SetMessagePinned pins or unpins a message. Pinning is refused on a deleted
+// message; unpinning always clears the flag.
+func (s *Store) SetMessagePinned(ctx context.Context, id, byUserID int64, pinned bool) (Message, error) {
+	if pinned {
+		return scanMessage(s.db.QueryRowContext(ctx,
+			`UPDATE messages SET pinned_at = now(), pinned_by = $2
+			 WHERE id = $1 AND deleted_at IS NULL
+			 RETURNING `+messageCols, id, byUserID))
 	}
-	return m, err
+	return scanMessage(s.db.QueryRowContext(ctx,
+		`UPDATE messages SET pinned_at = NULL, pinned_by = NULL
+		 WHERE id = $1
+		 RETURNING `+messageCols, id))
 }
 
 // SoftDeleteMessage marks a message deleted. modOverride allows admins/mods to
 // delete others' messages; when false the delete only applies to the author's.
 func (s *Store) SoftDeleteMessage(ctx context.Context, id, userID int64, modOverride bool) (Message, error) {
-	q := `UPDATE messages SET deleted_at = now(), content = ''
+	q := `UPDATE messages SET deleted_at = now(), content = '', pinned_at = NULL, pinned_by = NULL
 	      WHERE id = $1 AND deleted_at IS NULL`
 	args := []any{id}
 	if !modOverride {
 		q += ` AND user_id = $2`
 		args = append(args, userID)
 	}
-	q += ` RETURNING id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at`
-	var m Message
-	err := s.db.QueryRowContext(ctx, q, args...).Scan(
-		&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID, &m.CreatedAt, &m.EditedAt, &m.DeletedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return m, ErrNotFound
-	}
-	return m, err
+	q += ` RETURNING ` + messageCols
+	return scanMessage(s.db.QueryRowContext(ctx, q, args...))
 }
 
 // --- helpers -------------------------------------------------------------
