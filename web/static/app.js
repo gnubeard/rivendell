@@ -17,6 +17,37 @@ const PAGE = 50;
 let loadingOlder = false; // guards against overlapping fetches
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
 
+// Closed DMs: a per-browser set of DM channel ids the user has hidden from the
+// sidebar. The channel and its history are untouched server-side — closing only
+// hides the row. Reopening (clicking the person's name) or a fresh incoming
+// message un-hides it. Persisted to localStorage so it survives refreshes.
+const closedDMs = loadClosedDMs();
+
+function loadClosedDMs() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("snug.closedDMs") || "[]"));
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function saveClosedDMs() {
+  try {
+    localStorage.setItem("snug.closedDMs", JSON.stringify([...closedDMs]));
+  } catch (e) {
+    /* best-effort: persistence is non-fatal */
+  }
+}
+
+// reopenDM un-hides a previously closed DM (idempotent). Returns true if it was
+// actually closed, so callers can decide whether a re-render is needed.
+function reopenDM(id) {
+  if (!closedDMs.has(id)) return false;
+  closedDMs.delete(id);
+  saveClosedDMs();
+  return true;
+}
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -213,7 +244,11 @@ async function enterApp() {
   }
   // Use the channel's own id (a number) — localStorage hands back a string,
   // which would fail the `===` comparisons used throughout rendering/realtime.
-  const restore = saved && state.channels[saved] ? state.channels[saved].id : null;
+  // A closed DM is never restored as the active channel.
+  const restore =
+    saved && state.channels[saved] && !closedDMs.has(state.channels[saved].id)
+      ? state.channels[saved].id
+      : null;
   const firstChannel = restore || regularChannelOrder()[0] || state.channelOrder[0];
   if (firstChannel) {
     state = S.setActiveChannel(state, firstChannel);
@@ -271,7 +306,9 @@ function startRealtime() {
           if (pingsMe && tabUnfocused()) boop();
         } else if (isNewFromOther) {
           // A new message in a channel we're not looking at: flag it unread,
-          // and separately flag @-mentions so they badge distinctly.
+          // and separately flag @-mentions so they badge distinctly. A message
+          // landing in a closed DM resurfaces it so you don't miss it.
+          reopenDM(cid);
           state = S.bumpUnread(state, cid);
           if (mentioned) state = S.bumpMention(state, cid);
           renderChannels();
@@ -349,7 +386,7 @@ function renderChannels() {
 function renderDMs() {
   const list = $("#dm-list");
   list.innerHTML = "";
-  const dms = state.channelOrder.filter((id) => state.channels[id].is_dm);
+  const dms = state.channelOrder.filter((id) => state.channels[id].is_dm && !closedDMs.has(id));
   $("#dm-head").hidden = dms.length === 0;
   for (const id of dms) {
     const ch = state.channels[id];
@@ -362,7 +399,11 @@ function renderDMs() {
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
         el("span", { class: "ch-name" }, other ? other.display_name : ch.name),
-        unread ? el("span", { class: "unread-badge" }, String(unread)) : null
+        unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
+        // Anyone can close their own copy of a DM; reopen by clicking the name.
+        el("span", { class: "ch-controls" },
+          el("button", { class: "ch-ctl danger", title: "Close DM",
+            onclick: (e) => { e.stopPropagation(); closeDM(id); } }, "✕"))
       )
     );
   }
@@ -442,10 +483,28 @@ async function deleteChannel(id) {
   }
 }
 
-// startDM create-or-finds the DM channel with a user and opens it.
+// closeDM hides a DM from the sidebar (per-browser; the channel and its history
+// stay intact server-side). If it's the channel currently open, fall back to the
+// first regular channel so we don't leave the reader staring at a closed DM.
+function closeDM(id) {
+  closedDMs.add(id);
+  saveClosedDMs();
+  if (id === state.activeChannelId) {
+    const next = regularChannelOrder()[0] || state.channelOrder.find((cid) => !closedDMs.has(cid));
+    if (next != null) {
+      selectChannel(next);
+      return; // selectChannel re-renders the DM list for us
+    }
+  }
+  renderDMs();
+}
+
+// startDM create-or-finds the DM channel with a user and opens it. Doubles as the
+// "resurrect a closed DM" path — clicking a name un-hides a previously closed DM.
 async function startDM(userId) {
   try {
     const ch = await api.createDM(userId);
+    reopenDM(ch.id);
     state = S.upsertChannel(state, ch);
     await selectChannel(ch.id);
   } catch (ex) {
