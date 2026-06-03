@@ -152,6 +152,10 @@ button.primary:hover { filter: brightness(1.08); }
 /* --- main column --- */
 .main { display: flex; flex-direction: column; min-width: 0; }
 .channel-header { padding: 0.8rem 1.2rem; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; }
+/* The members toggle is a mobile-only affordance; hidden on desktop where the
+   members panel is a permanent grid column. */
+#members-toggle { display: none; margin-left: auto; align-self: center; }
+.members-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 45; }
 .channel-title { font-weight: 700; margin-right: 0.8rem; }
 .channel-topic { color: var(--text-dim); font-size: 0.85rem; }
 
@@ -232,6 +236,16 @@ button.primary:hover { filter: brightness(1.08); }
 
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-  .members { display: none; }
   .sidebar { max-height: 38vh; }
+  #members-toggle { display: inline-flex; align-items: center; justify-content: center; }
+  /* The members panel becomes a right-side slide-in drawer on small screens. */
+  .members {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 78%; max-width: 300px;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    z-index: 50;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
+  }
+  body.members-open .members { transform: translateX(0); }
 }

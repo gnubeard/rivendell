@@ -27,6 +27,9 @@ async function req(method, path, body) {
 }
 
 export const api = {
+  // instance metadata (public)
+  instance: () => req("GET", "/api/instance"),
+
   // auth
   login: (username, password) => req("POST", "/api/auth/login", { username, password }),
   logout: () => req("POST", "/api/auth/logout"),

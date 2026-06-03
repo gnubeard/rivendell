@@ -83,6 +83,9 @@ func (s *Server) Handler() http.Handler {
 	// Realtime.
 	mux.HandleFunc("GET /api/ws", s.handleWS)
 
+	// Instance metadata (public; used for branding before login).
+	mux.HandleFunc("GET /api/instance", s.handleInstance)
+
 	// Health.
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
@@ -244,20 +247,23 @@ func (s *Server) audienceForChannel(ctx context.Context, ch store.Channel) map[i
 }
 
 // onPresenceChange is invoked by the hub when a user connects/disconnects.
+// Connectivity is transient and lives in the hub; we deliberately do NOT write
+// it back to users.status, which is the user's *chosen* presence (online/away/
+// dnd/offline) and must survive reconnects. The broadcast reports effective
+// online = connected AND the user isn't invisible (status "offline"), carrying
+// the chosen status so clients can colour the dot.
 func (s *Server) onPresenceChange(userID int64, online bool) {
 	ctx := context.Background()
-	status := "online"
-	if !online {
-		status = "offline"
-	}
-	if err := s.st.SetStatus(ctx, userID, status); err != nil {
-		log.Printf("presence set status: %v", err)
+	u, err := s.st.GetUserByID(ctx, userID)
+	if err != nil {
+		log.Printf("presence lookup: %v", err)
+		return
 	}
 	_ = s.st.TouchLastSeen(ctx, userID)
 	s.broadcast("presence.update", map[string]any{
 		"user_id": userID,
-		"online":  online,
-		"status":  status,
+		"online":  online && u.Status != "offline",
+		"status":  u.Status,
 	}, nil)
 }
 

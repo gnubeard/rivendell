@@ -50,6 +50,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		MaxMessageBytes: 4096,
 		MaxAvatarBytes:  1 << 20,
 		WebDir:          t.TempDir(),
+		InstanceName:    "rivendell-test",
 	}
 	srv := New(cfg, st)
 	ts := httptest.NewServer(srv.Handler())
@@ -536,6 +537,55 @@ func TestPrivateChannelInvite(t *testing.T) {
 	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(dm.ID)+"/members", map[string]int64{"user_id": dave.ID})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("adding a member to a DM should be 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestInstanceName(t *testing.T) {
+	ts, _, _ := newTestServer(t)
+	c := newClient(t)
+	resp, body := doJSON(t, c, "GET", ts.URL+"/api/instance", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("instance: %d %s", resp.StatusCode, body)
+	}
+	var inst struct {
+		Name string `json:"name"`
+	}
+	json.Unmarshal(body, &inst)
+	if inst.Name != "rivendell-test" {
+		t.Fatalf("instance name = %q, want rivendell-test", inst.Name)
+	}
+}
+
+// TestStatusDurableAcrossReconnect guards the regression where a websocket
+// connect/disconnect overwrote the user's chosen status. A connect followed by a
+// disconnect must leave the stored status untouched.
+func TestStatusDurableAcrossReconnect(t *testing.T) {
+	ts, st, cfg := newTestServer(t)
+	_ = ts
+	srv := New(cfg, st)
+	ctx := context.Background()
+
+	u, err := st.CreateUser(ctx, "frodo", "Frodo", store.RoleMember)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if u.Status != "online" {
+		t.Fatalf("new user default status = %q, want online", u.Status)
+	}
+
+	if err := st.SetStatus(ctx, u.ID, "away"); err != nil {
+		t.Fatalf("set status: %v", err)
+	}
+	// Simulate a websocket connect then disconnect.
+	srv.onPresenceChange(u.ID, true)
+	srv.onPresenceChange(u.ID, false)
+
+	got, err := st.GetUserByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if got.Status != "away" {
+		t.Fatalf("status was clobbered by presence change: got %q, want away", got.Status)
 	}
 }
 

@@ -110,6 +110,13 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   are scoped to an audience set (`audienceForChannel`, fail-closed). `/api/ws` is
   deliberately not logged by `logMW` (to preserve the Hijacker) — its absence from
   logs is expected, not a bug.
+- **Presence vs. status:** `users.status` is the user's *durable chosen* presence
+  (online/away/dnd/offline) and is written **only** by `handleSetStatus`.
+  Connectivity is transient and lives in the hub; `onPresenceChange` must never
+  write it back to the column (doing so was a bug that reset away/dnd on every
+  reconnect — `TestStatusDurableAcrossReconnect` guards it). Effective `online`
+  reported to clients = connected AND status != "offline" (so "offline" doubles as
+  invisible); computed in both `onPresenceChange` and `handleListUsers`.
 - **Frontend:** keep `format.js` and `state.js` pure and unit-tested. `format.js`
   is XSS-safe by construction (escape first, then a fixed markdown-lite pass on the
   escaped string) — preserve that ordering. The CSS relies on
@@ -122,7 +129,10 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
 
 `SNUG_ADDR`, `SNUG_DATABASE_URL`, `SNUG_WEB_DIR`, `SNUG_PUBLIC_URL`,
 `SNUG_COOKIE_SECURE`, `SNUG_SESSION_TTL`, `SNUG_MAGIC_LINK_TTL`,
-`SNUG_MAX_MESSAGE_BYTES`, `SNUG_MAX_AVATAR_BYTES`, `SNUG_BOOTSTRAP_ADMIN`. See
+`SNUG_MAX_MESSAGE_BYTES`, `SNUG_MAX_AVATAR_BYTES`, `SNUG_BOOTSTRAP_ADMIN`,
+`SNUG_INSTANCE_NAME` (display name/brand of this instance; "snug" is the
+software, the instance can be e.g. "rivendell" — served unauthenticated at
+`GET /api/instance` and applied to the page title + every `.brand`). See
 `.env.example`. On an empty install the server creates a first admin
 (`SNUG_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
 this fires only when there are zero admins.

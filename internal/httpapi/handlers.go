@@ -262,9 +262,17 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]userWithPresence, len(users))
 	for i, u := range users {
-		out[i] = userWithPresence{User: u, Online: online[u.ID]}
+		// Invisible users (chosen status "offline") read as offline even while
+		// they hold a connection — matching the presence.update broadcasts.
+		out[i] = userWithPresence{User: u, Online: online[u.ID] && u.Status != "offline"}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleInstance reports public, unauthenticated instance metadata (the display
+// name) so the web client can brand itself before login.
+func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.InstanceName})
 }
 
 func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {

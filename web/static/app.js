@@ -37,6 +37,7 @@ function show(view) {
 // --- bootstrapping -------------------------------------------------------
 
 async function boot() {
+  await applyInstanceName();
   // Set-password route: /set-password#<token>
   if (location.pathname === "/set-password") {
     return bootSetPassword();
@@ -48,6 +49,20 @@ async function boot() {
   } catch {
     show("login");
     wireLogin();
+  }
+}
+
+// applyInstanceName brands the page (title + every .brand) from the server's
+// configured instance name, so an operator can call their instance whatever they
+// like. Best-effort: a failed fetch just leaves the default markup.
+async function applyInstanceName() {
+  try {
+    const { name } = await api.instance();
+    if (!name) return;
+    document.title = name;
+    for (const node of document.querySelectorAll(".brand")) node.textContent = name;
+  } catch {
+    /* keep the default branding */
   }
 }
 
@@ -331,6 +346,7 @@ async function startDM(userId) {
   try {
     const ch = await api.createDM(userId);
     state = S.upsertChannel(state, ch);
+    setMembersDrawer(false); // close the mobile drawer if it was open
     await selectChannel(ch.id);
   } catch (ex) {
     alert(ex.message);
@@ -568,6 +584,17 @@ function wireControls() {
 
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
+
+  // Mobile: the members panel is a slide-in drawer toggled from the header.
+  $("#members-toggle").onclick = () => setMembersDrawer(!document.body.classList.contains("members-open"));
+  $("#members-backdrop").onclick = () => setMembersDrawer(false);
+}
+
+// setMembersDrawer opens/closes the mobile members drawer (no-op visual on
+// desktop, where the panel is always shown by the grid).
+function setMembersDrawer(open) {
+  document.body.classList.toggle("members-open", open);
+  $("#members-backdrop").hidden = !open;
 }
 
 // openInviteModal lists everyone and lets you add non-members to the active

@@ -21,6 +21,7 @@ type Config struct {
 	MaxMessageBytes int           // reject messages larger than this
 	MaxAvatarBytes  int           // reject avatar uploads larger than this
 	BootstrapAdmin  string        // username created on first boot if no admins exist
+	InstanceName    string        // display name of this instance (e.g. "rivendell")
 }
 
 func Load() (Config, error) {
@@ -35,6 +36,7 @@ func Load() (Config, error) {
 		MaxMessageBytes: envInt("SNUG_MAX_MESSAGE_BYTES", 8000),
 		MaxAvatarBytes:  envInt("SNUG_MAX_AVATAR_BYTES", 512*1024),
 		BootstrapAdmin:  env("SNUG_BOOTSTRAP_ADMIN", "admin"),
+		InstanceName:    env("SNUG_INSTANCE_NAME", "snug"),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("config: SNUG_DATABASE_URL is required")
