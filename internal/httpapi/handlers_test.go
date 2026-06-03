@@ -642,6 +642,53 @@ func TestPinMessages(t *testing.T) {
 	}
 }
 
+// TestMessagePagination exercises the scrollback data path: newest-first paging
+// via limit, oldest-first ordering within a page, and the `before` cursor
+// stepping back through history to a short final page.
+func TestMessagePagination(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel: %d %s", resp.StatusCode, body)
+	}
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	ids := []int64{}
+	for i := 1; i <= 5; i++ {
+		_, b := doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages",
+			map[string]string{"content": "m" + itoa(int64(i))})
+		var m store.Message
+		json.Unmarshal(b, &m)
+		ids = append(ids, m.ID)
+	}
+
+	get := func(q string) []store.Message {
+		_, b := doJSON(t, adminC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages"+q, nil)
+		var out []store.Message
+		json.Unmarshal(b, &out)
+		return out
+	}
+
+	// Newest page of 2, oldest-first within the page: [ids[3], ids[4]].
+	p1 := get("?limit=2")
+	if len(p1) != 2 || p1[0].ID != ids[3] || p1[1].ID != ids[4] {
+		t.Fatalf("newest page wrong: %+v (ids=%v)", p1, ids)
+	}
+	// One page older: [ids[1], ids[2]].
+	p2 := get("?limit=2&before=" + itoa(p1[0].ID))
+	if len(p2) != 2 || p2[0].ID != ids[1] || p2[1].ID != ids[2] {
+		t.Fatalf("older page wrong: %+v", p2)
+	}
+	// Final (short) page: just [ids[0]] — the signal the client uses to stop.
+	p3 := get("?limit=2&before=" + itoa(p2[0].ID))
+	if len(p3) != 1 || p3[0].ID != ids[0] {
+		t.Fatalf("final page wrong: %+v", p3)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

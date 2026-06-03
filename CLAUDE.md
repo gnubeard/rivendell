@@ -200,6 +200,14 @@ These were the requested next-work items; all are now implemented and tested.
   existing `addMessage` reducer — no new event type. The pins panel
   (`#pins-modal`, 📌 in the channel header) fetches its own list since a pin may be
   older than the loaded message window; deleting a message also clears its pin.
+- **Scrollback / history.** Storage is unbounded (plain rows, indexed
+  `(channel_id, id DESC)`); the API does keyset pagination
+  (`GET …/messages?before=<id>&limit=<n>`, `id < before ORDER BY id DESC`). The
+  client loads the most recent `PAGE` (50) on open and fetches older pages as you
+  scroll near the top (`loadOlderMessages` → `state.oldestMessageId` cursor →
+  `prependMessages`), guarded by an in-flight flag and a `historyComplete` set
+  (a short page = reached the start). `renderMessages` preserves the reader's
+  scroll position on re-render (only auto-scrolls to bottom when already there).
 - **In-app unread indicators.** `state.unread` (channelId→count, pure
   `bumpUnread`/`clearUnread`, unit-tested). `message.new` for a non-active channel
   that isn't your own bumps it; selecting a channel clears it. Rendered as a count

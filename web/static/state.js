@@ -114,6 +114,14 @@ export function prependMessages(state, channelId, older) {
   return { ...state, messages: { ...state.messages, [channelId]: merged } };
 }
 
+// oldestMessageId returns the smallest loaded message id for a channel (messages
+// are kept sorted ascending), or null if none are loaded. Used as the `before`
+// cursor when scrolling back through history.
+export function oldestMessageId(state, channelId) {
+  const arr = state.messages[channelId];
+  return arr && arr.length ? arr[0].id : null;
+}
+
 // addMessage appends or replaces a single message (realtime new/edit), keeping
 // the list ordered and free of duplicates.
 export function addMessage(state, msg) {

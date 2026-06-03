@@ -81,6 +81,16 @@ test("prependMessages merges older without duplicates", () => {
   assert.deepEqual(s.messages[1].map((m) => m.id), [4, 5, 6]);
 });
 
+test("oldestMessageId returns the smallest loaded id or null", () => {
+  let s = S.initialState();
+  assert.equal(S.oldestMessageId(s, 1), null);
+  s = S.setMessages(s, 1, [{ id: 5, channel_id: 1 }, { id: 3, channel_id: 1 }, { id: 8, channel_id: 1 }]);
+  assert.equal(S.oldestMessageId(s, 1), 3);
+  // After prepending older history the cursor moves back.
+  s = S.prependMessages(s, 1, [{ id: 1, channel_id: 1 }]);
+  assert.equal(S.oldestMessageId(s, 1), 1);
+});
+
 test("markMessageDeleted clears content and sets deleted_at", () => {
   let s = S.setMessages(S.initialState(), 1, [{ id: 1, channel_id: 1, content: "secret" }]);
   s = S.markMessageDeleted(s, 1, 1);

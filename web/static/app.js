@@ -12,6 +12,11 @@ let socket = null;
 // "show everyone" (public channels have no membership rows).
 let activeMemberIds = null;
 
+// Scrollback state: messages load a page at a time as you scroll up.
+const PAGE = 50;
+let loadingOlder = false; // guards against overlapping fetches
+const historyComplete = new Set(); // channelIds whose oldest message is loaded
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
@@ -206,6 +211,7 @@ async function enterApp() {
   // leave the composer/admin/avatar handlers unattached.
   wireComposer();
   wireControls();
+  wireScrollback();
   try {
     startRealtime();
   } catch (e) {
@@ -459,9 +465,13 @@ async function loadChannel(id) {
   $("#invite-btn").hidden = !(ch && ch.is_private && !ch.is_dm);
   $("#pins-btn").hidden = !ch;
   await refreshActiveMembers();
+  loadingOlder = false;
   try {
-    const msgs = await api.messages(id, { limit: 50 });
+    const msgs = await api.messages(id, { limit: PAGE });
     state = S.setMessages(state, id, msgs);
+    // A short first page means there's nothing older to scroll back to.
+    if (msgs.length < PAGE) historyComplete.add(id);
+    else historyComplete.delete(id);
     renderMessages();
   } catch (ex) {
     $("#message-list").innerHTML = "";
@@ -469,9 +479,50 @@ async function loadChannel(id) {
   }
 }
 
+// loadOlderMessages fetches the previous page when the user scrolls near the top
+// and splices it in, preserving the scroll position so the view doesn't jump.
+async function loadOlderMessages() {
+  const cid = state.activeChannelId;
+  if (!cid || loadingOlder || historyComplete.has(cid)) return;
+  const oldest = S.oldestMessageId(state, cid);
+  if (oldest == null) return;
+  loadingOlder = true;
+  const wrap = $("#message-list");
+  const prevHeight = wrap.scrollHeight;
+  const prevTop = wrap.scrollTop;
+  try {
+    const older = await api.messages(cid, { before: oldest, limit: PAGE });
+    if (older.length < PAGE) historyComplete.add(cid); // reached the beginning
+    if (older.length && cid === state.activeChannelId) {
+      state = S.prependMessages(state, cid, older);
+      renderMessages();
+      // Keep the message that was under the viewport in place: the prepended
+      // content grew the list above us by exactly this delta.
+      wrap.scrollTop = prevTop + (wrap.scrollHeight - prevHeight);
+    } else if (older.length) {
+      // User switched channels mid-fetch; merge quietly, no re-render.
+      state = S.prependMessages(state, cid, older);
+    }
+  } catch (ex) {
+    console.warn("snug: could not load older messages:", ex && ex.message);
+  } finally {
+    loadingOlder = false;
+  }
+}
+
+// wireScrollback attaches the scroll listener once; #message-list is reused
+// across channel switches (only its innerHTML changes), so this stays valid.
+function wireScrollback() {
+  const wrap = $("#message-list");
+  wrap.addEventListener("scroll", () => {
+    if (wrap.scrollTop < 120) loadOlderMessages();
+  });
+}
+
 function renderMessages() {
   const wrap = $("#message-list");
   const atBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+  const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
   wrap.innerHTML = "";
   const msgs = state.messages[state.activeChannelId] || [];
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
@@ -539,7 +590,10 @@ function renderMessages() {
     }
     i++;
   }
+  // Follow the conversation when already at the bottom; otherwise hold the
+  // reader's position (loadOlderMessages adjusts further for prepended history).
   if (atBottom) wrap.scrollTop = wrap.scrollHeight;
+  else wrap.scrollTop = prevTop;
 }
 
 // --- composer + message actions -----------------------------------------
