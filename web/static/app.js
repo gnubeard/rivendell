@@ -70,6 +70,13 @@ function primeAudio() {
     /* no Web Audio; chime simply won't play */
   }
 }
+// tabUnfocused reports whether the user isn't actually looking here — the tab is
+// backgrounded/minimized (document.hidden) or another window/app has focus
+// (!document.hasFocus()).
+function tabUnfocused() {
+  return document.hidden || !document.hasFocus();
+}
+
 function boop() {
   // Only use a context that a prior user gesture already created — never create
   // one here, or the browser logs "AudioContext was prevented from starting".
@@ -241,16 +248,20 @@ function startRealtime() {
       }
       if (evt.type.startsWith("message")) {
         const cid = evt.payload.channel_id;
+        const ch = state.channels[cid];
+        const isNewFromOther = evt.type === "message.new" && evt.payload.user_id !== state.me.id;
         if (cid === state.activeChannelId) {
           renderMessages();
           refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
-        } else if (evt.type === "message.new" && evt.payload.user_id !== state.me.id) {
+          // You're on this DM, but if the tab itself isn't focused you still
+          // won't have seen it — chime anyway.
+          if (isNewFromOther && ch && ch.is_dm && tabUnfocused()) boop();
+        } else if (isNewFromOther) {
           // A new message in a channel we're not looking at: flag it unread.
           state = S.bumpUnread(state, cid);
           renderChannels();
           renderDMs();
           // Chime for DMs (directed at you); channels get the silent badge only.
-          const ch = state.channels[cid];
           if (ch && ch.is_dm) boop();
         }
       }
