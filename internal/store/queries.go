@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -205,20 +206,30 @@ func (s *Store) PeekMagicLink(ctx context.Context, tokenHash string) (purpose st
 
 // --- Channels ------------------------------------------------------------
 
-func (s *Store) CreateChannel(ctx context.Context, name, topic string, isPrivate bool, createdBy int64) (Channel, error) {
+// channelCols is the canonical projection used by scanChannel; keep the scan
+// order in sync.
+const channelCols = `id, name, topic, is_private, is_dm, position, created_at`
+
+func scanChannel(row interface{ Scan(...any) error }) (Channel, error) {
 	var c Channel
-	err := s.db.QueryRowContext(ctx,
+	err := row.Scan(&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position, &c.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
+func (s *Store) CreateChannel(ctx context.Context, name, topic string, isPrivate bool, createdBy int64) (Channel, error) {
+	return scanChannel(s.db.QueryRowContext(ctx,
 		`INSERT INTO channels (name, topic, is_private, created_by)
 		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, name, topic, is_private, position, created_at`,
-		name, topic, isPrivate, createdBy).Scan(
-		&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.Position, &c.CreatedAt)
-	return c, err
+		 RETURNING `+channelCols,
+		name, topic, isPrivate, createdBy))
 }
 
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, topic, is_private, position, created_at
+		`SELECT `+channelCols+`
 		 FROM channels WHERE archived_at IS NULL
 		 ORDER BY position, name`)
 	if err != nil {
@@ -227,8 +238,8 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	defer rows.Close()
 	out := []Channel{}
 	for rows.Next() {
-		var c Channel
-		if err := rows.Scan(&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.Position, &c.CreatedAt); err != nil {
+		c, err := scanChannel(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -237,14 +248,68 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 }
 
 func (s *Store) GetChannel(ctx context.Context, id int64) (Channel, error) {
-	var c Channel
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, topic, is_private, position, created_at FROM channels WHERE id = $1`, id).Scan(
-		&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.Position, &c.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return c, ErrNotFound
+	return scanChannel(s.db.QueryRowContext(ctx,
+		`SELECT `+channelCols+` FROM channels WHERE id = $1`, id))
+}
+
+// dmName builds the canonical channel name for a DM between two users. The pair
+// is ordered so (a,b) and (b,a) map to the same name, and the result satisfies
+// the channels.name regex (^[a-z0-9-]{1,48}$) for any plausible BIGSERIAL ids.
+func dmName(a, b int64) string {
+	if a > b {
+		a, b = b, a
 	}
-	return c, err
+	return "dm-" + strconv.FormatInt(a, 10) + "-" + strconv.FormatInt(b, 10)
+}
+
+// GetOrCreateDM returns the two-member private channel for a pair of users,
+// creating it (and its two memberships) atomically on first use. The bool is
+// true when the channel was newly created. Relies on UNIQUE(name) to make
+// concurrent creation race-safe: the loser of an insert race re-fetches.
+func (s *Store) GetOrCreateDM(ctx context.Context, a, b int64) (Channel, bool, error) {
+	name := dmName(a, b)
+	if c, err := s.getChannelByName(ctx, name); err == nil {
+		return c, false, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return Channel{}, false, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Channel{}, false, err
+	}
+	defer tx.Rollback()
+
+	c, err := scanChannel(tx.QueryRowContext(ctx,
+		`INSERT INTO channels (name, topic, is_private, is_dm, created_by)
+		 VALUES ($1, '', TRUE, TRUE, $2)
+		 ON CONFLICT (name) DO NOTHING
+		 RETURNING `+channelCols, name, a))
+	if errors.Is(err, ErrNotFound) {
+		// Lost the create race: another request inserted it first.
+		_ = tx.Rollback()
+		c, err := s.getChannelByName(ctx, name)
+		return c, false, err
+	}
+	if err != nil {
+		return Channel{}, false, err
+	}
+	for _, uid := range []int64{a, b} {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)
+			 ON CONFLICT DO NOTHING`, c.ID, uid); err != nil {
+			return Channel{}, false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Channel{}, false, err
+	}
+	return c, true, nil
+}
+
+func (s *Store) getChannelByName(ctx context.Context, name string) (Channel, error) {
+	return scanChannel(s.db.QueryRowContext(ctx,
+		`SELECT `+channelCols+` FROM channels WHERE name = $1 AND archived_at IS NULL`, name))
 }
 
 func (s *Store) UpdateChannel(ctx context.Context, id int64, topic string, position int) error {
@@ -267,6 +332,28 @@ func (s *Store) IsChannelMember(ctx context.Context, channelID, userID int64) (b
 		`SELECT EXISTS(SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2)`,
 		channelID, userID).Scan(&ok)
 	return ok, err
+}
+
+// ListChannelMembers returns the users that belong to a (private) channel,
+// ordered by display name.
+func (s *Store) ListChannelMembers(ctx context.Context, channelID int64) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+userCols+` FROM users u
+		 JOIN channel_members m ON m.user_id = u.id
+		 WHERE m.channel_id = $1 ORDER BY u.display_name`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // ListChannelMemberIDs returns the user ids that belong to a private channel.

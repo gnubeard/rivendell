@@ -53,17 +53,24 @@
         <span id="conn-status" class="conn offline" title="Reconnecting…"></span>
       </header>
 
-      <div class="channels-head">
-        <span class="section-label">Channels</span>
-        <button id="new-channel-btn" class="icon-btn" title="New channel" hidden>+</button>
+      <div class="sidebar-scroll">
+        <div class="channels-head">
+          <span class="section-label">Channels</span>
+          <button id="new-channel-btn" class="icon-btn" title="New channel" hidden>+</button>
+        </div>
+        <ul id="channel-list" class="channel-list"></ul>
+
+        <div class="channels-head" id="dm-head" hidden>
+          <span class="section-label">Direct messages</span>
+        </div>
+        <ul id="dm-list" class="channel-list"></ul>
       </div>
-      <ul id="channel-list" class="channel-list"></ul>
 
       <div class="sidebar-foot">
         <div id="me-avatar" class="avatar me-avatar"></div>
         <div class="me-meta">
-          <div id="me-name" class="me-name"></div>
-          <div id="me-status-text" class="me-status-text" title="Click to set status text"></div>
+          <div id="me-name" class="me-name" title="Click to edit your profile"></div>
+          <div id="me-status-text" class="me-status-text" title="Click to edit your profile"></div>
         </div>
         <select id="status-select" class="status-select" title="Presence">
           <option value="online">online</option>
@@ -93,10 +100,69 @@
     </main>
 
     <aside class="members">
-      <span class="section-label">Members</span>
+      <div class="members-head">
+        <span class="section-label">Members</span>
+        <button id="invite-btn" class="icon-btn" title="Add people to this channel" hidden>+</button>
+      </div>
       <ul id="member-list" class="member-list"></ul>
     </aside>
   </section>
+
+  <!-- INVITE MODAL -->
+  <div id="invite-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Add people</h2>
+        <button id="invite-close" class="icon-btn">×</button>
+      </header>
+      <p id="invite-subtitle" class="tagline"></p>
+      <ul id="invite-list" class="invite-list"></ul>
+    </div>
+  </div>
+
+  <!-- NEW CHANNEL MODAL -->
+  <div id="channel-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>New channel</h2>
+        <button id="channel-close" class="icon-btn">×</button>
+      </header>
+      <form id="channel-create-form" class="modal-form">
+        <label>Name
+          <input id="channel-new-name" placeholder="general" pattern="[a-z0-9-]{1,48}" autocomplete="off" required>
+        </label>
+        <label>Topic <span class="optional">(optional)</span>
+          <input id="channel-new-topic" placeholder="what's this channel about?" autocomplete="off">
+        </label>
+        <label class="checkbox-row">
+          <input id="channel-new-private" type="checkbox">
+          <span>Private — only invited members can see it</span>
+        </label>
+        <button type="submit" class="primary">Create channel</button>
+        <p id="channel-create-error" class="error" role="alert"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- PROFILE MODAL -->
+  <div id="profile-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Edit profile</h2>
+        <button id="profile-close" class="icon-btn">×</button>
+      </header>
+      <form id="profile-form" class="modal-form">
+        <label>Display name
+          <input id="profile-display" maxlength="64" autocomplete="off" required>
+        </label>
+        <label>Status text <span class="optional">(optional)</span>
+          <input id="profile-status-text" maxlength="128" placeholder="what you're up to" autocomplete="off">
+        </label>
+        <button type="submit" class="primary">Save</button>
+        <p id="profile-error" class="error" role="alert"></p>
+      </form>
+    </div>
+  </div>
 
   <!-- ADMIN MODAL -->
   <div id="admin-modal" class="modal" hidden>

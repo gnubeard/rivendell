@@ -61,6 +61,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/channels/{id}", s.requireRole(store.RoleModerator, s.handleUpdateChannel))
 	mux.HandleFunc("DELETE /api/channels/{id}", s.requireRole(store.RoleModerator, s.handleArchiveChannel))
 
+	// Channel membership (private channels; invites require membership/mod+).
+	mux.HandleFunc("GET /api/channels/{id}/members", s.auth(s.handleListChannelMembers))
+	mux.HandleFunc("POST /api/channels/{id}/members", s.auth(s.handleAddChannelMember))
+
+	// Direct messages (a DM is a two-member private channel; any user may open one).
+	mux.HandleFunc("POST /api/dms", s.auth(s.handleCreateDM))
+
 	// Messages.
 	mux.HandleFunc("GET /api/channels/{id}/messages", s.auth(s.handleListMessages))
 	mux.HandleFunc("POST /api/channels/{id}/messages", s.auth(s.handleCreateMessage))

@@ -12,7 +12,22 @@ export function initialState() {
     channelOrder: [], // sorted channel ids
     messages: {}, // channelId -> array of messages (oldest first)
     activeChannelId: null,
+    unread: {}, // channelId -> count of unseen messages
   };
+}
+
+// bumpUnread increments the unseen-message count for a channel.
+export function bumpUnread(state, channelId) {
+  const n = (state.unread[channelId] || 0) + 1;
+  return { ...state, unread: { ...state.unread, [channelId]: n } };
+}
+
+// clearUnread resets a channel's unseen count (e.g. when it becomes active).
+export function clearUnread(state, channelId) {
+  if (!state.unread[channelId]) return state;
+  const unread = { ...state.unread };
+  delete unread[channelId];
+  return { ...state, unread };
 }
 
 export function setMe(state, me) {
@@ -66,6 +81,23 @@ export function removeChannel(state, channelId) {
 
 export function setActiveChannel(state, channelId) {
   return { ...state, activeChannelId: channelId };
+}
+
+// dmParticipants extracts the two user ids encoded in a DM channel's canonical
+// name (dm-<a>-<b>). Returns [] for non-DM channels or unparseable names, so the
+// UI can fall back to the channel name.
+export function dmParticipants(channel) {
+  if (!channel || !channel.is_dm) return [];
+  const m = /^dm-(\d+)-(\d+)$/.exec(channel.name || "");
+  return m ? [Number(m[1]), Number(m[2])] : [];
+}
+
+// otherDMParticipant returns the id of the *other* member of a DM (the one who
+// isn't `meId`), or null if this isn't a DM we're part of.
+export function otherDMParticipant(channel, meId) {
+  const ids = dmParticipants(channel);
+  const other = ids.find((id) => id !== meId);
+  return other == null ? null : other;
 }
 
 // setMessages replaces the message list for a channel (used on initial load).

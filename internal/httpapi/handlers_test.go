@@ -364,6 +364,181 @@ func TestPrivateChannelHidden(t *testing.T) {
 	}
 }
 
+// seedMember creates an active user with the given role and returns a
+// logged-in client plus the user record.
+func seedMember(t *testing.T, ts *httptest.Server, st *store.Store, username, display string, role store.Role) (*http.Client, store.User) {
+	t.Helper()
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, username, display, role)
+	if err != nil {
+		t.Fatalf("create %s: %v", username, err)
+	}
+	pw := username + "-strong-pw"
+	hash, _ := auth.HashPassword(pw)
+	if err := st.SetPassword(ctx, u.ID, hash); err != nil {
+		t.Fatalf("set password %s: %v", username, err)
+	}
+	c := newClient(t)
+	resp, body := doJSON(t, c, "POST", ts.URL+"/api/auth/login", map[string]string{
+		"username": username, "password": pw,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login %s: %d %s", username, resp.StatusCode, body)
+	}
+	return c, u
+}
+
+func TestDMCreateFindAndScoping(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	seedAdmin(t, ts, st) // first admin so role guards behave
+
+	aliceC, alice := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, bob := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+	modC, _ := seedMember(t, ts, st, "molly", "Molly", store.RoleModerator)
+
+	// Alice opens a DM with Bob.
+	resp, body := doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": bob.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open DM: %d %s", resp.StatusCode, body)
+	}
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	if !dm.IsDM || !dm.IsPrivate {
+		t.Fatalf("DM channel should be private+is_dm, got %+v", dm)
+	}
+
+	// Create-or-find: opening again (from either side) returns the same channel.
+	resp, body = doJSON(t, bobC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": alice.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("re-open DM: %d %s", resp.StatusCode, body)
+	}
+	var dm2 store.Channel
+	json.Unmarshal(body, &dm2)
+	if dm2.ID != dm.ID {
+		t.Fatalf("create-or-find returned a different channel: %d vs %d", dm2.ID, dm.ID)
+	}
+
+	// You cannot DM yourself.
+	resp, _ = doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": alice.ID})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("self-DM should be 400, got %d", resp.StatusCode)
+	}
+
+	// Both participants see the DM in their channel list.
+	for _, c := range []*http.Client{aliceC, bobC} {
+		resp, body = doJSON(t, c, "GET", ts.URL+"/api/channels", nil)
+		var chans []store.Channel
+		json.Unmarshal(body, &chans)
+		found := false
+		for _, ch := range chans {
+			if ch.ID == dm.ID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("participant should see the DM in channel list: %s", body)
+		}
+	}
+
+	// A moderator who is not a participant must NOT see or access the DM,
+	// despite the moderator+ bypass that applies to regular private channels.
+	resp, body = doJSON(t, modC, "GET", ts.URL+"/api/channels", nil)
+	var modChans []store.Channel
+	json.Unmarshal(body, &modChans)
+	for _, ch := range modChans {
+		if ch.ID == dm.ID {
+			t.Fatalf("moderator must not see another pair's DM")
+		}
+	}
+	resp, _ = doJSON(t, modC, "GET", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("moderator must be denied DM messages, got %d", resp.StatusCode)
+	}
+
+	// Alice posts; Bob can read it.
+	resp, body = doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages", map[string]string{
+		"content": "hey bob",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("alice post to DM: %d %s", resp.StatusCode, body)
+	}
+	resp, body = doJSON(t, bobC, "GET", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages", nil)
+	var msgs []store.Message
+	json.Unmarshal(body, &msgs)
+	if len(msgs) != 1 || msgs[0].Content != "hey bob" {
+		t.Fatalf("bob should read alice's DM message, got %s", body)
+	}
+}
+
+func TestPrivateChannelInvite(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	daveC, dave := seedMember(t, ts, st, "dave", "Dave", store.RoleMember)
+
+	// Admin creates a private channel (and is auto-joined as creator).
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{
+		"name": "secret-plans", "is_private": true,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create private channel: %d %s", resp.StatusCode, body)
+	}
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	// Dave can't see it yet, and can't read its messages.
+	resp, _ = doJSON(t, daveC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-member should be denied, got %d", resp.StatusCode)
+	}
+
+	// A non-member member (Dave) cannot invite either.
+	resp, _ = doJSON(t, daveC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members", map[string]int64{"user_id": dave.ID})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-member invite should be 403, got %d", resp.StatusCode)
+	}
+
+	// Admin (a member) invites Dave.
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members", map[string]int64{"user_id": dave.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin invite: %d %s", resp.StatusCode, body)
+	}
+
+	// Now Dave sees it in his channel list and can read it.
+	resp, body = doJSON(t, daveC, "GET", ts.URL+"/api/channels", nil)
+	var chans []store.Channel
+	json.Unmarshal(body, &chans)
+	found := false
+	for _, c := range chans {
+		if c.ID == ch.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("invited member should see the private channel: %s", body)
+	}
+	resp, _ = doJSON(t, daveC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("invited member should read messages, got %d", resp.StatusCode)
+	}
+
+	// Member list now includes both admin and Dave.
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members", nil)
+	var members []store.User
+	json.Unmarshal(body, &members)
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d: %s", len(members), body)
+	}
+
+	// You cannot manage membership of a DM.
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": dave.ID})
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(dm.ID)+"/members", map[string]int64{"user_id": dave.ID})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("adding a member to a DM should be 403, got %d", resp.StatusCode)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

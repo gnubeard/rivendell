@@ -129,9 +129,9 @@ type User struct {
 }
 
 type Session struct {
-	ID         int64
-	UserID     int64
-	ExpiresAt  time.Time
+	ID        int64
+	UserID    int64
+	ExpiresAt time.Time
 }
 
 type MagicLink struct {
@@ -147,17 +147,18 @@ type Channel struct {
 	Name      string    `json:"name"`
 	Topic     string    `json:"topic"`
 	IsPrivate bool      `json:"is_private"`
+	IsDM      bool      `json:"is_dm"`
 	Position  int       `json:"position"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 type Message struct {
-	ID          int64      `json:"id"`
-	ChannelID   int64      `json:"channel_id"`
-	UserID      int64      `json:"user_id"`
-	Content     string     `json:"content"`
-	ReplyToID   *int64     `json:"reply_to_id,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	EditedAt    *time.Time `json:"edited_at,omitempty"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	ID        int64      `json:"id"`
+	ChannelID int64      `json:"channel_id"`
+	UserID    int64      `json:"user_id"`
+	Content   string     `json:"content"`
+	ReplyToID *int64     `json:"reply_to_id,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	EditedAt  *time.Time `json:"edited_at,omitempty"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }

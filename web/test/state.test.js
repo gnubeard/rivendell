@@ -114,3 +114,38 @@ test("applyEvent ignores unknown types", () => {
   const s = S.initialState();
   assert.equal(S.applyEvent(s, { type: "nope.nope", payload: {} }), s);
 });
+
+test("dmParticipants parses ids only for DM channels", () => {
+  assert.deepEqual(S.dmParticipants({ is_dm: true, name: "dm-3-7" }), [3, 7]);
+  // Non-DM channel, even if named like one, yields nothing.
+  assert.deepEqual(S.dmParticipants({ is_dm: false, name: "dm-3-7" }), []);
+  // Unparseable / regular names yield nothing.
+  assert.deepEqual(S.dmParticipants({ is_dm: true, name: "general" }), []);
+  assert.deepEqual(S.dmParticipants(null), []);
+});
+
+test("bumpUnread and clearUnread track per-channel counts", () => {
+  let s = S.initialState();
+  s = S.bumpUnread(s, 7);
+  s = S.bumpUnread(s, 7);
+  s = S.bumpUnread(s, 9);
+  assert.equal(s.unread[7], 2);
+  assert.equal(s.unread[9], 1);
+  s = S.clearUnread(s, 7);
+  assert.equal(s.unread[7], undefined);
+  assert.equal(s.unread[9], 1);
+  // clearing an already-clear channel is a no-op returning the same reference.
+  const before = s;
+  s = S.clearUnread(s, 7);
+  assert.equal(s, before);
+});
+
+test("otherDMParticipant returns the member that isn't me", () => {
+  const dm = { is_dm: true, name: "dm-3-7" };
+  assert.equal(S.otherDMParticipant(dm, 3), 7);
+  assert.equal(S.otherDMParticipant(dm, 7), 3);
+  // id 0 is a valid id and must not be confused with "no other participant".
+  assert.equal(S.otherDMParticipant({ is_dm: true, name: "dm-0-5" }, 5), 0);
+  // Not a DM -> null.
+  assert.equal(S.otherDMParticipant({ is_dm: false, name: "general" }, 1), null);
+});

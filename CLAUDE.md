@@ -65,11 +65,21 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
 
 ## Environment quirks (these are real and have bitten us)
 
-- **Postgres is managed as a system cluster**, not via `pg_ctl` directly. Start it
-  with `pg_ctlcluster 16 main start`. Config lives at `/etc/postgresql/16/main/`,
-  not in `PGDATA`. Dev role/db: user `chat`, password `chat_dev_pw`, databases
-  `chat` and `chat_test`. Default DSN:
-  `postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable`.
+- **Postgres runs as a container** (podman/docker), not a host service. Bring up
+  a dev/test instance yourself rather than assuming a system cluster — there is no
+  `pg_ctlcluster`/`/etc/postgresql` install to rely on, and `psql` may not be on
+  the host. Dev role/db: user `chat`, password `chat_dev_pw`, databases `chat` and
+  `chat_test`. The Makefile defaults to port 5432
+  (`postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable`); if your
+  container publishes a different host port, override `SNUG_DATABASE_URL` /
+  `TEST_DATABASE_URL` accordingly. A throwaway test DB is e.g.:
+  ```
+  podman run -d --name snug-test-pg \
+    -e POSTGRES_USER=chat -e POSTGRES_PASSWORD=chat_dev_pw \
+    -e POSTGRES_DB=chat_test -p 55432:5432 postgres:16-alpine
+  export TEST_DATABASE_URL='postgres://chat:chat_dev_pw@localhost:55432/chat_test?sslmode=disable'
+  ```
+  The Go integration tests skip unless `TEST_DATABASE_URL` points at a reachable DB.
 - **Go module proxy and golang.org are unreachable in the build sandbox.** Use
   `go env -w GOPROXY=direct GOSUMDB=off GOFLAGS=-mod=mod`. Only github.com-hosted
   modules are fetchable — another reason the single-dependency rule matters.
@@ -129,34 +139,58 @@ are required for realtime:
 2. If a Content-Security-Policy header is set, `connect-src` must explicitly list
    the `wss://` origin — Firefox does not expand `'self'` to cover `ws/wss`.
 
-## Punch list (requested next work, with notes)
+## Punch list — all six items completed
 
-1. **Private-channel creation UX.** Currently the new-channel flow uses a
-   `confirm()` ("cancel = not private"), which is confusing. Replace with an
-   explicit control (a real "Private" checkbox/toggle in a small create-channel
-   form/modal). Pure frontend.
-2. **Let users edit display name and status text.** Backend already supports it
-   (`PATCH /api/me` via `handleUpdateMe`; status text has a click handler). Add
-   proper UI for editing the display name (and tidy the status-text affordance).
-3. **Fix presence dot colors.** `away` and `dnd` currently show the green
-   (online) indicator. Give each status its own color in `renderMembers`/CSS
-   (e.g. online=green, away=amber, dnd=red, offline=grey). Small CSS + class logic.
-4. **Scrolling.** Once messages exceed the viewport, the whole page scrolls.
-   Scrolling should be contained to the message list. Fix the flex/overflow on the
-   app grid and `.message-list` (it should be the scroll container;
-   `min-height: 0` on flex children is the usual culprit).
-5. **Delete and reorder channels.** Backend already has `ArchiveChannel`
-   (`DELETE /api/channels/{id}`) and `UpdateChannel` with a `position` field
-   (`PATCH /api/channels/{id}`). Needs UI: a delete affordance (mod/admin only) and
-   a way to reorder (drag, or up/down — keep it simple, no DnD library).
-6. **DMs.** Implement a DM as a **private channel with exactly two members, reusing
-   the existing `channels` + `channel_members` model** — do NOT build a parallel
-   messaging system. The owner's own framing: "a DM is basically a channel with 2
-   people in it." Suggested approach: mark such channels (e.g. an `is_dm` flag or a
-   naming/type convention), create-or-find the 2-member channel when starting a DM,
-   and in the UI render DMs in their own list section showing the *other*
-   participant's display name instead of the channel name. Respect the existing
-   private-channel audience scoping for realtime.
+These were the requested next-work items; all are now implemented and tested.
+
+1. **Private-channel creation UX.** ✅ Replaced the `confirm()` flow with a small
+   create-channel modal (`#channel-modal`) carrying an explicit "Private" checkbox.
+2. **Edit display name and status text.** ✅ Added an "Edit profile" modal
+   (`#profile-modal`) for both fields (replacing the `prompt()` for status text);
+   opened by clicking the name or status text in the sidebar foot.
+3. **Presence dot colors.** ✅ `presenceClass()` in app.js + per-status `--away`
+   (amber) / `--dnd` (red) vars; online=green, offline=grey.
+4. **Scrolling.** ✅ App grid pinned to `grid-template-rows: 100%` + `overflow:
+   hidden`; `min-height: 0` on `.sidebar/.main/.members` and `.message-list` so the
+   message list (and the sidebar scroll region) are the scroll containers.
+5. **Delete and reorder channels.** ✅ Hover controls (↑/↓/✕) on each channel row,
+   mod/admin only. Reorder renormalizes positions to contiguous indices (positions
+   all default to 0) and PATCHes only the rows that changed; delete uses
+   `ArchiveChannel`. DMs are excluded from these controls.
+6. **DMs.** ✅ A DM is a private channel with `is_dm = TRUE` and exactly two
+   members (migration `0002_dms.sql`). Key design points to preserve:
+   - **Canonical name `dm-<minUserId>-<maxUserId>`** makes a pair map to exactly
+     one channel; `UNIQUE(name)` makes create-or-find race-safe
+     (`store.GetOrCreateDM`, `POST /api/dms`).
+   - **Visibility is members-only — even for moderators/admins.** Unlike regular
+     private channels (which keep the mod+ bypass), `handleListChannels` and
+     `canAccessChannel` special-case `is_dm` so nobody can see/read another pair's
+     DM. `audienceForChannel` already scopes realtime to members (DMs are private).
+   - **The client derives the "other" participant by parsing the two ids out of the
+     channel name** (`state.js` `dmParticipants`/`otherDMParticipant`, unit-tested),
+     since a single broadcast can't bake in a per-recipient "other". DMs render in
+     their own sidebar section; start one by clicking a member in the member list.
+
+### Follow-up fixes (post punch-list)
+
+- **Private-channel invites.** `GET`/`POST /api/channels/{id}/members`
+  (`handleListChannelMembers`/`handleAddChannelMember`). Only a channel member
+  (or mod+) may invite, only into a real private channel — **public channels 400
+  and DMs 403** (a DM is fixed at two participants). Adding a member re-broadcasts
+  `channel.new` to the now-larger audience so the invitee learns of it in
+  realtime. UI: the `+` in the members panel header opens `#invite-modal`.
+  The **members panel is scoped to the active channel's membership** for private
+  channels/DMs (public channels show everyone); `refreshActiveMembers()` re-fetches
+  on channel open, on invite, and on realtime channel events for the active channel.
+- **In-app unread indicators.** `state.unread` (channelId→count, pure
+  `bumpUnread`/`clearUnread`, unit-tested). `message.new` for a non-active channel
+  that isn't your own bumps it; selecting a channel clears it. Rendered as a count
+  pill + bold name on channel/DM rows. (No browser Notification API yet.)
+- **Deleted messages** collapse: a run of consecutive soft-deleted messages
+  renders as one compact "N messages deleted" line (`renderMessages`).
+- **Status text is visible** in the member list (stacked under the name, falling
+  back to the presence word); the member-row alignment fix keeps the self row in
+  line with the rest.
 
 When in doubt on UI, favor clarity over polish — aesthetics are explicitly
 secondary to "it works" for this draft. Keep changes small and tested.
@@ -164,8 +198,8 @@ secondary to "it works" for this draft. Keep changes small and tested.
 ## Status / history
 
 Backend, frontend, and tooling are built and green. Auth, presence/status,
-channels (public/private), roles, messaging (with edit/soft-delete), avatars, and
-realtime are working. Known-good as of the last session; voice/video was always
-the big deferred item for later (it would layer onto the existing WS hub as a
-signaling channel). If git history is sparse, commit a baseline before large
-changes so diffs and rollbacks are clean.
+channels (public/private), roles, messaging (with edit/soft-delete), avatars,
+realtime, and now DMs are working, plus the full punch list above. Known-good as
+of the last session; voice/video was always the big deferred item for later (it
+would layer onto the existing WS hub as a signaling channel). If git history is
+sparse, commit a baseline before large changes so diffs and rollbacks are clean.

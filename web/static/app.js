@@ -8,6 +8,9 @@ import * as S from "./state.js";
 
 let state = S.initialState();
 let socket = null;
+// Member ids of the active channel when it's private (incl. DMs); null means
+// "show everyone" (public channels have no membership rows).
+let activeMemberIds = null;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
@@ -110,11 +113,14 @@ async function enterApp() {
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
   state = S.setUsers(state, users);
   state = S.setChannels(state, channels);
-  if (state.channelOrder.length) {
-    state = S.setActiveChannel(state, state.channelOrder[0]);
+  // Prefer opening a real channel over a DM on first load.
+  const firstChannel = regularChannelOrder()[0] || state.channelOrder[0];
+  if (firstChannel) {
+    state = S.setActiveChannel(state, firstChannel);
   }
   renderMe();
   renderChannels();
+  renderDMs();
   renderMembers();
   renderAdminVisibility();
   if (state.activeChannelId) await loadChannel(state.activeChannelId);
@@ -140,11 +146,25 @@ function startRealtime() {
       if (evt.type.startsWith("presence") || evt.type === "user.update") {
         renderMembers();
         renderMe();
+        renderDMs(); // a DM row shows the other participant's name + presence
       }
-      if (evt.type.startsWith("channel")) renderChannels();
+      if (evt.type.startsWith("channel")) {
+        renderChannels();
+        renderDMs();
+        // Membership may have changed (e.g. someone was invited) — re-scope the
+        // members panel if the event concerns the channel we're viewing.
+        if (evt.payload && evt.payload.id === state.activeChannelId) refreshActiveMembers();
+      }
       if (evt.type.startsWith("message")) {
         const cid = evt.payload.channel_id;
-        if (cid === state.activeChannelId) renderMessages();
+        if (cid === state.activeChannelId) {
+          renderMessages();
+        } else if (evt.type === "message.new" && evt.payload.user_id !== state.me.id) {
+          // A new message in a channel we're not looking at: flag it unread.
+          state = S.bumpUnread(state, cid);
+          renderChannels();
+          renderDMs();
+        }
       }
     },
     (online) => {
@@ -165,16 +185,68 @@ function renderMe() {
   $("#status-select").value = me.status;
 }
 
+// regularChannelOrder is the channel ordering with DMs excluded — DMs live in
+// their own sidebar section and are never reordered/deleted via the mod controls.
+function regularChannelOrder() {
+  return state.channelOrder.filter((id) => !state.channels[id].is_dm);
+}
+
+// dmDisplayName resolves a DM channel to the other participant's display name,
+// falling back to the raw channel name if that user isn't loaded.
+function dmDisplayName(ch) {
+  const otherId = S.otherDMParticipant(ch, state.me.id);
+  const other = otherId != null ? state.users[otherId] : null;
+  return other ? other.display_name : ch.name;
+}
+
 function renderChannels() {
   const list = $("#channel-list");
   list.innerHTML = "";
-  for (const id of state.channelOrder) {
+  const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  const order = regularChannelOrder();
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i];
     const ch = state.channels[id];
     const active = id === state.activeChannelId;
+    const controls = isMod
+      ? el("span", { class: "ch-controls" },
+          el("button", { class: "ch-ctl", title: "Move up", disabled: i === 0 ? "disabled" : null,
+            onclick: (e) => { e.stopPropagation(); moveChannel(id, -1); } }, "↑"),
+          el("button", { class: "ch-ctl", title: "Move down", disabled: i === order.length - 1 ? "disabled" : null,
+            onclick: (e) => { e.stopPropagation(); moveChannel(id, +1); } }, "↓"),
+          el("button", { class: "ch-ctl danger", title: "Delete channel",
+            onclick: (e) => { e.stopPropagation(); deleteChannel(id); } }, "✕"))
+      : null;
+    const unread = state.unread[id] || 0;
+    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "");
     list.append(
-      el("li", { class: active ? "channel active" : "channel", onclick: () => selectChannel(id) },
+      el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: "ch-hash" }, ch.is_private ? "🔒" : "#"),
-        el("span", { class: "ch-name" }, ch.name)
+        el("span", { class: "ch-name" }, ch.name),
+        unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
+        controls
+      )
+    );
+  }
+}
+
+function renderDMs() {
+  const list = $("#dm-list");
+  list.innerHTML = "";
+  const dms = state.channelOrder.filter((id) => state.channels[id].is_dm);
+  $("#dm-head").hidden = dms.length === 0;
+  for (const id of dms) {
+    const ch = state.channels[id];
+    const active = id === state.activeChannelId;
+    const otherId = S.otherDMParticipant(ch, state.me.id);
+    const other = otherId != null ? state.users[otherId] : null;
+    const unread = state.unread[id] || 0;
+    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "");
+    list.append(
+      el("li", { class: cls, onclick: () => selectChannel(id) },
+        el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
+        el("span", { class: "ch-name" }, other ? other.display_name : ch.name),
+        unread ? el("span", { class: "unread-badge" }, String(unread)) : null
       )
     );
   }
@@ -183,16 +255,31 @@ function renderChannels() {
 function renderMembers() {
   const list = $("#member-list");
   list.innerHTML = "";
-  const users = Object.values(state.users).sort((a, b) => {
+  // In a private channel/DM, restrict the panel to that channel's members.
+  let users = Object.values(state.users);
+  if (activeMemberIds) users = users.filter((u) => activeMemberIds.has(u.id));
+  users.sort((a, b) => {
     if (!!b.online !== !!a.online) return b.online ? 1 : -1;
     return a.display_name.localeCompare(b.display_name);
   });
   for (const u of users) {
+    const isSelf = u.id === state.me.id;
+    const presence = u.status === "dnd" ? "do not disturb" : (u.online ? u.status : "offline");
+    // Show the user's custom status text when they've set one; otherwise fall
+    // back to the presence word. The title always carries the presence state.
+    const statusLine = u.status_text ? u.status_text : presence;
+    const titleParts = [presence];
+    if (!isSelf) titleParts.unshift(`Message ${u.display_name}`);
     list.append(
-      el("li", { class: "member" },
-        el("span", { class: u.online ? "dot online" : "dot offline" }),
-        el("span", { class: "member-name" }, u.display_name),
-        el("span", { class: "member-status" }, u.status === "dnd" ? "do not disturb" : (u.online ? u.status : "offline"))
+      el("li", {
+        class: isSelf ? "member" : "member clickable",
+        title: titleParts.join(" · "),
+        onclick: isSelf ? null : () => startDM(u.id),
+      },
+        el("span", { class: `dot ${presenceClass(u)}` }),
+        el("div", { class: "member-text" },
+          el("span", { class: "member-name" }, u.display_name),
+          el("span", { class: "member-status", title: u.status_text || null }, statusLine))
       )
     );
   }
@@ -205,16 +292,89 @@ function renderAdminVisibility() {
   $("#new-channel-btn").hidden = !isMod;
 }
 
+// moveChannel swaps a channel with its neighbor (dir -1 = up, +1 = down) and
+// persists the result. Positions default to 0 (channels then sort by name), so a
+// bare two-channel swap of equal positions would be a no-op; instead we
+// renormalize the whole list to contiguous indices and PATCH only the channels
+// whose stored position actually changed. The channel.update broadcasts then
+// re-render the list for everyone.
+async function moveChannel(id, dir) {
+  const order = regularChannelOrder();
+  const i = order.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  const next = [...order];
+  [next[i], next[j]] = [next[j], next[i]];
+  const patches = next
+    .map((cid, idx) => (state.channels[cid].position === idx ? null : api.updateChannel(cid, { position: idx })))
+    .filter(Boolean);
+  try {
+    await Promise.all(patches);
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+async function deleteChannel(id) {
+  const ch = state.channels[id];
+  if (!ch) return;
+  if (!confirm(`Delete #${ch.name}? It will be removed for everyone.`)) return;
+  try {
+    await api.archiveChannel(id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// startDM create-or-finds the DM channel with a user and opens it.
+async function startDM(userId) {
+  try {
+    const ch = await api.createDM(userId);
+    state = S.upsertChannel(state, ch);
+    await selectChannel(ch.id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// refreshActiveMembers re-scopes the members panel to the active channel:
+// private channels (incl. DMs) show only their members; public channels show
+// everyone (activeMemberIds = null).
+async function refreshActiveMembers() {
+  const ch = state.channels[state.activeChannelId];
+  if (ch && ch.is_private) {
+    try {
+      const members = await api.channelMembers(ch.id);
+      activeMemberIds = new Set(members.map((m) => m.id));
+    } catch {
+      activeMemberIds = null;
+    }
+  } else {
+    activeMemberIds = null;
+  }
+  renderMembers();
+}
+
 async function selectChannel(id) {
   state = S.setActiveChannel(state, id);
+  state = S.clearUnread(state, id);
   renderChannels();
+  renderDMs();
   await loadChannel(id);
 }
 
 async function loadChannel(id) {
   const ch = state.channels[id];
-  $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
-  $("#channel-topic").textContent = ch ? ch.topic : "";
+  if (ch && ch.is_dm) {
+    $("#channel-title").textContent = "@ " + dmDisplayName(ch);
+    $("#channel-topic").textContent = "";
+  } else {
+    $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
+    $("#channel-topic").textContent = ch ? ch.topic : "";
+  }
+  // Invite affordance only makes sense for a real private channel (not DMs/public).
+  $("#invite-btn").hidden = !(ch && ch.is_private && !ch.is_dm);
+  await refreshActiveMembers();
   try {
     const msgs = await api.messages(id, { limit: 50 });
     state = S.setMessages(state, id, msgs);
@@ -232,18 +392,36 @@ function renderMessages() {
   const msgs = state.messages[state.activeChannelId] || [];
   let lastUser = null;
   let lastTime = 0;
-  for (const m of msgs) {
+  let i = 0;
+  while (i < msgs.length) {
+    // Collapse a run of consecutive deleted messages into a single line so
+    // tombstones don't eat vertical space.
+    if (msgs[i].deleted_at) {
+      let j = i;
+      while (j < msgs.length && msgs[j].deleted_at) j++;
+      const n = j - i;
+      wrap.append(
+        el("div", { class: "msg deleted-run" },
+          el("div", { class: "msg-gutter" }),
+          el("div", { class: "msg-main" },
+            el("div", { class: "msg-body deleted" }, n === 1 ? "message deleted" : `${n} messages deleted`)))
+      );
+      lastUser = null;
+      lastTime = 0;
+      i = j;
+      continue;
+    }
+
+    const m = msgs[i];
     const author = state.users[m.user_id];
     const t = new Date(m.created_at).getTime();
     const grouped = m.user_id === lastUser && t - lastTime < 5 * 60 * 1000;
     lastUser = m.user_id;
     lastTime = t;
 
-    const body = m.deleted_at
-      ? el("div", { class: "msg-body deleted" }, "message deleted")
-      : el("div", { class: "msg-body", html: formatMessage(m.content) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+    const body = el("div", { class: "msg-body", html: formatMessage(m.content) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
 
-    const canManage = !m.deleted_at && (m.user_id === state.me.id || state.me.role === "admin" || state.me.role === "moderator");
+    const canManage = m.user_id === state.me.id || state.me.role === "admin" || state.me.role === "moderator";
     const actions = canManage
       ? el("div", { class: "msg-actions" },
           m.user_id === state.me.id ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
@@ -270,6 +448,7 @@ function renderMessages() {
         )
       );
     }
+    i++;
   }
   if (atBottom) wrap.scrollTop = wrap.scrollHeight;
 }
@@ -324,13 +503,24 @@ function wireControls() {
     }
   };
 
-  $("#me-status-text").onclick = async () => {
-    const next = prompt("Set your status text:", (state.users[state.me.id] || state.me).status_text || "");
-    if (next == null) return;
-    const me = await api.updateMe({ status_text: next });
-    state = S.upsertUser(state, me);
-    state = S.setMe(state, me);
-    renderMe();
+  $("#me-name").onclick = openProfileModal;
+  $("#me-status-text").onclick = openProfileModal;
+  $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
+  $("#profile-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const err = $("#profile-error");
+    err.textContent = "";
+    const display_name = $("#profile-display").value.trim();
+    const status_text = $("#profile-status-text").value.trim();
+    try {
+      const me = await api.updateMe({ display_name, status_text });
+      state = S.upsertUser(state, me);
+      state = S.setMe(state, me);
+      renderMe();
+      $("#profile-modal").hidden = true;
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
   };
 
   $("#avatar-input").onchange = async (e) => {
@@ -347,14 +537,21 @@ function wireControls() {
     }
   };
 
-  $("#new-channel-btn").onclick = async () => {
-    const name = prompt("New channel name (a-z, 0-9, hyphen):");
+  $("#new-channel-btn").onclick = openChannelModal;
+  $("#channel-close").onclick = () => ($("#channel-modal").hidden = true);
+  $("#channel-create-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const err = $("#channel-create-error");
+    err.textContent = "";
+    const name = $("#channel-new-name").value.trim().toLowerCase();
+    const topic = $("#channel-new-topic").value.trim();
+    const isPrivate = $("#channel-new-private").checked;
     if (!name) return;
-    const isPrivate = confirm("Make this channel private? (OK = private)");
     try {
-      await api.createChannel(name.toLowerCase(), "", isPrivate);
+      await api.createChannel(name, topic, isPrivate);
+      $("#channel-modal").hidden = true;
     } catch (ex) {
-      alert(ex.message);
+      err.textContent = ex.message;
     }
   };
 
@@ -368,6 +565,80 @@ function wireControls() {
 
   $("#admin-btn").onclick = openAdmin;
   $("#admin-close").onclick = () => ($("#admin-modal").hidden = true);
+
+  $("#invite-btn").onclick = openInviteModal;
+  $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
+}
+
+// openInviteModal lists everyone and lets you add non-members to the active
+// private channel. Re-fetches the membership each open so it reflects reality.
+async function openInviteModal() {
+  const ch = state.channels[state.activeChannelId];
+  if (!ch || !ch.is_private || ch.is_dm) return;
+  $("#invite-subtitle").textContent = `Add people to 🔒 ${ch.name}`;
+  $("#invite-modal").hidden = false;
+  await refreshInviteList(ch.id);
+}
+
+async function refreshInviteList(channelId) {
+  const list = $("#invite-list");
+  list.innerHTML = "";
+  let members;
+  try {
+    members = await api.channelMembers(channelId);
+  } catch (ex) {
+    list.append(el("li", { class: "notice" }, ex.message));
+    return;
+  }
+  const memberIds = new Set(members.map((m) => m.id));
+  // Keep the members panel in sync as people are added to the active channel.
+  if (channelId === state.activeChannelId) {
+    activeMemberIds = memberIds;
+    renderMembers();
+  }
+  const users = Object.values(state.users).sort((a, b) => a.display_name.localeCompare(b.display_name));
+  for (const u of users) {
+    const inChannel = memberIds.has(u.id);
+    const action = inChannel
+      ? el("span", { class: "invite-in" }, "in channel")
+      : el("button", {
+          class: "link",
+          onclick: async (e) => {
+            e.target.disabled = true;
+            try {
+              await api.addChannelMember(channelId, u.id);
+              await refreshInviteList(channelId);
+            } catch (ex) {
+              alert(ex.message);
+              e.target.disabled = false;
+            }
+          },
+        }, "add");
+    list.append(
+      el("li", { class: "invite-row" },
+        el("span", { class: `dot ${presenceClass(u)}` }),
+        el("span", { class: "member-name" }, u.display_name),
+        action)
+    );
+  }
+}
+
+function openChannelModal() {
+  $("#channel-create-error").textContent = "";
+  $("#channel-new-name").value = "";
+  $("#channel-new-topic").value = "";
+  $("#channel-new-private").checked = false;
+  $("#channel-modal").hidden = false;
+  $("#channel-new-name").focus();
+}
+
+function openProfileModal() {
+  const me = state.users[state.me.id] || state.me;
+  $("#profile-error").textContent = "";
+  $("#profile-display").value = me.display_name || "";
+  $("#profile-status-text").value = me.status_text || "";
+  $("#profile-modal").hidden = false;
+  $("#profile-display").focus();
 }
 
 // --- admin panel ---------------------------------------------------------
@@ -436,6 +707,15 @@ async function refreshAdminUsers() {
 }
 
 // --- helpers -------------------------------------------------------------
+
+// presenceClass maps a user to a presence-dot color class. Offline (or invisible)
+// users are grey regardless of their stored status; online users get their
+// status color (online=green, away=amber, dnd=red).
+function presenceClass(u) {
+  if (!u.online) return "offline";
+  if (u.status === "away" || u.status === "dnd") return u.status;
+  return "online";
+}
 
 function initials(name) {
   return (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();

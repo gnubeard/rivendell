@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	reUsername = regexp.MustCompile(`^[a-z0-9_]{2,32}$`)
-	reChannel  = regexp.MustCompile(`^[a-z0-9-]{1,48}$`)
+	reUsername  = regexp.MustCompile(`^[a-z0-9_]{2,32}$`)
+	reChannel   = regexp.MustCompile(`^[a-z0-9-]{1,48}$`)
 	validStatus = map[string]bool{
 		"online": true, "away": true, "dnd": true, "offline": true,
 	}
@@ -302,7 +302,17 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		member, err := s.st.IsChannelMember(r.Context(), ch.ID, u.ID)
-		if err == nil && (member || roleRank(u.Role) >= roleRank(store.RoleModerator)) {
+		isMember := err == nil && member
+		// DMs are visible only to their two participants — a moderator/admin
+		// must NOT see other people's DMs. Regular private channels keep the
+		// moderator+ bypass.
+		if ch.IsDM {
+			if isMember {
+				visible = append(visible, ch)
+			}
+			continue
+		}
+		if isMember || roleRank(u.Role) >= roleRank(store.RoleModerator) {
 			visible = append(visible, ch)
 		}
 	}
@@ -405,17 +415,128 @@ func (s *Server) handleArchiveChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
 }
 
+// handleCreateDM create-or-finds the two-member private channel between the
+// caller and another user. Available to any authenticated user (a DM is just a
+// private channel with two people in it).
+func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	var req struct {
+		UserID int64 `json:"user_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.UserID == u.ID {
+		writeErr(w, http.StatusBadRequest, "cannot start a DM with yourself")
+		return
+	}
+	other, err := s.st.GetUserByID(r.Context(), req.UserID)
+	if err != nil || !other.IsActive {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	ch, created, err := s.st.GetOrCreateDM(r.Context(), u.ID, other.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not open DM")
+		return
+	}
+	// Only announce a freshly-created DM, and only to its two members (the
+	// audience scoping); the caller gets the channel in the HTTP response.
+	if created {
+		s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
+	}
+	writeJSON(w, http.StatusOK, ch)
+}
+
+// handleListChannelMembers lists the members of a channel the caller can access.
+func (s *Server) handleListChannelMembers(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	members, err := s.st.ListChannelMembers(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list members")
+		return
+	}
+	writeJSON(w, http.StatusOK, members)
+}
+
+// handleAddChannelMember invites a user to a private channel. Only members of
+// the channel (or moderators+) may invite, and only into a real private channel
+// — DMs are fixed at two participants and public channels have no membership.
+func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !ch.IsPrivate {
+		writeErr(w, http.StatusBadRequest, "public channels have no membership to manage")
+		return
+	}
+	if ch.IsDM {
+		writeErr(w, http.StatusForbidden, "a DM is limited to its two participants")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "only members can invite to this channel")
+		return
+	}
+	var req struct {
+		UserID int64 `json:"user_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	target, err := s.st.GetUserByID(r.Context(), req.UserID)
+	if err != nil || !target.IsActive {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err := s.st.AddChannelMember(r.Context(), ch.ID, target.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not add member")
+		return
+	}
+	// Re-broadcast the channel to the (now-larger) audience so the newly-added
+	// member's client learns the channel exists in realtime.
+	s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
+	writeJSON(w, http.StatusOK, target)
+}
+
 // --- messages ------------------------------------------------------------
 
 func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.User) bool {
 	if !ch.IsPrivate {
 		return true
 	}
-	if roleRank(u.Role) >= roleRank(store.RoleModerator) {
-		return true
-	}
 	member, err := s.st.IsChannelMember(r.Context(), ch.ID, u.ID)
-	return err == nil && member
+	isMember := err == nil && member
+	// A DM is readable only by its two participants — moderators/admins have no
+	// access to others' DMs. Regular private channels keep the moderator+ bypass.
+	if ch.IsDM {
+		return isMember
+	}
+	return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
 }
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
