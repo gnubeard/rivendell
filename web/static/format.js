@@ -19,14 +19,40 @@ export function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
+// MENTION_RE matches an @username token that isn't part of an email/URL: the @
+// must be at the start or follow a non-word, non-slash character. Usernames are
+// [a-z0-9_]{2,32}; we accept any case here and lower-case for comparison.
+const MENTION_RE = /(^|[^A-Za-z0-9_/])@([A-Za-z0-9_]{2,32})/g;
+
+// mentionsUser reports whether `content` @-mentions `username` (case-insensitive,
+// boundary-aware). Pure; used both for rendering highlights and notifications.
+export function mentionsUser(content, username) {
+  if (!content || !username) return false;
+  const target = String(username).toLowerCase();
+  MENTION_RE.lastIndex = 0;
+  let m;
+  while ((m = MENTION_RE.exec(content)) !== null) {
+    if (m[2].toLowerCase() === target) return true;
+  }
+  return false;
+}
+
 // Apply inline rules to a single already-escaped line (no code spans here).
-function inline(escaped) {
+function inline(escaped, meLower) {
   let out = escaped;
   // Bold then italic (order matters so ** isn't eaten by *).
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  // Mentions: style @username; flag the current user's own. MUST run before
+  // autolinking so the span (which contains a quoted class attr) is never
+  // injected inside an href="...". The captured name is [A-Za-z0-9_], so it
+  // can't carry HTML metacharacters.
+  out = out.replace(MENTION_RE, (full, pre, name) => {
+    const cls = meLower && name.toLowerCase() === meLower ? "mention mention-me" : "mention";
+    return `${pre}<span class="${cls}">@${name}</span>`;
+  });
   // Autolink http/https URLs. URLs in escaped text can contain &amp; etc.
   out = out.replace(
     /\bhttps?:\/\/[^\s<]+/g,
@@ -35,8 +61,9 @@ function inline(escaped) {
   return out;
 }
 
-export function formatMessage(text) {
+export function formatMessage(text, me) {
   if (text == null) return "";
+  const meLower = me ? String(me).toLowerCase() : null;
   const escaped = escapeHtml(String(text));
 
   // Split on fenced code blocks first so their contents are left verbatim.
@@ -55,9 +82,9 @@ export function formatMessage(text) {
       const rendered = lines.map((line) => {
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
-          return `<blockquote>${inlineWithCode(body)}</blockquote>`;
+          return `<blockquote>${inlineWithCode(body, meLower)}</blockquote>`;
         }
-        return inlineWithCode(line);
+        return inlineWithCode(line, meLower);
       });
       html += rendered.join("<br>");
     }
@@ -66,14 +93,14 @@ export function formatMessage(text) {
 }
 
 // Handle `inline code` spans, leaving their contents free of inline markdown.
-function inlineWithCode(escapedLine) {
+function inlineWithCode(escapedLine, meLower) {
   const segs = escapedLine.split(/`/);
   let out = "";
   for (let i = 0; i < segs.length; i++) {
     if (i % 2 === 1) {
       out += `<code>${segs[i]}</code>`;
     } else {
-      out += inline(segs[i]);
+      out += inline(segs[i], meLower);
     }
   }
   return out;

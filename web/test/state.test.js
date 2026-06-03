@@ -150,6 +150,18 @@ test("bumpUnread and clearUnread track per-channel counts", () => {
   assert.equal(s, before);
 });
 
+test("bumpMention and clearMention track per-channel mention counts", () => {
+  let s = S.initialState();
+  s = S.bumpMention(s, 3);
+  s = S.bumpMention(s, 3);
+  assert.equal(s.mentions[3], 2);
+  s = S.clearMention(s, 3);
+  assert.equal(s.mentions[3], undefined);
+  const before = s;
+  s = S.clearMention(s, 3); // no-op
+  assert.equal(s, before);
+});
+
 test("otherDMParticipant returns the member that isn't me", () => {
   const dm = { is_dm: true, name: "dm-3-7" };
   assert.equal(S.otherDMParticipant(dm, 3), 7);

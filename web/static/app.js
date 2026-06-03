@@ -3,7 +3,7 @@
 
 import { api } from "./api.js";
 import { connectRealtime } from "./ws.js";
-import { formatMessage } from "./format.js";
+import { formatMessage, mentionsUser } from "./format.js";
 import * as S from "./state.js";
 
 let state = S.initialState();
@@ -250,19 +250,25 @@ function startRealtime() {
         const cid = evt.payload.channel_id;
         const ch = state.channels[cid];
         const isNewFromOther = evt.type === "message.new" && evt.payload.user_id !== state.me.id;
+        const mentioned = isNewFromOther && mentionsUser(evt.payload.content, state.me.username);
+        // A "ping" is a message directed at you: any DM, or an @-mention.
+        const pingsMe = isNewFromOther && ((ch && ch.is_dm) || mentioned);
         if (cid === state.activeChannelId) {
           renderMessages();
           refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
-          // You're on this DM, but if the tab itself isn't focused you still
-          // won't have seen it — chime anyway.
-          if (isNewFromOther && ch && ch.is_dm && tabUnfocused()) boop();
+          // You're on this channel, but if the tab itself isn't focused you
+          // still won't have seen it — chime anyway.
+          if (pingsMe && tabUnfocused()) boop();
         } else if (isNewFromOther) {
-          // A new message in a channel we're not looking at: flag it unread.
+          // A new message in a channel we're not looking at: flag it unread,
+          // and separately flag @-mentions so they badge distinctly.
           state = S.bumpUnread(state, cid);
+          if (mentioned) state = S.bumpMention(state, cid);
           renderChannels();
           renderDMs();
-          // Chime for DMs (directed at you); channels get the silent badge only.
-          if (ch && ch.is_dm) boop();
+          // Chime for pings (DMs and @-mentions); plain channel chatter stays
+          // silent with just the unread badge.
+          if (pingsMe) boop();
         }
       }
     },
@@ -317,12 +323,13 @@ function renderChannels() {
             onclick: (e) => { e.stopPropagation(); deleteChannel(id); } }, "✕"))
       : null;
     const unread = state.unread[id] || 0;
+    const mentioned = state.mentions[id] || 0;
     const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "");
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: "ch-hash" }, ch.is_private ? "🔒" : "#"),
         el("span", { class: "ch-name" }, ch.name),
-        unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
+        unread ? el("span", { class: mentioned ? "unread-badge mention" : "unread-badge" }, mentioned ? `@${unread}` : String(unread)) : null,
         controls
       )
     );
@@ -457,6 +464,7 @@ async function refreshActiveMembers() {
 async function selectChannel(id) {
   state = S.setActiveChannel(state, id);
   state = S.clearUnread(state, id);
+  state = S.clearMention(state, id);
   renderChannels();
   renderDMs();
   closeDrawers(); // on mobile, reveal the conversation after a pick
@@ -566,7 +574,8 @@ function renderMessages() {
     lastUser = m.user_id;
     lastTime = t;
 
-    const body = el("div", { class: "msg-body", html: formatMessage(m.content) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+    const body = el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+    const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
 
     const canManage = m.user_id === state.me.id || isMod;
     const actions = canManage
@@ -576,7 +585,9 @@ function renderMessages() {
           el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete"))
       : null;
     const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
-    const cls = m.pinned_at ? "msg pinned" : "msg";
+    let cls = "msg";
+    if (m.pinned_at) cls += " pinned";
+    if (mentionsMe) cls += " mentioned";
 
     if (grouped) {
       wrap.append(el("div", { class: cls + " grouped" }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, actions)));
@@ -701,7 +712,7 @@ async function refreshPins() {
                 },
               }, "unpin")
             : null),
-        el("div", { class: "msg-body", html: formatMessage(m.content) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) }))
     );
   }
 }

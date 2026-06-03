@@ -130,6 +130,7 @@ button.primary:hover { filter: brightness(1.08); }
    mod controls (also right-aligned) have room. */
 .channel.unread .ch-name { color: var(--text); font-weight: 600; }
 .unread-badge { margin-left: auto; flex-shrink: 0; background: var(--accent); color: #0b1220; font-size: 0.66rem; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.unread-badge.mention { background: var(--danger); color: #fff; }
 #channel-list .channel:hover .unread-badge { display: none; }
 
 .sidebar-foot { display: flex; align-items: center; gap: 0.55rem; padding: 0.7rem 0.8rem; border-top: 1px solid var(--border); }
@@ -189,6 +190,9 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-actions { display: none; gap: 0.6rem; margin-top: 0.15rem; }
 .msg:hover .msg-actions { display: flex; }
 .msg.pinned { background: rgba(110, 168, 254, 0.06); border-radius: 6px; }
+.msg.mentioned { background: rgba(224, 164, 88, 0.09); border-radius: 6px; box-shadow: inset 2px 0 0 var(--away); }
+.mention { color: var(--accent); background: rgba(110, 168, 254, 0.14); border-radius: 4px; padding: 0 0.15em; }
+.mention.mention-me { color: var(--text); background: rgba(224, 164, 88, 0.28); }
 .pin-mark { font-size: 0.7rem; opacity: 0.85; }
 .msg.grouped .msg-gutter .pin-mark { display: block; text-align: center; }
 

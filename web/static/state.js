@@ -13,6 +13,7 @@ export function initialState() {
     messages: {}, // channelId -> array of messages (oldest first)
     activeChannelId: null,
     unread: {}, // channelId -> count of unseen messages
+    mentions: {}, // channelId -> count of unseen @-mentions of me
   };
 }
 
@@ -28,6 +29,21 @@ export function clearUnread(state, channelId) {
   const unread = { ...state.unread };
   delete unread[channelId];
   return { ...state, unread };
+}
+
+// bumpMention increments the unseen-mention count for a channel (a subset of
+// unread: messages that @-mention me).
+export function bumpMention(state, channelId) {
+  const n = (state.mentions[channelId] || 0) + 1;
+  return { ...state, mentions: { ...state.mentions, [channelId]: n } };
+}
+
+// clearMention resets a channel's unseen-mention count.
+export function clearMention(state, channelId) {
+  if (!state.mentions[channelId]) return state;
+  const mentions = { ...state.mentions };
+  delete mentions[channelId];
+  return { ...state, mentions };
 }
 
 export function setMe(state, me) {
