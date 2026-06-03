@@ -208,11 +208,11 @@ func (s *Store) PeekMagicLink(ctx context.Context, tokenHash string) (purpose st
 
 // channelCols is the canonical projection used by scanChannel; keep the scan
 // order in sync.
-const channelCols = `id, name, topic, is_private, is_dm, position, created_at`
+const channelCols = `id, name, topic, is_private, is_dm, position, created_at, archived_at`
 
 func scanChannel(row interface{ Scan(...any) error }) (Channel, error) {
 	var c Channel
-	err := row.Scan(&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position, &c.CreatedAt, &c.ArchivedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -318,6 +318,40 @@ func (s *Store) UpdateChannel(ctx context.Context, id int64, topic string, posit
 
 func (s *Store) ArchiveChannel(ctx context.Context, id int64) error {
 	return s.exec(ctx, `UPDATE channels SET archived_at = now() WHERE id = $1`, id)
+}
+
+// ListArchivedChannels returns soft-deleted channels, most recently deleted first.
+func (s *Store) ListArchivedChannels(ctx context.Context) ([]Channel, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+channelCols+` FROM channels WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Channel{}
+	for rows.Next() {
+		c, err := scanChannel(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// RestoreChannel un-archives a channel. The name was never freed while archived,
+// so there's no uniqueness conflict to resolve. Returns ErrNotFound if the id
+// isn't an archived channel.
+func (s *Store) RestoreChannel(ctx context.Context, id int64) (Channel, error) {
+	return scanChannel(s.db.QueryRowContext(ctx,
+		`UPDATE channels SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL
+		 RETURNING `+channelCols, id))
+}
+
+// PurgeChannel permanently deletes an archived channel; messages and memberships
+// cascade away (and the name is freed). Refuses to touch a live channel.
+func (s *Store) PurgeChannel(ctx context.Context, id int64) error {
+	return s.exec(ctx, `DELETE FROM channels WHERE id = $1 AND archived_at IS NOT NULL`, id)
 }
 
 func (s *Store) AddChannelMember(ctx context.Context, channelID, userID int64) error {

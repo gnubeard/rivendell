@@ -881,6 +881,7 @@ async function openAdmin() {
   closeDrawers(); // get the mobile drawer out from behind the modal
   $("#admin-modal").hidden = false;
   await refreshAdminUsers();
+  await refreshDeletedChannels();
 
   $("#admin-create-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -936,6 +937,47 @@ async function refreshAdminUsers() {
         el("td", {}, u.has_password ? "yes" : "no"),
         el("td", {}, u.is_active ? "active" : "disabled"),
         el("td", {}, linkBtn, document.createTextNode(" "), activeBtn)
+      )
+    );
+  }
+}
+
+// refreshDeletedChannels renders archived channels with restore / permanent-delete
+// controls (admin only; restore brings the channel and its history back, purge
+// erases it and frees the name).
+async function refreshDeletedChannels() {
+  const tbody = $("#admin-deleted-channel-rows");
+  tbody.innerHTML = "";
+  let chans;
+  try {
+    chans = await api.archivedChannels();
+  } catch (ex) {
+    tbody.append(el("tr", {}, el("td", { colspan: "4", class: "notice" }, ex.message)));
+    return;
+  }
+  if (!chans.length) {
+    tbody.append(el("tr", {}, el("td", { colspan: "4", class: "notice" }, "No deleted channels.")));
+    return;
+  }
+  for (const ch of chans) {
+    const restoreBtn = el("button", {
+      class: "link", onclick: async () => {
+        try { await api.restoreChannel(ch.id); await refreshDeletedChannels(); } catch (ex) { alert(ex.message); }
+      },
+    }, "restore");
+    const purgeBtn = el("button", {
+      class: "link danger", onclick: async () => {
+        if (!confirm(`Permanently delete #${ch.name}? This erases its entire message history and cannot be undone.`)) return;
+        try { await api.purgeChannel(ch.id); await refreshDeletedChannels(); } catch (ex) { alert(ex.message); }
+      },
+    }, "delete permanently");
+    const type = ch.is_dm ? "dm" : ch.is_private ? "private" : "public";
+    tbody.append(
+      el("tr", {},
+        el("td", {}, (ch.is_private || ch.is_dm ? "🔒 " : "# ") + ch.name),
+        el("td", {}, type),
+        el("td", {}, ch.archived_at ? formatTime(ch.archived_at) : ""),
+        el("td", {}, restoreBtn, document.createTextNode(" "), purgeBtn)
       )
     );
   }

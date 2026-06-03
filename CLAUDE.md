@@ -200,6 +200,14 @@ These were the requested next-work items; all are now implemented and tested.
   existing `addMessage` reducer — no new event type. The pins panel
   (`#pins-modal`, 📌 in the channel header) fetches its own list since a pin may be
   older than the loaded message window; deleting a message also clears its pin.
+- **Deleted-channel restore/purge.** Channel delete is a soft-delete
+  (`archived_at`), and the `UNIQUE(name)` constraint keeps the name reserved while
+  archived — so the name can't be reused until the tombstone is dealt with. Admin
+  modal "Deleted channels" tab (admin-only): `GET /api/admin/channels/archived`,
+  `POST …/{id}/restore` (clears `archived_at`, re-broadcasts `channel.new`; no name
+  conflict since the name was never freed), `DELETE /api/admin/channels/{id}`
+  (hard delete — cascades messages/members away and frees the name; refuses live
+  channels). `archived_at` is now exposed on the channel JSON (omitempty).
 - **Scrollback / history.** Storage is unbounded (plain rows, indexed
   `(channel_id, id DESC)`); the API does keyset pagination
   (`GET …/messages?before=<id>&limit=<n>`, `id < before ORDER BY id DESC`). The

@@ -689,6 +689,70 @@ func TestMessagePagination(t *testing.T) {
 	}
 }
 
+func TestArchivedChannelRestoreAndPurge(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	modC, _ := seedMember(t, ts, st, "molly", "Molly", store.RoleModerator)
+
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "temp"})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	// Archive it, then confirm the name is still reserved (the bug being fixed).
+	doJSON(t, adminC, "DELETE", ts.URL+"/api/channels/"+itoa(ch.ID), nil)
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "temp"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("recreating an archived name should 409, got %d", resp.StatusCode)
+	}
+
+	// A moderator can't reach the admin restore/purge endpoints.
+	resp, _ = doJSON(t, modC, "GET", ts.URL+"/api/admin/channels/archived", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("moderator should be 403 on admin channels, got %d", resp.StatusCode)
+	}
+
+	// It shows up in the archived list, and restore brings it back live.
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/admin/channels/archived", nil)
+	var arch []store.Channel
+	json.Unmarshal(body, &arch)
+	if len(arch) != 1 || arch[0].ID != ch.ID || arch[0].ArchivedAt == nil {
+		t.Fatalf("archived list wrong: %s", body)
+	}
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/admin/channels/"+itoa(ch.ID)+"/restore", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("restore: %d", resp.StatusCode)
+	}
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/channels", nil)
+	var live []store.Channel
+	json.Unmarshal(body, &live)
+	found := false
+	for _, c := range live {
+		if c.ID == ch.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("restored channel should be live again: %s", body)
+	}
+
+	// Purging a *live* channel is refused.
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/admin/channels/"+itoa(ch.ID), nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("purging a live channel should 404, got %d", resp.StatusCode)
+	}
+
+	// Archive then purge, and confirm the name is finally reusable.
+	doJSON(t, adminC, "DELETE", ts.URL+"/api/channels/"+itoa(ch.ID), nil)
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/admin/channels/"+itoa(ch.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("purge: %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "temp"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("name should be reusable after purge, got %d", resp.StatusCode)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

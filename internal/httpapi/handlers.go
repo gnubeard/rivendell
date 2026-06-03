@@ -911,6 +911,55 @@ func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// handleListArchivedChannels lists soft-deleted channels (admin only).
+func (s *Server) handleListArchivedChannels(w http.ResponseWriter, r *http.Request) {
+	chans, err := s.st.ListArchivedChannels(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list archived channels")
+		return
+	}
+	writeJSON(w, http.StatusOK, chans)
+}
+
+// handleRestoreChannel un-archives a channel and re-announces it to its audience.
+func (s *Server) handleRestoreChannel(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.RestoreChannel(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "channel not found or not archived")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not restore channel")
+		return
+	}
+	s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
+	writeJSON(w, http.StatusOK, ch)
+}
+
+// handlePurgeChannel permanently deletes an archived channel (and, by cascade,
+// its messages and memberships). Refuses live channels.
+func (s *Server) handlePurgeChannel(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	if err := s.st.PurgeChannel(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "channel not found or not archived")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not delete channel")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "purged"})
+}
+
 // --- websocket -----------------------------------------------------------
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {

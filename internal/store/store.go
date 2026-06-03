@@ -143,13 +143,14 @@ type MagicLink struct {
 }
 
 type Channel struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Topic     string    `json:"topic"`
-	IsPrivate bool      `json:"is_private"`
-	IsDM      bool      `json:"is_dm"`
-	Position  int       `json:"position"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Topic      string     `json:"topic"`
+	IsPrivate  bool       `json:"is_private"`
+	IsDM       bool       `json:"is_dm"`
+	Position   int        `json:"position"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 type Message struct {
