@@ -6,8 +6,10 @@ snug
 .env
 .env.local
 
-# Node
+# Node (used only as the frontend test runner — no deps, no package manifest)
 node_modules/
+package.json
+package-lock.json
 
 # OS / editor cruft
 .DS_Store
