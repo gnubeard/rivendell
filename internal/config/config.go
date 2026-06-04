@@ -26,20 +26,20 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		Addr:            env("SNUG_ADDR", ":8080"),
-		DatabaseURL:     env("SNUG_DATABASE_URL", "postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable"),
-		WebDir:          env("SNUG_WEB_DIR", "web"),
-		PublicURL:       env("SNUG_PUBLIC_URL", "http://localhost:8080"),
-		Secure:          envBool("SNUG_COOKIE_SECURE", false),
-		SessionTTL:      envDur("SNUG_SESSION_TTL", 30*24*time.Hour),
-		MagicLinkTTL:    envDur("SNUG_MAGIC_LINK_TTL", 72*time.Hour),
-		MaxMessageBytes: envInt("SNUG_MAX_MESSAGE_BYTES", 8000),
-		MaxAvatarBytes:  envInt("SNUG_MAX_AVATAR_BYTES", 512*1024),
-		BootstrapAdmin:  env("SNUG_BOOTSTRAP_ADMIN", "admin"),
-		InstanceName:    env("SNUG_INSTANCE_NAME", "snug"),
+		Addr:            env("RIVENDELL_ADDR", ":8080"),
+		DatabaseURL:     env("RIVENDELL_DATABASE_URL", "postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable"),
+		WebDir:          env("RIVENDELL_WEB_DIR", "web"),
+		PublicURL:       env("RIVENDELL_PUBLIC_URL", "http://localhost:8080"),
+		Secure:          envBool("RIVENDELL_COOKIE_SECURE", false),
+		SessionTTL:      envDur("RIVENDELL_SESSION_TTL", 30*24*time.Hour),
+		MagicLinkTTL:    envDur("RIVENDELL_MAGIC_LINK_TTL", 72*time.Hour),
+		MaxMessageBytes: envInt("RIVENDELL_MAX_MESSAGE_BYTES", 8000),
+		MaxAvatarBytes:  envInt("RIVENDELL_MAX_AVATAR_BYTES", 512*1024),
+		BootstrapAdmin:  env("RIVENDELL_BOOTSTRAP_ADMIN", "admin"),
+		InstanceName:    env("RIVENDELL_INSTANCE_NAME", "rivendell"),
 	}
 	if c.DatabaseURL == "" {
-		return c, fmt.Errorf("config: SNUG_DATABASE_URL is required")
+		return c, fmt.Errorf("config: RIVENDELL_DATABASE_URL is required")
 	}
 	return c, nil
 }

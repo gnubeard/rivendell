@@ -1,4 +1,4 @@
-module snug
+module rivendell
 
 go 1.22.2
 

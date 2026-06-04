@@ -4,7 +4,7 @@
 //
 // Bootstrap the first admin with:
 //
-//	snug -create-admin alice "Alice Example"
+//	rivendell -create-admin alice "Alice Example"
 //
 // which prints a one-time magic link the admin opens to set their password.
 package main
@@ -18,10 +18,10 @@ import (
 	"os"
 	"time"
 
-	"snug/internal/auth"
-	"snug/internal/config"
-	"snug/internal/httpapi"
-	"snug/internal/store"
+	"rivendell/internal/auth"
+	"rivendell/internal/config"
+	"rivendell/internal/httpapi"
+	"rivendell/internal/store"
 )
 
 func main() {
@@ -84,7 +84,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: long-lived websocket connections live on this server.
 	}
-	log.Printf("snug listening on %s (web dir %s)", cfg.Addr, cfg.WebDir)
+	log.Printf("rivendell listening on %s (web dir %s)", cfg.Addr, cfg.WebDir)
 	if err := hs.ListenAndServe(); err != nil {
 		log.Fatalf("server: %v", err)
 	}
@@ -92,7 +92,7 @@ func main() {
 
 func runCreateAdmin(ctx context.Context, cfg config.Config, st *store.Store, args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: snug -create-admin <username> [display name]")
+		fmt.Fprintln(os.Stderr, "usage: rivendell -create-admin <username> [display name]")
 		os.Exit(2)
 	}
 	username := args[0]

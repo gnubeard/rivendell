@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"snug/internal/auth"
-	"snug/internal/config"
-	"snug/internal/store"
-	"snug/internal/ws"
+	"rivendell/internal/auth"
+	"rivendell/internal/config"
+	"rivendell/internal/store"
+	"rivendell/internal/ws"
 )
 
-const sessionCookie = "snug_session"
+const sessionCookie = "rivendell_session"
 
 type Server struct {
 	cfg config.Config
@@ -278,7 +278,7 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 
 // instanceNamePlaceholder is the token in index.html replaced with the
 // configured instance name at serve time (so non-JS scrapers see the brand).
-const instanceNamePlaceholder = "__SNUG_INSTANCE__"
+const instanceNamePlaceholder = "__RIVENDELL_INSTANCE__"
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean(r.URL.Path)

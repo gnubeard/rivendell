@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"snug/internal/auth"
-	"snug/internal/store"
-	"snug/internal/ws"
+	"rivendell/internal/auth"
+	"rivendell/internal/store"
+	"rivendell/internal/ws"
 )
 
 var (

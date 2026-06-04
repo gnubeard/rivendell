@@ -1,14 +1,14 @@
 # Snug — Makefile
 # Common housekeeping tasks. Run `make help` for a list.
 
-# Config (override on the command line, e.g. `make run SNUG_ADDR=:9000`)
-SNUG_ADDR            ?= :8080
-SNUG_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable
+# Config (override on the command line, e.g. `make run RIVENDELL_ADDR=:9000`)
+RIVENDELL_ADDR            ?= :8080
+RIVENDELL_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable
 TEST_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat_test?sslmode=disable
-SNUG_WEB_DIR         ?= ./web
-SNUG_PUBLIC_URL      ?= http://localhost:8080
-IMAGE                ?= snug:latest
-BIN                  ?= ./bin/snug
+RIVENDELL_WEB_DIR         ?= ./web
+RIVENDELL_PUBLIC_URL      ?= http://localhost:8080
+IMAGE                ?= rivendell:latest
+BIN                  ?= ./bin/rivendell
 
 # Go build flags: a single static-ish binary, trimmed paths.
 GOFLAGS_BUILD        := -trimpath -ldflags "-s -w"
@@ -27,23 +27,23 @@ build: ## Compile the server binary into ./bin
 	go build $(GOFLAGS_BUILD) -o $(BIN) ./cmd/server
 	@echo "built $(BIN)"
 
-run: ## Run the server (needs Postgres up; see SNUG_DATABASE_URL)
-	SNUG_ADDR=$(SNUG_ADDR) SNUG_DATABASE_URL=$(SNUG_DATABASE_URL) SNUG_WEB_DIR=$(SNUG_WEB_DIR) \
+run: ## Run the server (needs Postgres up; see RIVENDELL_DATABASE_URL)
+	RIVENDELL_ADDR=$(RIVENDELL_ADDR) RIVENDELL_DATABASE_URL=$(RIVENDELL_DATABASE_URL) RIVENDELL_WEB_DIR=$(RIVENDELL_WEB_DIR) \
 		go run ./cmd/server
 
 migrate: ## Apply database migrations and exit
-	SNUG_DATABASE_URL=$(SNUG_DATABASE_URL) go run ./cmd/server -migrate
+	RIVENDELL_DATABASE_URL=$(RIVENDELL_DATABASE_URL) go run ./cmd/server -migrate
 
 create-admin: ## Create first admin + print magic link (needs host Go): make create-admin USER=alice NAME="Alice"
 	@test -n "$(USER)" || (echo "set USER=<username> (and optional NAME=...)"; exit 1)
-	SNUG_DATABASE_URL=$(SNUG_DATABASE_URL) SNUG_ADDR=$(SNUG_ADDR) \
+	RIVENDELL_DATABASE_URL=$(RIVENDELL_DATABASE_URL) RIVENDELL_ADDR=$(RIVENDELL_ADDR) \
 		go run ./cmd/server -create-admin "$(USER)" "$(NAME)"
 
 podman-create-admin: ## Create an admin using the built image (no host Go): make podman-create-admin USER=alice NAME="Alice"
 	@test -n "$(USER)" || (echo "set USER=<username> (and optional NAME=...)"; exit 1)
 	podman run --rm --network host \
-		-e SNUG_DATABASE_URL="$(SNUG_DATABASE_URL)" \
-		-e SNUG_PUBLIC_URL="$(SNUG_PUBLIC_URL)" \
+		-e RIVENDELL_DATABASE_URL="$(RIVENDELL_DATABASE_URL)" \
+		-e RIVENDELL_PUBLIC_URL="$(RIVENDELL_PUBLIC_URL)" \
 		$(IMAGE) -create-admin "$(USER)" "$(NAME)"
 	@echo "Note: on an empty install you don't need this at all — the server"
 	@echo "creates the first admin and logs a setup link on first boot."
@@ -70,7 +70,7 @@ docker-build: ## Build the container image with Docker
 
 docker-run: ## Run the image with Docker (expects external Postgres)
 	docker run --rm -p 8080:8080 \
-		-e SNUG_DATABASE_URL="$(SNUG_DATABASE_URL)" \
+		-e RIVENDELL_DATABASE_URL="$(RIVENDELL_DATABASE_URL)" \
 		$(IMAGE)
 
 podman-build: ## Build the container image with Podman
@@ -78,7 +78,7 @@ podman-build: ## Build the container image with Podman
 
 podman-test: ## Build with Podman and smoke-test the binary inside the image
 	podman build -t $(IMAGE) .
-	podman run --rm --entrypoint /usr/local/bin/snug $(IMAGE) -h 2>&1 | head -5 || true
+	podman run --rm --entrypoint /usr/local/bin/rivendell $(IMAGE) -h 2>&1 | head -5 || true
 	@echo "podman image built: $(IMAGE)"
 
 clean: ## Remove build artifacts

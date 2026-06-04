@@ -49,7 +49,7 @@ export function connectRealtime(onEvent, onStatusChange) {
       // wss: origin) throw synchronously from the constructor. Treat that like
       // any other failed connection: report disconnected and retry, rather
       // than letting it bubble up and break the caller.
-      console.warn("snug: websocket connect failed:", e && e.message);
+      console.warn("rivendell: websocket connect failed:", e && e.message);
       onStatusChange && onStatusChange(false);
       retryLater();
       return;

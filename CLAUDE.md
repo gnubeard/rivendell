@@ -35,7 +35,7 @@ free win even where a library would be conventional.
 
 ```
 cmd/server/main.go            entrypoint; flags; first-boot bootstrap
-internal/config/config.go     env-var config (all SNUG_* vars)
+internal/config/config.go     env-var config (all RIVENDELL_* vars)
 internal/auth/                password.go (PBKDF2), token.go (random+hash)
 internal/store/               store.go (open/migrate + domain structs),
                               queries.go (all SQL), migrations/0001_init.sql
@@ -47,11 +47,11 @@ web/static/                   app.js, api.js, ws.js, format.js, state.js, style.
 web/test/                     format.test.js, state.test.js (node:test)
 ```
 
-Module path is `snug`; Go 1.22. Imports are `snug/internal/...`.
+Module path is `rivendell`; Go 1.22. Imports are `rivendell/internal/...`.
 
 ## Build, test, run (use the Makefile)
 
-- `make build` — compile to `./bin/snug`.
+- `make build` — compile to `./bin/rivendell`.
 - `make test` — Go + frontend tests. `make test-go` / `make test-web` individually.
 - `make run` — run locally (needs Postgres up).
 - `make migrate` — apply migrations and exit.
@@ -71,10 +71,10 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   the host. Dev role/db: user `chat`, password `chat_dev_pw`, databases `chat` and
   `chat_test`. The Makefile defaults to port 5432
   (`postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable`); if your
-  container publishes a different host port, override `SNUG_DATABASE_URL` /
+  container publishes a different host port, override `RIVENDELL_DATABASE_URL` /
   `TEST_DATABASE_URL` accordingly. A throwaway test DB is e.g.:
   ```
-  podman run -d --name snug-test-pg \
+  podman run -d --name rivendell-test-pg \
     -e POSTGRES_USER=chat -e POSTGRES_PASSWORD=chat_dev_pw \
     -e POSTGRES_DB=chat_test -p 55432:5432 postgres:16-alpine
   export TEST_DATABASE_URL='postgres://chat:chat_dev_pw@localhost:55432/chat_test?sslmode=disable'
@@ -98,7 +98,7 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   the client's `for...of` throws on it, taking down the whole UI. Initialize list
   results as `out := []T{}`. There's a regression test
   (`TestEmptyListsReturnArraysNotNull`) — keep it green.
-- **Auth:** session cookie `snug_session` (HttpOnly, SameSite=Lax, Secure from
+- **Auth:** session cookie `rivendell_session` (HttpOnly, SameSite=Lax, Secure from
   config). Tokens are random 256-bit, stored only as SHA-256 hashes. No email —
   admins mint single-use magic links for set/reset password.
 - **Passwords:** `internal/auth/password.go`, format
@@ -127,20 +127,20 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
 
 ## Configuration (env vars, all optional except the DB URL in prod)
 
-`SNUG_ADDR`, `SNUG_DATABASE_URL`, `SNUG_WEB_DIR`, `SNUG_PUBLIC_URL`,
-`SNUG_COOKIE_SECURE`, `SNUG_SESSION_TTL`, `SNUG_MAGIC_LINK_TTL`,
-`SNUG_MAX_MESSAGE_BYTES`, `SNUG_MAX_AVATAR_BYTES`, `SNUG_BOOTSTRAP_ADMIN`,
-`SNUG_INSTANCE_NAME` (display name/brand of this instance; "snug" is the
+`RIVENDELL_ADDR`, `RIVENDELL_DATABASE_URL`, `RIVENDELL_WEB_DIR`, `RIVENDELL_PUBLIC_URL`,
+`RIVENDELL_COOKIE_SECURE`, `RIVENDELL_SESSION_TTL`, `RIVENDELL_MAGIC_LINK_TTL`,
+`RIVENDELL_MAX_MESSAGE_BYTES`, `RIVENDELL_MAX_AVATAR_BYTES`, `RIVENDELL_BOOTSTRAP_ADMIN`,
+`RIVENDELL_INSTANCE_NAME` (display name/brand of this instance; "rivendell" is the
 software, the instance can be e.g. "rivendell" — served unauthenticated at
 `GET /api/instance` and applied to the page title + every `.brand`). See
 `.env.example`. On an empty install the server creates a first admin
-(`SNUG_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
+(`RIVENDELL_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
 this fires only when there are zero admins.
 
 ## Deployment notes (behind nginx + TLS)
 
-Set `SNUG_PUBLIC_URL` to the externally reachable URL or magic links point at
-localhost. Set `SNUG_COOKIE_SECURE=true` when served over HTTPS. Two nginx things
+Set `RIVENDELL_PUBLIC_URL` to the externally reachable URL or magic links point at
+localhost. Set `RIVENDELL_COOKIE_SECURE=true` when served over HTTPS. Two nginx things
 are required for realtime:
 
 1. A dedicated `location /api/ws` that upgrades the connection

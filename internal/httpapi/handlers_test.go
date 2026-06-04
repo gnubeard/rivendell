@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"snug/internal/auth"
-	"snug/internal/config"
-	"snug/internal/store"
+	"rivendell/internal/auth"
+	"rivendell/internal/config"
+	"rivendell/internal/store"
 )
 
 // testDSN returns the test database connection string, or "" to skip.
@@ -46,7 +46,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		SessionTTL:      time.Hour,
 		MagicLinkTTL:    time.Hour,
 		Secure:          false,
-		PublicURL:       "http://snug.test",
+		PublicURL:       "http://rivendell.test",
 		MaxMessageBytes: 4096,
 		MaxAvatarBytes:  1 << 20,
 		WebDir:          t.TempDir(),
@@ -562,7 +562,7 @@ func TestInstanceNameInHTML(t *testing.T) {
 	ts, _, cfg := newTestServer(t)
 	// newTestServer points WebDir at a temp dir; drop a minimal index.html there.
 	if err := os.WriteFile(cfg.WebDir+"/index.html",
-		[]byte(`<title>__SNUG_INSTANCE__</title><meta property="og:title" content="__SNUG_INSTANCE__">`), 0o644); err != nil {
+		[]byte(`<title>__RIVENDELL_INSTANCE__</title><meta property="og:title" content="__RIVENDELL_INSTANCE__">`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	c := newClient(t)
@@ -571,7 +571,7 @@ func TestInstanceNameInHTML(t *testing.T) {
 		t.Fatalf("index: %d", resp.StatusCode)
 	}
 	s := string(body)
-	if strings.Contains(s, "__SNUG_INSTANCE__") {
+	if strings.Contains(s, "__RIVENDELL_INSTANCE__") {
 		t.Fatalf("placeholder not substituted: %s", s)
 	}
 	if !strings.Contains(s, "<title>rivendell-test</title>") || !strings.Contains(s, `content="rivendell-test"`) {

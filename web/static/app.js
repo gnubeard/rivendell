@@ -26,7 +26,7 @@ const closedDMs = loadClosedDMs();
 
 function loadClosedDMs() {
   try {
-    return new Set(JSON.parse(localStorage.getItem("snug.closedDMs") || "[]"));
+    return new Set(JSON.parse(localStorage.getItem("rivendell.closedDMs") || "[]"));
   } catch (e) {
     return new Set();
   }
@@ -34,7 +34,7 @@ function loadClosedDMs() {
 
 function saveClosedDMs() {
   try {
-    localStorage.setItem("snug.closedDMs", JSON.stringify([...closedDMs]));
+    localStorage.setItem("rivendell.closedDMs", JSON.stringify([...closedDMs]));
   } catch (e) {
     /* best-effort: persistence is non-fatal */
   }
@@ -248,7 +248,7 @@ async function enterApp() {
   // otherwise prefer a real channel over a DM on first load.
   let saved = null;
   try {
-    saved = localStorage.getItem("snug.activeChannel");
+    saved = localStorage.getItem("rivendell.activeChannel");
   } catch (e) {
     /* localStorage may be unavailable (private mode / blocked) */
   }
@@ -277,7 +277,7 @@ async function enterApp() {
   try {
     startRealtime();
   } catch (e) {
-    console.warn("snug: realtime unavailable:", e && e.message);
+    console.warn("rivendell: realtime unavailable:", e && e.message);
   }
 }
 
@@ -362,7 +362,7 @@ async function resync() {
     renderMembers();
     if (state.activeChannelId) await loadChannel(state.activeChannelId);
   } catch (ex) {
-    console.warn("snug: resync failed:", ex && ex.message);
+    console.warn("rivendell: resync failed:", ex && ex.message);
   }
 }
 
@@ -573,7 +573,7 @@ async function refreshActiveMembers() {
 async function selectChannel(id) {
   state = S.setActiveChannel(state, id);
   try {
-    localStorage.setItem("snug.activeChannel", id);
+    localStorage.setItem("rivendell.activeChannel", id);
   } catch (e) {
     /* non-fatal: persistence is best-effort */
   }
@@ -637,7 +637,7 @@ async function loadOlderMessages() {
       state = S.prependMessages(state, cid, older);
     }
   } catch (ex) {
-    console.warn("snug: could not load older messages:", ex && ex.message);
+    console.warn("rivendell: could not load older messages:", ex && ex.message);
   } finally {
     loadingOlder = false;
   }
