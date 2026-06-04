@@ -8,6 +8,7 @@ import * as S from "./state.js";
 
 let state = S.initialState();
 let socket = null;
+let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
 // Member ids of the active channel when it's private (incl. DMs); null means
 // "show everyone" (public channels have no membership rows).
 let activeMemberIds = null;
@@ -331,8 +332,38 @@ function startRealtime() {
     (online) => {
       $("#conn-status").className = online ? "conn online" : "conn offline";
       $("#conn-status").title = online ? "Connected" : "Reconnecting…";
+      // Reconnecting only resumes the *stream* of new events; anything that
+      // happened while we were dead is a gap. On a genuine reconnect (online
+      // after having been offline), resync so the view isn't stale.
+      if (online && wasOffline) resync();
+      wasOffline = !online;
     }
   );
+}
+
+// resync re-pulls server state after a reconnect: rosters (presence may have
+// changed), the channel list (new/archived channels, membership), and the
+// active channel's latest messages — closing the gap left by a dead socket.
+// (Unread for channels missed while offline isn't recomputed — there's no
+// server-side unread record yet; that's what push notifications will cover.)
+async function resync() {
+  try {
+    const [users, channels] = await Promise.all([api.users(), api.channels()]);
+    state = S.setUsers(state, users);
+    state = S.setChannels(state, channels);
+    // The channel we were on may have been archived while we were away.
+    if (state.activeChannelId && !state.channels[state.activeChannelId]) {
+      const next = regularChannelOrder()[0] || state.channelOrder[0] || null;
+      state = S.setActiveChannel(state, next);
+    }
+    renderMe();
+    renderChannels();
+    renderDMs();
+    renderMembers();
+    if (state.activeChannelId) await loadChannel(state.activeChannelId);
+  } catch (ex) {
+    console.warn("snug: resync failed:", ex && ex.message);
+  }
 }
 
 // --- rendering -----------------------------------------------------------
