@@ -77,8 +77,17 @@ function show(view) {
 function trackViewportHeight() {
   const vv = window.visualViewport;
   const set = () => {
+    // If the reader was pinned to the bottom, keep them there: shrinking the
+    // viewport for the on-screen keyboard otherwise leaves the newest messages
+    // hidden behind it. Measure before applying the new height.
+    const ml = $("#message-list");
+    const atBottom = ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight < 80;
     const h = Math.round(vv ? vv.height : window.innerHeight);
     document.documentElement.style.setProperty("--app-height", `${h}px`);
+    if (atBottom && ml) {
+      // After the layout reflows to the new height, re-pin to the bottom.
+      requestAnimationFrame(() => { ml.scrollTop = ml.scrollHeight; });
+    }
   };
   set();
   if (vv) {
