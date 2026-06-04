@@ -1,1 +1,1 @@
-This should be more thorough.
+This should be more thorough. It should be useful.
