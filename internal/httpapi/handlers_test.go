@@ -776,6 +776,100 @@ func TestArchivedChannelRestoreAndPurge(t *testing.T) {
 	}
 }
 
+// TestMessageEditDeleteAuthorization pins the authz boundary: you may edit/delete
+// only your own messages, except moderators+ may delete anyone's.
+func TestMessageEditDeleteAuthorization(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st) // admin is moderator+
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, _ := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+	mpath := ts.URL + "/api/channels/" + itoa(ch.ID) + "/messages"
+
+	resp, body := doJSON(t, aliceC, "POST", mpath, map[string]string{"content": "hi from alice"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("alice post: %d %s", resp.StatusCode, body)
+	}
+	var msg store.Message
+	json.Unmarshal(body, &msg)
+	mid := itoa(msg.ID)
+
+	// A non-author member can neither edit nor delete someone else's message.
+	resp, _ = doJSON(t, bobC, "PATCH", ts.URL+"/api/messages/"+mid, map[string]string{"content": "hacked"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("non-author edit should 404, got %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, bobC, "DELETE", ts.URL+"/api/messages/"+mid, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("non-author delete should 404, got %d", resp.StatusCode)
+	}
+
+	// The author can edit their own.
+	resp, body = doJSON(t, aliceC, "PATCH", ts.URL+"/api/messages/"+mid, map[string]string{"content": "edited"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("author edit: %d %s", resp.StatusCode, body)
+	}
+	var edited store.Message
+	json.Unmarshal(body, &edited)
+	if edited.Content != "edited" || edited.EditedAt == nil {
+		t.Fatalf("edit not applied: %s", body)
+	}
+
+	// A moderator+ may delete another user's message (mod override).
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/messages/"+mid, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mod-override delete: %d", resp.StatusCode)
+	}
+	resp, body = doJSON(t, aliceC, "GET", mpath, nil)
+	var msgs []store.Message
+	json.Unmarshal(body, &msgs)
+	if len(msgs) != 1 || msgs[0].DeletedAt == nil || msgs[0].Content != "" {
+		t.Fatalf("message should be soft-deleted: %s", body)
+	}
+}
+
+func TestSetStatusValidation(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	resp, _ := doJSON(t, adminC, "PUT", ts.URL+"/api/me/status", map[string]string{"status": "bogus"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid status should 400, got %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, adminC, "PUT", ts.URL+"/api/me/status", map[string]string{"status": "dnd"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("valid status: %d", resp.StatusCode)
+	}
+	_, body := doJSON(t, adminC, "GET", ts.URL+"/api/me", nil)
+	var me store.User
+	json.Unmarshal(body, &me)
+	if me.Status != "dnd" {
+		t.Fatalf("status not persisted: %s", body)
+	}
+}
+
+func TestUpdateProfileValidation(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	resp, _ := doJSON(t, adminC, "PATCH", ts.URL+"/api/me", map[string]string{"display_name": "   "})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("blank display name should 400, got %d", resp.StatusCode)
+	}
+	resp, body := doJSON(t, adminC, "PATCH", ts.URL+"/api/me", map[string]string{"display_name": "Big Admin", "status_text": "around"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("profile update: %d %s", resp.StatusCode, body)
+	}
+	var me store.User
+	json.Unmarshal(body, &me)
+	if me.DisplayName != "Big Admin" || me.StatusText != "around" {
+		t.Fatalf("profile not updated: %s", body)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

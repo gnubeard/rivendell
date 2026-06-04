@@ -128,20 +128,6 @@ type User struct {
 	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
 }
 
-type Session struct {
-	ID        int64
-	UserID    int64
-	ExpiresAt time.Time
-}
-
-type MagicLink struct {
-	ID        int64
-	UserID    int64
-	Purpose   string
-	ExpiresAt time.Time
-	UsedAt    *time.Time
-}
-
 type Channel struct {
 	ID         int64      `json:"id"`
 	Name       string     `json:"name"`
