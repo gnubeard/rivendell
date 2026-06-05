@@ -23,13 +23,12 @@
 - Mobile swipe gestures (right = sidebar, left = members; horizontal vs. scroll disambiguated) — v1.0.5.
 - Idle status (10-min timer, hidden-tab accelerated; ephemeral hub flag, amber dot same as away) — v1.0.6.
 - Typing indicators (throttled WS frames, server-side 5 s TTL, channel-scoped relay, "X is typing…" above composer) — v1.0.7.
+- Every message timestamp links to that point in history (window-around-id store
+  query, #c<id>/m<id> hash, load+scroll+highlight, "viewing history" banner) —
+  v1.0.8; v1.0.9 polish: canonical permalink hash helper (fixed a /m/ vs /m drift
+  that broke shared links on fresh load) + feedback when an anchor is deleted/gone.
 
 ## Backlog (sorted by effort)
-
-1. [M→L] Every message timestamp links to that point in history.
-   Needs a store query for a window *around* a message id (today's pagination is
-   before-only keyset), a URL/hash scheme, and on open: load that window, scroll
-   to + highlight the anchor. The jump primitive #4 reuses — do this first.
 
 4. [M→L] Search.
    Message search scoped to channels the caller can access. Postgres full-text

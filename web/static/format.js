@@ -72,6 +72,23 @@ export function atQuery(text, pos) {
   return { start: i, partial: text.slice(i + 1, pos) };
 }
 
+// permalinkHash builds the canonical location.hash for a message permalink:
+// `#c<channelId>/m<messageId>`. This is the single source of truth for the format
+// — both the anchor hrefs and history.replaceState must use it, and parsePermalink
+// must accept exactly what it emits (a past drift of `/m/` vs `/m` broke shared
+// links on fresh load). Pure.
+export function permalinkHash(channelId, messageId) {
+  return `#c${channelId}/m${messageId}`;
+}
+
+// parsePermalink is the inverse of permalinkHash: it returns
+// { channelId, messageId } for a matching hash, or null otherwise.
+export function parsePermalink(hash) {
+  const m = String(hash || "").match(/^#c(\d+)\/m(\d+)$/);
+  if (!m) return null;
+  return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
+}
+
 export function formatMessage(text, me) {
   if (text == null) return "";
   const meLower = me ? String(me).toLowerCase() : null;

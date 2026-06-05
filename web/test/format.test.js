@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, permalinkHash, parsePermalink } from "../static/format.js";
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');
@@ -110,4 +110,27 @@ test("mention styling stays XSS-safe and never enters an href", () => {
   const out = formatMessage('@alice <img src=x onerror=1> http://x.com/@alice', "alice");
   assert.ok(!out.includes("<img"), "raw tag stays escaped");
   assert.ok(out.includes('href="http://x.com/@alice"'), "URL with @ links intact, no span inside href");
+});
+
+test("permalinkHash builds the canonical no-slash hash", () => {
+  assert.equal(permalinkHash(5, 123), "#c5/m123");
+});
+
+test("parsePermalink round-trips permalinkHash", () => {
+  assert.deepEqual(parsePermalink(permalinkHash(5, 123)), { channelId: 5, messageId: 123 });
+});
+
+test("parsePermalink parses a valid hash", () => {
+  assert.deepEqual(parsePermalink("#c42/m1009"), { channelId: 42, messageId: 1009 });
+});
+
+test("parsePermalink rejects the old /m/ slash form and junk", () => {
+  // Regression: hrefs once emitted `#c5/m/123`, which the parser must NOT accept
+  // as that drift silently broke shared links on fresh load.
+  assert.equal(parsePermalink("#c5/m/123"), null);
+  assert.equal(parsePermalink("#c5/m"), null);
+  assert.equal(parsePermalink("#cx/my"), null);
+  assert.equal(parsePermalink("#/"), null);
+  assert.equal(parsePermalink(""), null);
+  assert.equal(parsePermalink(null), null);
 });

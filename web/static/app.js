@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, permalinkHash, parsePermalink } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -329,11 +329,11 @@ async function enterApp() {
   renderNotificationTotal();
   // Check for a permalink hash (#c<channelId>/m<messageId>) before loading
   // the default channel — if present, jump there instead.
-  const permalinkMatch = location.hash.match(/^#c(\d+)\/m(\d+)$/);
-  if (permalinkMatch) {
+  const permalink = parsePermalink(location.hash);
+  if (permalink) {
     history.replaceState(null, "", "/");
-    const plChannel = parseInt(permalinkMatch[1]);
-    const plMessage = parseInt(permalinkMatch[2]);
+    const plChannel = permalink.channelId;
+    const plMessage = permalink.messageId;
     if (state.channels[plChannel]) {
       await jumpToMessage(plChannel, plMessage);
     } else if (state.activeChannelId) {
@@ -965,16 +965,37 @@ async function jumpToMessage(channelId, messageId) {
     viewingHistory.add(channelId);
     renderMessages(false);
     renderHistoryBanner();
+    history.replaceState(null, "", permalinkHash(channelId, messageId));
     const target = document.querySelector(`[data-msg-id="${messageId}"]`);
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "center" });
       target.classList.add("msg-anchor");
       setTimeout(() => target.classList.remove("msg-anchor"), 2500);
+      return;
     }
-    history.replaceState(null, "", `#c${channelId}/m${messageId}`);
+    // No element to highlight. The around-window fetch returns the anchor even if
+    // it's deleted, but a deleted message that didn't die this session renders as
+    // nothing (no data-msg-id), so distinguish "deleted" from "truly gone".
+    const anchor = (state.messages[channelId] || []).find((m) => m.id === messageId);
+    flashNotice(anchor && anchor.deleted_at
+      ? "That message was deleted."
+      : "Message not found — it may have been deleted.");
   } catch (ex) {
     console.warn("rivendell: jumpToMessage failed:", ex && ex.message);
+    flashNotice("Message not found — it may have been deleted.");
   }
+}
+
+// flashNotice drops a transient .notice line into the message list (same idiom as
+// loadChannel's error path) and removes it after a few seconds, so a failed jump
+// gives feedback without permanently wedging into the conversation.
+function flashNotice(text) {
+  const wrap = $("#message-list");
+  if (!wrap) return;
+  const n = el("div", { class: "notice" }, text);
+  wrap.append(n);
+  n.scrollIntoView({ block: "nearest" });
+  setTimeout(() => n.remove(), 4000);
 }
 
 // wireScrollback attaches the scroll listener once; #message-list is reused
@@ -1089,7 +1110,7 @@ function renderMessages(forceBottom = false) {
 
     const permalink = el("a", {
       class: "msg-time",
-      href: `#c${state.activeChannelId}/m/${m.id}`,
+      href: permalinkHash(state.activeChannelId, m.id),
       title: "Permalink",
       onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
     }, formatTime(m.created_at));
@@ -1333,7 +1354,7 @@ async function refreshPins() {
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
           el("a", {
             class: "msg-time",
-            href: `#c${ch.id}/m/${m.id}`,
+            href: permalinkHash(ch.id, m.id),
             title: "Jump to message",
             onclick: (e) => { e.preventDefault(); $("#pins-modal").hidden = true; jumpToMessage(ch.id, m.id); },
           }, formatTime(m.created_at)),
