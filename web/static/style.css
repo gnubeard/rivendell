@@ -206,8 +206,9 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; }
 .msg-body pre.code-block code { background: none; padding: 0; }
 .msg-body blockquote { border-left: 3px solid var(--border); margin: 0.2rem 0; padding-left: 0.7rem; color: var(--text-dim); }
-.msg-actions { display: none; gap: 0.6rem; margin-top: 0.15rem; }
-.msg:hover .msg-actions { display: flex; }
+.msg-actions { display: none; gap: 0.6rem; margin-top: 0.15rem; pointer-events: none; }
+.msg:hover .msg-actions { display: flex; animation: msg-actions-activate 0s 300ms forwards; }
+@keyframes msg-actions-activate { to { pointer-events: auto; } }
 .msg.pinned { background: rgba(110, 168, 254, 0.06); border-radius: 6px; }
 .msg.mentioned { background: rgba(224, 164, 88, 0.09); border-radius: 6px; box-shadow: inset 2px 0 0 var(--away); }
 .mention { color: var(--accent); background: rgba(110, 168, 254, 0.14); border-radius: 4px; padding: 0 0.15em; }
