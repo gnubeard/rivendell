@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/channels/{id}/mute", s.auth(s.handleUnmuteChannel))
 
 	// Admin.
+	mux.HandleFunc("GET /api/admin/stats", s.requireRole(store.RoleAdmin, s.handleAdminStats))
 	mux.HandleFunc("POST /api/admin/users", s.requireRole(store.RoleAdmin, s.handleCreateUser))
 	mux.HandleFunc("POST /api/admin/users/{id}/magic-link", s.requireRole(store.RoleAdmin, s.handleCreateMagicLink))
 	mux.HandleFunc("PUT /api/admin/users/{id}/role", s.requireRole(store.RoleAdmin, s.handleSetRole))
@@ -289,6 +290,10 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 // configured instance name at serve time (so non-JS scrapers see the brand).
 const instanceNamePlaceholder = "__RIVENDELL_INSTANCE__"
 
+// versionPlaceholder is replaced with the running version in index.html and
+// app.js so that a version bump busts the browser cache for all JS modules.
+const versionPlaceholder = "__RIVENDELL_VERSION__"
+
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean(r.URL.Path)
 	if clean == "/" {
@@ -300,24 +305,32 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Serve real static assets as-is — except index.html, which we template.
-	if info, err := os.Stat(full); err == nil && !info.IsDir() && filepath.Base(full) != "index.html" {
+	base := filepath.Base(full)
+	// index.html and app.js are templated; all other assets are served as-is.
+	if base == "app.js" {
+		s.serveTemplated(w, full, "application/javascript; charset=utf-8")
+		return
+	}
+	if info, err := os.Stat(full); err == nil && !info.IsDir() && base != "index.html" {
 		http.ServeFile(w, r, full)
 		return
 	}
-	// index.html (explicit, "/", or the SPA fallback) gets the instance name
-	// threaded into its title + social-card meta tags.
 	s.serveIndex(w, r)
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile(filepath.Join(s.cfg.WebDir, "index.html"))
+	s.serveTemplated(w, filepath.Join(s.cfg.WebDir, "index.html"), "text/html; charset=utf-8")
+}
+
+func (s *Server) serveTemplated(w http.ResponseWriter, path, contentType string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		http.NotFound(w, r)
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	out := strings.ReplaceAll(string(data), instanceNamePlaceholder, html.EscapeString(s.cfg.InstanceName))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	out = strings.ReplaceAll(out, versionPlaceholder, config.Version)
+	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write([]byte(out))
 }
 

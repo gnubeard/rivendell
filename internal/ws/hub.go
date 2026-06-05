@@ -122,6 +122,13 @@ func (h *Hub) Broadcast(data []byte, audience map[int64]bool) {
 	}
 }
 
+// ConnectedCount returns the number of distinct users with at least one live connection.
+func (h *Hub) ConnectedCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.byUser)
+}
+
 // OnlineUserIDs returns the set of users with at least one live connection.
 func (h *Hub) OnlineUserIDs() []int64 {
 	h.mu.Lock()

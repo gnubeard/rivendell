@@ -1181,6 +1181,20 @@ func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// handleAdminStats returns at-a-glance server metrics for the admin panel.
+func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.st.GetStats(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not fetch stats")
+		return
+	}
+	out := struct {
+		store.Stats
+		Connected int `json:"connected"`
+	}{stats, s.hub.ConnectedCount()}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleListArchivedChannels lists soft-deleted channels (admin only).
 func (s *Server) handleListArchivedChannels(w http.ResponseWriter, r *http.Request) {
 	chans, err := s.st.ListArchivedChannels(r.Context())

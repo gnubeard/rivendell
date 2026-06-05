@@ -263,6 +263,11 @@ body.dm-active #members-toggle { display: none; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal-card h2 { margin: 0; }
 .modal-card h3 { margin: 1.4rem 0 0.6rem; font-size: 0.95rem; color: var(--text-dim); }
+.admin-stats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.admin-stat { display: flex; flex-direction: column; align-items: center; min-width: 4.5rem; padding: 0.5rem 0.75rem; background: var(--bg-3); border-radius: var(--radius); }
+.admin-stat-value { font-size: 1.25rem; font-weight: 600; line-height: 1.2; }
+.admin-stat-label { font-size: 0.72rem; color: var(--text-faint); margin-top: 0.15rem; }
+
 .admin-create { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .admin-create input, .admin-create select { width: auto; flex: 1; min-width: 120px; margin: 0; }
 .admin-create button.primary { width: auto; }

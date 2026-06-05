@@ -1,10 +1,10 @@
 // app.js — the Rivendell web client. Wires the API, websocket, formatter, and the
 // pure state reducer to the DOM. Deliberately framework-free.
 
-import { api } from "./api.js";
-import { connectRealtime } from "./ws.js";
-import { formatMessage, mentionsUser } from "./format.js";
-import * as S from "./state.js";
+import { api } from "./api.js?v=__RIVENDELL_VERSION__";
+import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser } from "./format.js?v=__RIVENDELL_VERSION__";
+import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
   showNotification,
@@ -1344,9 +1344,35 @@ function openProfileModal() {
 
 // --- admin panel ---------------------------------------------------------
 
+async function refreshAdminStats() {
+  const box = $("#admin-stats");
+  try {
+    const s = await api.adminStats();
+    const stat = (label, value) => {
+      const wrap = el("div", { class: "admin-stat" });
+      wrap.append(el("span", { class: "admin-stat-value" }, String(value)));
+      wrap.append(el("span", { class: "admin-stat-label" }, label));
+      return wrap;
+    };
+    box.innerHTML = "";
+    box.append(
+      stat("users", s.total_users),
+      stat("active", s.active_users),
+      stat("connected", s.connected),
+      stat("public ch", s.public_channels),
+      stat("private ch", s.private_channels),
+      stat("DMs", s.dm_channels),
+      stat("messages", s.total_messages),
+    );
+  } catch {
+    box.textContent = "";
+  }
+}
+
 async function openAdmin() {
   closeDrawers(); // get the mobile drawer out from behind the modal
   $("#admin-modal").hidden = false;
+  refreshAdminStats();
   await refreshAdminUsers();
   await refreshDeletedChannels();
 

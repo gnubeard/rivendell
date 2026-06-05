@@ -92,6 +92,7 @@ export const api = {
   unmuteChannel: (channelId) => req("DELETE", `/api/channels/${channelId}/mute`),
 
   // admin
+  adminStats: () => req("GET", "/api/admin/stats"),
   createUser: (username, displayName, role) =>
     req("POST", "/api/admin/users", { username, display_name: displayName, role }),
   createMagicLink: (userId) => req("POST", `/api/admin/users/${userId}/magic-link`),
