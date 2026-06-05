@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -1034,14 +1034,7 @@ function wireComposer() {
 
   // Scan backward from the caret for an @token that should trigger completion.
   function getAtQuery() {
-    const text = input.value;
-    const pos = input.selectionStart;
-    let i = pos - 1;
-    while (i >= 0 && /[A-Za-z0-9_]/.test(text[i])) i--;
-    if (i < 0 || text[i] !== "@") return null;
-    // '@' must not be immediately after a word char (avoids email addresses).
-    if (i > 0 && /[A-Za-z0-9_/]/.test(text[i - 1])) return null;
-    return { start: i, partial: text.slice(i + 1, pos) };
+    return atQuery(input.value, input.selectionStart);
   }
 
   function filterMentions(partial) {

@@ -61,6 +61,17 @@ function inline(escaped, meLower) {
   return out;
 }
 
+// atQuery scans backward from `pos` in `text` for an @token that should
+// trigger mention autocomplete. Returns { start, partial } if found, or null.
+// Excluded: @ immediately after a word char or '/' (avoids emails and URL paths).
+export function atQuery(text, pos) {
+  let i = pos - 1;
+  while (i >= 0 && /[A-Za-z0-9_]/.test(text[i])) i--;
+  if (i < 0 || text[i] !== "@") return null;
+  if (i > 0 && /[A-Za-z0-9_/]/.test(text[i - 1])) return null;
+  return { start: i, partial: text.slice(i + 1, pos) };
+}
+
 export function formatMessage(text, me) {
   if (text == null) return "";
   const meLower = me ? String(me).toLowerCase() : null;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery } from "../static/format.js";
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');
@@ -85,6 +85,23 @@ test("formatMessage styles mentions and flags the current user", () => {
   const out = formatMessage("hi @bob and @alice", "alice");
   assert.ok(out.includes('<span class="mention">@bob</span>'), "other mention styled");
   assert.ok(out.includes('<span class="mention mention-me">@alice</span>'), "my mention flagged");
+});
+
+test("atQuery finds the @token immediately before the caret", () => {
+  assert.deepEqual(atQuery("@alice", 6), { start: 0, partial: "alice" });
+  assert.deepEqual(atQuery("hey @bob", 8), { start: 4, partial: "bob" });
+  assert.deepEqual(atQuery("hey @bo", 7), { start: 4, partial: "bo" });
+  assert.deepEqual(atQuery("hey @", 5), { start: 4, partial: "" });
+  // caret mid-token: only chars before caret form the partial
+  assert.deepEqual(atQuery("@alice", 3), { start: 0, partial: "al" });
+});
+
+test("atQuery returns null when there is no valid trigger", () => {
+  assert.equal(atQuery("hello world", 11), null, "no @ present");
+  assert.equal(atQuery("foo@bar.com", 11), null, "email: word char before @");
+  assert.equal(atQuery("https://x.com/@alice", 20), null, "URL path: / before @");
+  assert.equal(atQuery("@alice", 0), null, "caret before @");
+  assert.equal(atQuery("text @alice", 5), null, "caret lands on @, not past it");
 });
 
 test("mention styling stays XSS-safe and never enters an href", () => {
