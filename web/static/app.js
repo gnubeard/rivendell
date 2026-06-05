@@ -1238,6 +1238,9 @@ function wireControls() {
   $("#pins-btn").onclick = openPinsModal;
   $("#pins-close").onclick = () => ($("#pins-modal").hidden = true);
 
+  for (const m of document.querySelectorAll(".modal"))
+    m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
+
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
   // toggled from the header; they share one tap-to-close backdrop.
   $("#sidebar-toggle").onclick = () => toggleDrawer("sidebar");
