@@ -1047,10 +1047,11 @@ function wireComposer() {
   function filterMentions(partial) {
     const q = partial.toLowerCase();
     return Object.values(state.users)
-      .filter((u) => !u.disabled && (
-        u.username.toLowerCase().startsWith(q) ||
-        (u.display_name && u.display_name.toLowerCase().startsWith(q))
-      ))
+      .filter((u) => !u.disabled &&
+        (!activeMemberIds || activeMemberIds.has(u.id)) &&
+        (u.username.toLowerCase().startsWith(q) ||
+          (u.display_name && u.display_name.toLowerCase().startsWith(q)))
+      )
       .sort((a, b) => a.username.localeCompare(b.username))
       .slice(0, 8);
   }
