@@ -122,6 +122,16 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   reconnect — `TestStatusDurableAcrossReconnect` guards it). Effective `online`
   reported to clients = connected AND status != "offline" (so "offline" doubles as
   invisible); computed in both `onPresenceChange` and `handleListUsers`.
+- **Presence is debounced client-side (~1s).** `presence.update` is not applied
+  immediately — `schedulePresenceUpdate` (app.js) holds it per user for
+  `PRESENCE_DEBOUNCE_MS`, replacing any pending update for that user; if the latest
+  value already matches what's displayed (`S.presenceMatches`, the pure equality
+  check in state.js), the change is dropped without repainting. This kills the dot
+  flicker on a brief connectivity blip. **Our own user is exempt** (applied
+  immediately — status is server→broadcast with no optimistic local update, so
+  debouncing self would lag a deliberate pick). Pending flips are flushed in
+  `resync()` so a stale deferred update can't fire over a fresh roster pull. Don't
+  "simplify" this back to an immediate apply.
 - **Frontend:** keep `format.js` and `state.js` pure and unit-tested. `format.js`
   is XSS-safe by construction (escape first, then a fixed markdown-lite pass on the
   escaped string) — preserve that ordering. The CSS relies on

@@ -39,6 +39,22 @@ test("setPresence updates online/status/idle and is a no-op for unknown user", (
   assert.equal(s, before, "unknown user returns same state reference");
 });
 
+test("presenceMatches detects whether a payload changes the displayed presence", () => {
+  const user = { online: true, status: "online", idle: false };
+  // Same on all three fields → unchanged.
+  assert.equal(S.presenceMatches(user, { online: true, status: "online", idle: false }), true);
+  // Any one field differing → changed.
+  assert.equal(S.presenceMatches(user, { online: false, status: "online", idle: false }), false, "online differs");
+  assert.equal(S.presenceMatches(user, { online: true, status: "away", idle: false }), false, "status differs");
+  assert.equal(S.presenceMatches(user, { online: true, status: "online", idle: true }), false, "idle differs");
+  // Truthiness is coerced: a missing idle reads as false and matches.
+  assert.equal(S.presenceMatches(user, { online: true, status: "online" }), true, "missing idle == false");
+  assert.equal(S.presenceMatches({ online: 1, status: "online", idle: 0 }, { online: true, status: "online", idle: false }), true, "1/0 coerce to booleans");
+  // Missing user or payload never matches.
+  assert.equal(S.presenceMatches(null, { online: true, status: "online" }), false);
+  assert.equal(S.presenceMatches(user, null), false);
+});
+
 test("channels sort by position then name", () => {
   const s = S.setChannels(S.initialState(), [
     { id: 3, name: "zeta", position: 0 },

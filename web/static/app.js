@@ -389,6 +389,9 @@ function startRealtime() {
   if (socket) socket.close();
   socket = connectRealtime(
     (evt) => {
+      // Presence is debounced (see schedulePresenceUpdate): a transient flip that
+      // reverts within ~1s never paints, so dots don't flicker on brief blips.
+      if (evt.type === "presence.update") { schedulePresenceUpdate(evt); return; }
       state = S.applyEvent(state, evt);
       // Targeted re-renders based on event type.
       if (evt.type.startsWith("presence") || evt.type === "user.update") {
@@ -532,6 +535,9 @@ function startRealtime() {
 // (Unread for channels missed while offline isn't recomputed — there's no
 // server-side unread record yet; that's what push notifications will cover.)
 async function resync() {
+  // Drop any deferred presence flips — the roster we're about to pull is the
+  // authoritative truth; a stale debounced update must not fire over it.
+  flushPendingPresence();
   try {
     const [users, channels] = await Promise.all([api.users(), api.channels()]);
     state = S.setUsers(state, users);
@@ -2518,6 +2524,48 @@ function renderNotifControl() {
   else if (perm === "denied") status.textContent = "Blocked in your browser settings — allow notifications there to use this.";
   else if (notifEnabled && perm === "granted") status.textContent = "On — you'll be notified of DMs and @-mentions when this tab isn't focused.";
   else status.textContent = "Off — turn on to get desktop alerts for DMs and @-mentions.";
+}
+
+// Presence debounce: hold an incoming presence.update for PRESENCE_DEBOUNCE_MS
+// before applying it, keyed per user. A newer update for the same user replaces
+// the pending one; if the latest value already matches what's displayed, the
+// pending change is dropped without repainting. Net effect: a brief connectivity
+// blip (or any flip that reverts within the window) never repaints the dot,
+// killing the occasional flicker. Our own user is exempt — deliberate status
+// changes should show immediately (status is server→broadcast with no optimistic
+// local update, so debouncing self would lag a deliberate pick by a second).
+const PRESENCE_DEBOUNCE_MS = 1000;
+const pendingPresence = new Map(); // userId -> timeout handle
+
+function applyPresence(evt) {
+  state = S.applyEvent(state, evt);
+  renderMembers();
+  renderMe();
+  renderDMs();
+}
+
+function schedulePresenceUpdate(evt) {
+  const uid = evt.payload.user_id;
+  if (state.me && uid === state.me.id) { applyPresence(evt); return; } // self: immediate
+  const pending = pendingPresence.get(uid);
+  if (pending) { clearTimeout(pending); pendingPresence.delete(uid); }
+  const cur = state.users[uid];
+  if (!cur) return; // unknown user — setPresence would no-op anyway
+  // The incoming value already matches what we're showing: a prior flip has
+  // reverted within the window, so drop it without repainting.
+  if (S.presenceMatches(cur, evt.payload)) return;
+  pendingPresence.set(uid, setTimeout(() => {
+    pendingPresence.delete(uid);
+    applyPresence(evt);
+  }, PRESENCE_DEBOUNCE_MS));
+}
+
+// flushPendingPresence drops every pending deferred presence change. Called on
+// reconnect (resync re-pulls the authoritative roster), so a stale flip can't fire
+// afterward and briefly repaint a user wrong.
+function flushPendingPresence() {
+  for (const t of pendingPresence.values()) clearTimeout(t);
+  pendingPresence.clear();
 }
 
 // presenceClass maps a user to a presence-dot color class. Offline (or invisible)

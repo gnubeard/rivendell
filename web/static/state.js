@@ -135,6 +135,17 @@ export function upsertUser(state, user) {
   return { ...state, users: { ...state.users, [user.id]: { ...prev, ...user } } };
 }
 
+// presenceMatches reports whether a presence.update payload would leave a user's
+// currently displayed presence (online/status/idle) unchanged. The client uses it
+// to drop a transient flip that reverts before the debounce window elapses. A user
+// we don't know yet matches nothing — callers handle that case themselves. Pure.
+export function presenceMatches(user, payload) {
+  if (!user || !payload) return false;
+  return !!user.online === !!payload.online &&
+    user.status === payload.status &&
+    !!user.idle === !!payload.idle;
+}
+
 export function setPresence(state, userId, online, status, idle = false) {
   const prev = state.users[userId];
   if (!prev) return state;

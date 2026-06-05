@@ -117,6 +117,15 @@
   search rows pass embedImages:false (an embedded image would fight the whole-row
   click-to-jump; they fall back to plain links). Composer bonus: pasting a single
   URL onto a non-empty selection wraps it as [selection](url).
+- Presence flicker fix — v1.0.26. presence.update is now debounced ~1s per user in
+  the client: schedulePresenceUpdate holds an incoming change, a newer one for the
+  same user replaces it, and if the latest value already matches what's displayed
+  the pending change is dropped without repainting — so a brief connectivity blip
+  (offline→online flip) never paints a flickered dot, while a sustained change
+  still applies after a second. Our own user is exempt (status is server→broadcast
+  with no optimistic local update, so debouncing self would lag a deliberate pick).
+  Pending flips are flushed on reconnect (resync re-pulls the authoritative roster).
+  The equality test is a pure state.js helper, presenceMatches (unit-tested).
 
 ## Backlog (sorted by effort)
 
@@ -124,8 +133,6 @@
 
 
 ## Meta / future ideas (not yet scoped)
-
-- Once in a while, a logged-in user's state flickers. Let's put something in so that the displayed state only changes if it persists, oh, a full second? If that can be done easily.
 
 Piece de resistance:
 - A Claude agent running on this box, wired into the chat, so work requests can
