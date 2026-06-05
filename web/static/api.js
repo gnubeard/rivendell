@@ -55,6 +55,22 @@ export const api = {
   users: () => req("GET", "/api/users"),
   avatarURL: (userId) => `/api/users/${userId}/avatar`,
 
+  // custom emojis
+  emojis: () => req("GET", "/api/emojis"),
+  emojiURL: (shortcode) => `/api/emojis/${encodeURIComponent(shortcode)}/image`,
+  uploadEmoji: async (shortcode, file) => {
+    const res = await fetch(`/api/emojis?shortcode=${encodeURIComponent(shortcode)}`, {
+      method: "POST",
+      headers: { "Content-Type": file.type },
+      body: file,
+      credentials: "same-origin",
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || "emoji upload failed");
+    return data;
+  },
+  deleteEmoji: (shortcode) => req("DELETE", `/api/emojis/${encodeURIComponent(shortcode)}`),
+
   // channels
   channels: () => req("GET", "/api/channels"),
   createChannel: (name, topic, isPrivate) =>

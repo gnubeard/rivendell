@@ -91,7 +91,24 @@ export function parsePermalink(hash) {
   return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
 }
 
-export function formatMessage(text, me) {
+// EMOJI_RE matches a :shortcode: token. Shortcodes are [a-z0-9_]{2,32} (same
+// charset as usernames), so a matched name can never carry an HTML metacharacter
+// — the <img> we build from it is safe by construction.
+const EMOJI_RE = /:([a-z0-9_]{2,32}):/g;
+
+// hasEmoji checks the caller-supplied registry, accepting either a Set of
+// shortcodes or a plain object keyed by shortcode (truthy value = known).
+function hasEmoji(emojis, name) {
+  if (!emojis) return false;
+  if (typeof emojis.has === "function") return emojis.has(name);
+  return !!emojis[name];
+}
+
+function emojiImg(name) {
+  return `<img class="emoji" src="/api/emojis/${name}/image" alt=":${name}:" title=":${name}:" loading="lazy">`;
+}
+
+export function formatMessage(text, me, emojis) {
   if (text == null) return "";
   const meLower = me ? String(me).toLowerCase() : null;
   const escaped = escapeHtml(String(text));
@@ -112,9 +129,9 @@ export function formatMessage(text, me) {
       const rendered = lines.map((line) => {
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
-          return `<blockquote>${inlineWithCode(body, meLower)}</blockquote>`;
+          return `<blockquote>${inlineWithCode(body, meLower, emojis)}</blockquote>`;
         }
-        return inlineWithCode(line, meLower);
+        return inlineWithCode(line, meLower, emojis);
       });
       html += rendered.join("<br>");
     }
@@ -123,15 +140,35 @@ export function formatMessage(text, me) {
 }
 
 // Handle `inline code` spans, leaving their contents free of inline markdown.
-function inlineWithCode(escapedLine, meLower) {
+function inlineWithCode(escapedLine, meLower, emojis) {
   const segs = escapedLine.split(/`/);
   let out = "";
   for (let i = 0; i < segs.length; i++) {
     if (i % 2 === 1) {
       out += `<code>${segs[i]}</code>`;
     } else {
-      out += inline(segs[i], meLower);
+      out += inlineWithEmoji(segs[i], meLower, emojis);
     }
   }
   return out;
+}
+
+// Render known :shortcode: emojis in an escaped, non-code segment. We SPLIT on
+// the emoji tokens and apply the markdown rules only to the text between them —
+// the same layering used for code spans above — so the inline pass can never run
+// over (and mangle) a generated <img> tag, even when a shortcode contains the
+// underscores that the italic rule keys on. Unknown shortcodes are left in place
+// as literal text for inline() to render.
+function inlineWithEmoji(seg, meLower, emojis) {
+  if (!emojis) return inline(seg, meLower);
+  let out = "";
+  let last = 0;
+  let m;
+  EMOJI_RE.lastIndex = 0;
+  while ((m = EMOJI_RE.exec(seg)) !== null) {
+    if (!hasEmoji(emojis, m[1])) continue;
+    out += inline(seg.slice(last, m.index), meLower) + emojiImg(m[1]);
+    last = m.index + m[0].length;
+  }
+  return out + inline(seg.slice(last), meLower);
 }

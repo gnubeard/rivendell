@@ -37,7 +37,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
+	_, err = st.DB().Exec(`TRUNCATE emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -1617,4 +1617,112 @@ func TestAudienceMirrorsAccess(t *testing.T) {
 
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
+}
+
+// doUpload sends a raw body with an explicit content type (the avatar/emoji
+// upload shape), carrying the client's session cookie.
+func doUpload(t *testing.T, c *http.Client, method, url, contentType string, body []byte) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	_, _ = buf.ReadFrom(resp.Body)
+	return resp, buf.Bytes()
+}
+
+func TestCustomEmojis(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	memberC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+
+	// A 1x1 PNG (any non-empty bytes pass the size/empty checks; the content type
+	// is what the handler validates).
+	img := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4}
+
+	// Empty list serializes as [], never null (the list-endpoint contract).
+	resp, body := doJSON(t, memberC, "GET", ts.URL+"/api/emojis", nil)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("empty emoji list: %d %q", resp.StatusCode, string(body))
+	}
+
+	// Members cannot upload.
+	resp, _ = doUpload(t, memberC, "POST", ts.URL+"/api/emojis?shortcode=party", "image/png", img)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member upload should be 403, got %d", resp.StatusCode)
+	}
+
+	// Bad shortcode is rejected.
+	resp, _ = doUpload(t, adminC, "POST", ts.URL+"/api/emojis?shortcode=Bad-Code", "image/png", img)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad shortcode should be 400, got %d", resp.StatusCode)
+	}
+
+	// Wrong content type is rejected.
+	resp, _ = doUpload(t, adminC, "POST", ts.URL+"/api/emojis?shortcode=party", "text/plain", img)
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("non-image should be 415, got %d", resp.StatusCode)
+	}
+
+	// Admin uploads a valid emoji.
+	resp, body = doUpload(t, adminC, "POST", ts.URL+"/api/emojis?shortcode=party", "image/png", img)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("admin upload: %d %s", resp.StatusCode, body)
+	}
+	var created store.Emoji
+	json.Unmarshal(body, &created)
+	if created.Shortcode != "party" {
+		t.Fatalf("created shortcode = %q", created.Shortcode)
+	}
+
+	// Duplicate shortcode conflicts.
+	resp, _ = doUpload(t, adminC, "POST", ts.URL+"/api/emojis?shortcode=party", "image/png", img)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate shortcode should be 409, got %d", resp.StatusCode)
+	}
+
+	// Members can list and fetch the image, and the bytes round-trip.
+	resp, body = doJSON(t, memberC, "GET", ts.URL+"/api/emojis", nil)
+	var list []store.Emoji
+	json.Unmarshal(body, &list)
+	if len(list) != 1 || list[0].Shortcode != "party" {
+		t.Fatalf("emoji list = %s", string(body))
+	}
+	resp, body = doJSON(t, memberC, "GET", ts.URL+"/api/emojis/party/image", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get image: %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("image content type = %q", ct)
+	}
+	if !bytes.Equal(body, img) {
+		t.Fatalf("image bytes did not round-trip")
+	}
+
+	// Members cannot delete.
+	resp, _ = doJSON(t, memberC, "DELETE", ts.URL+"/api/emojis/party", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member delete should be 403, got %d", resp.StatusCode)
+	}
+
+	// Admin deletes; the image then 404s and a second delete is 404.
+	resp, body = doJSON(t, adminC, "DELETE", ts.URL+"/api/emojis/party", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin delete: %d %s", resp.StatusCode, body)
+	}
+	resp, _ = doJSON(t, memberC, "GET", ts.URL+"/api/emojis/party/image", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted image should 404, got %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/emojis/party", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("re-delete should 404, got %d", resp.StatusCode)
+	}
 }

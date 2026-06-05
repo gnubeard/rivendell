@@ -42,13 +42,19 @@
   members-only even for mods), newest-first with keyset pagination. Header 🔍 opens a
   debounced search modal; clicking a hit reuses jumpToMessage. Renders via the
   escape-first formatMessage (no ts_headline, preserving the XSS invariant).
+- Custom emojis (instance-wide :shortcode: images) — v1.0.19. emojis table
+  (migration 0008) stores image bytes like avatars (BYTEA + mime, created_by SET
+  NULL on user delete). GET /api/emojis (any member) + GET /api/emojis/{sc}/image;
+  POST/DELETE are admin-only; create/delete broadcast emoji.add/emoji.delete to
+  everyone so the registry updates live. format.js gained an optional emoji
+  registry arg: it SPLITS each escaped segment on known :shortcode: tokens and
+  renders <img class="emoji"> between text runs (same layering as code spans), so
+  the markdown pass can never mangle the generated tag — preserving the
+  escape-first XSS invariant even for underscore-bearing shortcodes. state.js
+  holds the registry (setEmojis/upsertEmoji/removeEmoji); admin panel has an
+  upload+manage section; the composer has a 😀 picker that inserts the token.
 
 ## Backlog (sorted by effort)
-
-4. [L] Custom emojis.
-   Storage (a bytes-blob table + shortcode, like avatars), upload/manage endpoints
-   (admin?), and :shortcode: rendering in format.js that PRESERVES its escape-first
-   XSS invariant. A picker is the nice-to-have.
 
 5. [L] Reactions.
    reactions(message_id, user_id, emoji) + add/remove endpoints + realtime
@@ -62,7 +68,11 @@
 
 ## Meta / future ideas (not yet scoped)
 
+- Let's drop the 'x' button on the About dialog and Pinned modal. It's a bit old-fashioned. Also, on desktop, the Esc key should close an open modal.
+
 - Let's broaden the pinned messages modal on desktop, it's a little bit horizontally cramped.
+
+- Should add the minimum viable GPL notice to the about modal
 
 - Mods+ should be able to update channel topics
 

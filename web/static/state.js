@@ -16,7 +16,29 @@ export function initialState() {
     mentions: {}, // channelId -> count of unseen @-mentions of me
     muted: {}, // channelId -> true for channels the user has silenced
     typing: {}, // channelId -> { userId -> true } for active typers
+    emojis: {}, // shortcode -> emoji record (custom instance-wide emojis)
   };
+}
+
+// setEmojis replaces the custom-emoji registry from the server's list, keyed by
+// shortcode so format.js can test membership in O(1) while rendering.
+export function setEmojis(state, list) {
+  const emojis = {};
+  for (const e of list || []) emojis[e.shortcode] = e;
+  return { ...state, emojis };
+}
+
+// upsertEmoji adds (or replaces) a single emoji — used for the emoji.add event.
+export function upsertEmoji(state, emoji) {
+  return { ...state, emojis: { ...state.emojis, [emoji.shortcode]: emoji } };
+}
+
+// removeEmoji drops an emoji by shortcode — used for the emoji.delete event.
+export function removeEmoji(state, shortcode) {
+  if (!state.emojis[shortcode]) return state;
+  const emojis = { ...state.emojis };
+  delete emojis[shortcode];
+  return { ...state, emojis };
 }
 
 // setMutedChannels replaces the muted set from the server's durable list.
@@ -270,6 +292,10 @@ export function applyEvent(state, evt) {
       return setMuted(state, evt.payload.channel_id, evt.payload.muted);
     case "typing.update":
       return setTyping(state, evt.payload.channel_id, evt.payload.user_id, evt.payload.active);
+    case "emoji.add":
+      return upsertEmoji(state, evt.payload);
+    case "emoji.delete":
+      return removeEmoji(state, evt.payload.shortcode);
     default:
       return state;
   }

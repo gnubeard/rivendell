@@ -112,6 +112,46 @@ test("mention styling stays XSS-safe and never enters an href", () => {
   assert.ok(out.includes('href="http://x.com/@alice"'), "URL with @ links intact, no span inside href");
 });
 
+test("custom emoji: known :shortcode: renders as an <img>, unknown stays literal", () => {
+  const emojis = new Set(["party", "smile_cat"]);
+  const out = formatMessage("yay :party: and :nope:", "me", emojis);
+  assert.ok(out.includes('<img class="emoji" src="/api/emojis/party/image"'), "known shortcode -> img");
+  assert.ok(out.includes('alt=":party:"'));
+  assert.ok(out.includes(":nope:"), "unknown shortcode left as literal text");
+  assert.ok(!out.includes("/api/emojis/nope/"), "unknown shortcode not turned into an image");
+});
+
+test("custom emoji: registry may be a plain object keyed by shortcode", () => {
+  const out = formatMessage(":party:", "me", { party: { shortcode: "party" } });
+  assert.ok(out.includes('src="/api/emojis/party/image"'));
+});
+
+test("custom emoji: no registry means shortcodes are inert", () => {
+  assert.equal(formatMessage(":party:"), ":party:");
+});
+
+test("custom emoji: a shortcode with underscores is not mangled by italics", () => {
+  // The italic rule keys on _x_; a multi-underscore shortcode rendered in place
+  // would be corrupted. Splitting on the token keeps the <img> intact.
+  const emojis = new Set(["a_b_c"]);
+  const out = formatMessage(":a_b_c:", "me", emojis);
+  assert.equal(out, '<img class="emoji" src="/api/emojis/a_b_c/image" alt=":a_b_c:" title=":a_b_c:" loading="lazy">');
+  assert.ok(!out.includes("<em>"), "no stray italic inside the generated tag");
+});
+
+test("custom emoji: not rendered inside code spans or fenced blocks", () => {
+  const emojis = new Set(["party"]);
+  assert.ok(formatMessage("`:party:`", "me", emojis).includes("<code>:party:</code>"));
+  assert.ok(formatMessage("```\n:party:\n```", "me", emojis).includes("<code>:party:</code>"));
+});
+
+test("custom emoji: markdown around an emoji still applies to the text", () => {
+  const emojis = new Set(["party"]);
+  const out = formatMessage("**bold** :party:", "me", emojis);
+  assert.ok(out.includes("<strong>bold</strong>"));
+  assert.ok(out.includes('src="/api/emojis/party/image"'));
+});
+
 test("permalinkHash builds the canonical no-slash hash", () => {
   assert.equal(permalinkHash(5, 123), "#c5/m123");
 });

@@ -297,3 +297,31 @@ test("applyEvent routes typing.update", () => {
   s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 3, active: false } });
   assert.equal(s.typing[7], undefined);
 });
+
+test("setEmojis indexes by shortcode and tolerates null", () => {
+  let s = S.setEmojis(S.initialState(), [
+    { id: 1, shortcode: "party" },
+    { id: 2, shortcode: "smile_cat" },
+  ]);
+  assert.equal(s.emojis.party.id, 1);
+  assert.equal(s.emojis.smile_cat.id, 2);
+  assert.deepEqual(S.setEmojis(S.initialState(), null).emojis, {});
+});
+
+test("upsertEmoji adds/replaces and removeEmoji drops a shortcode", () => {
+  let s = S.upsertEmoji(S.initialState(), { id: 1, shortcode: "party" });
+  assert.equal(s.emojis.party.id, 1);
+  s = S.upsertEmoji(s, { id: 9, shortcode: "party" });
+  assert.equal(s.emojis.party.id, 9, "same shortcode replaces");
+  s = S.removeEmoji(s, "party");
+  assert.equal(s.emojis.party, undefined);
+  assert.equal(S.removeEmoji(s, "absent"), s, "removing an absent emoji is a no-op");
+});
+
+test("applyEvent routes emoji.add and emoji.delete", () => {
+  let s = S.initialState();
+  s = S.applyEvent(s, { type: "emoji.add", payload: { id: 3, shortcode: "party" } });
+  assert.equal(s.emojis.party.id, 3);
+  s = S.applyEvent(s, { type: "emoji.delete", payload: { shortcode: "party" } });
+  assert.equal(s.emojis.party, undefined);
+});

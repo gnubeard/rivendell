@@ -149,6 +149,16 @@ type ChannelUnread struct {
 	Mentions  int   `json:"mentions"`
 }
 
+// Emoji is a custom instance-wide emoji. The image bytes are never included in
+// list responses (only served by the dedicated image endpoint); ListEmojis
+// leaves Mime/Data zero-valued.
+type Emoji struct {
+	ID        int64     `json:"id"`
+	Shortcode string    `json:"shortcode"`
+	CreatedBy *int64    `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Message struct {
 	ID        int64      `json:"id"`
 	ChannelID int64      `json:"channel_id"`

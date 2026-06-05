@@ -65,6 +65,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/users", s.auth(s.handleListUsers))
 	mux.HandleFunc("GET /api/users/{id}/avatar", s.auth(s.handleGetAvatar))
 
+	// Custom emojis (instance-wide). Listing/image are any authed user; create
+	// and delete are admin-only.
+	mux.HandleFunc("GET /api/emojis", s.auth(s.handleListEmojis))
+	mux.HandleFunc("POST /api/emojis", s.requireRole(store.RoleAdmin, s.handleCreateEmoji))
+	mux.HandleFunc("DELETE /api/emojis/{shortcode}", s.requireRole(store.RoleAdmin, s.handleDeleteEmoji))
+	mux.HandleFunc("GET /api/emojis/{shortcode}/image", s.auth(s.handleGetEmojiImage))
+
 	// Channels.
 	mux.HandleFunc("GET /api/channels", s.auth(s.handleListChannels))
 	mux.HandleFunc("POST /api/channels", s.requireRole(store.RoleModerator, s.handleCreateChannel))

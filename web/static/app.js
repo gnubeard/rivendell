@@ -296,6 +296,13 @@ async function enterApp() {
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
   state = S.setUsers(state, users);
   state = S.setChannels(state, channels);
+  // Custom emojis power :shortcode: rendering; best-effort so a failure here
+  // never blocks the app from loading (messages just render the literal text).
+  try {
+    state = S.setEmojis(state, await api.emojis());
+  } catch (e) {
+    /* non-fatal: :shortcode: tokens stay literal until the list loads */
+  }
   // Seed durable unread/mention counts from the server so badges and the global
   // total survive a refresh (best-effort: a failure just leaves them empty).
   try {
@@ -432,6 +439,13 @@ function startRealtime() {
       if (evt.type === "typing.update") {
         if (evt.payload.channel_id === state.activeChannelId) renderTypingIndicator();
       }
+      if (evt.type === "emoji.add" || evt.type === "emoji.delete") {
+        // The registry changed: re-render the open messages so :shortcode: tokens
+        // start/stop rendering as images, and refresh any open emoji surfaces.
+        renderMessages();
+        if (emojiPickerOpen()) renderEmojiPicker();
+        refreshAdminEmojisIfOpen();
+      }
       if (evt.type.startsWith("message")) {
         // A delete seen live earns a tombstone (unlike already-deleted history).
         if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
@@ -500,6 +514,11 @@ async function resync() {
     const [users, channels] = await Promise.all([api.users(), api.channels()]);
     state = S.setUsers(state, users);
     state = S.setChannels(state, channels);
+    try {
+      state = S.setEmojis(state, await api.emojis());
+    } catch (e) {
+      /* non-fatal */
+    }
     // Re-pull durable unread counts: events missed while the socket was dead are
     // exactly the gap this closes (the old code couldn't recompute unread here).
     try {
@@ -1159,7 +1178,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     lastUser = m.user_id;
     lastTime = t;
 
-    const body = el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+    const body = el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
     const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
 
     const isOwn = m.user_id === state.me.id;
@@ -1360,6 +1379,57 @@ function wireComposer() {
   };
 }
 
+// --- emoji picker --------------------------------------------------------
+
+function emojiPickerOpen() {
+  const p = $("#emoji-picker");
+  return p && !p.hidden;
+}
+
+function renderEmojiPicker() {
+  const picker = $("#emoji-picker");
+  picker.innerHTML = "";
+  const codes = Object.keys(state.emojis).sort();
+  if (!codes.length) {
+    picker.append(el("span", { class: "emoji-empty" }, "No custom emojis yet. Admins add them in the admin panel."));
+    return;
+  }
+  for (const code of codes) {
+    picker.append(el("button", {
+      type: "button", class: "emoji-choice", title: `:${code}:`,
+      onclick: () => insertEmoji(code),
+    }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
+  }
+}
+
+function toggleEmojiPicker() {
+  const picker = $("#emoji-picker");
+  if (picker.hidden) {
+    renderEmojiPicker();
+    picker.hidden = false;
+  } else {
+    picker.hidden = true;
+  }
+}
+
+// insertEmoji drops a :shortcode: token at the caret, padding with spaces so it's
+// recognised as a standalone token, then fires a synthetic input event so the
+// composer's autosize/typing logic runs exactly as if it were typed.
+function insertEmoji(code) {
+  const input = $("#composer-input");
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  const before = input.value.slice(0, start);
+  const lead = before && !/\s$/.test(before) ? " " : "";
+  const insert = `${lead}:${code}: `;
+  input.value = before + insert + input.value.slice(end);
+  const pos = start + insert.length;
+  input.setSelectionRange(pos, pos);
+  $("#emoji-picker").hidden = true;
+  input.focus();
+  input.dispatchEvent(new Event("input"));
+}
+
 async function startEdit(m) {
   const next = prompt("Edit message:", m.content);
   if (next == null || next === m.content) return;
@@ -1452,7 +1522,7 @@ async function refreshPins() {
                 },
               }, "unpin")
             : null),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) }))
     );
   }
   list.innerHTML = "";
@@ -1528,7 +1598,7 @@ async function runSearch(reset) {
           el("span", { class: "search-channel" }, channelLabel(ch)),
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
           el("span", { class: "msg-time" }, formatTime(m.created_at))),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) }))
     );
   }
   // A full page implies more may exist; advance the cursor to the oldest hit.
@@ -1653,6 +1723,14 @@ function wireControls() {
 
   $("#pins-btn").onclick = openPinsModal;
   $("#pins-close").onclick = () => ($("#pins-modal").hidden = true);
+
+  $("#emoji-btn").onclick = (e) => { e.stopPropagation(); toggleEmojiPicker(); };
+  // Dismiss the emoji picker on any click outside it (the button toggles itself).
+  document.addEventListener("click", (e) => {
+    if (emojiPickerOpen() && !e.target.closest("#emoji-picker") && !e.target.closest("#emoji-btn")) {
+      $("#emoji-picker").hidden = true;
+    }
+  });
 
   $("#search-btn").onclick = openSearchModal;
   $("#search-close").onclick = () => ($("#search-modal").hidden = true);
@@ -1896,7 +1974,28 @@ async function openAdmin() {
   $("#admin-modal").hidden = false;
   refreshAdminStats();
   await refreshAdminUsers();
+  await refreshAdminEmojis();
   await refreshDeletedChannels();
+
+  $("#admin-emoji-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const out = $("#admin-emoji-out");
+    out.textContent = "";
+    const shortcode = $("#admin-emoji-shortcode").value.trim().toLowerCase();
+    const file = $("#admin-emoji-file").files[0];
+    if (!file) {
+      out.textContent = "Choose an image.";
+      return;
+    }
+    try {
+      await api.uploadEmoji(shortcode, file);
+      $("#admin-emoji-shortcode").value = "";
+      $("#admin-emoji-file").value = "";
+      await refreshAdminEmojis();
+    } catch (ex) {
+      out.textContent = ex.message;
+    }
+  };
 
   $("#admin-create-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -1955,6 +2054,41 @@ async function refreshAdminUsers() {
       )
     );
   }
+}
+
+// refreshAdminEmojis renders the custom-emoji grid with delete controls. Realtime
+// emoji.add/emoji.delete events also call refreshAdminEmojisIfOpen so the list
+// stays current if another admin changes it while the panel is open.
+async function refreshAdminEmojis() {
+  const box = $("#admin-emoji-list");
+  box.innerHTML = "";
+  let list;
+  try {
+    list = await api.emojis();
+  } catch (ex) {
+    box.append(el("span", { class: "notice" }, ex.message));
+    return;
+  }
+  if (!list.length) {
+    box.append(el("span", { class: "notice" }, "No custom emojis yet."));
+    return;
+  }
+  for (const e of list) {
+    const del = el("button", {
+      class: "link danger", title: `Delete :${e.shortcode}:`, onclick: async () => {
+        if (!confirm(`Delete :${e.shortcode}:? Messages using it will show the literal text.`)) return;
+        try { await api.deleteEmoji(e.shortcode); await refreshAdminEmojis(); } catch (ex) { alert(ex.message); }
+      },
+    }, "✕");
+    box.append(el("span", { class: "admin-emoji" },
+      el("img", { src: api.emojiURL(e.shortcode), alt: `:${e.shortcode}:` }),
+      el("code", {}, `:${e.shortcode}:`),
+      del));
+  }
+}
+
+function refreshAdminEmojisIfOpen() {
+  if (!$("#admin-modal").hidden) refreshAdminEmojis();
 }
 
 // refreshDeletedChannels renders archived channels with restore / permanent-delete
