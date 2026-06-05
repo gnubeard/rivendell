@@ -334,6 +334,7 @@ async function enterApp() {
   wireComposer();
   wireControls();
   wireScrollback();
+  wireSwipe();
   // Returning to the tab clears the open channel's unread (you're looking now).
   window.addEventListener("focus", onWindowFocus);
   document.addEventListener("visibilitychange", () => {
@@ -1367,6 +1368,56 @@ function closeDrawers() {
 function toggleDrawer(which) {
   if (document.body.classList.contains(which + "-open")) closeDrawers();
   else openDrawer(which);
+}
+
+// wireSwipe adds touch-swipe navigation on mobile: swipe right opens the sidebar
+// drawer, swipe left opens the members panel. Uses passive listeners so the
+// message-list's native scroll is never blocked. The tricky bit is disambiguating
+// a horizontal swipe from a vertical scroll: we decide intent on the first
+// significant movement (>= 6px) by comparing |dx| vs |dy|, then gate the final
+// action on a minimum travel distance and a "not too diagonal" check.
+function wireSwipe() {
+  const appEl = $(".app");
+  let startX = 0, startY = 0;
+  let decided = false; // true once we've committed to track or ignore this gesture
+  let tracking = false; // true when we've classified this gesture as a horizontal swipe
+
+  appEl.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) { decided = false; tracking = false; return; }
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    decided = false;
+    tracking = false;
+  }, { passive: true });
+
+  appEl.addEventListener("touchmove", (e) => {
+    if (decided || e.touches.length !== 1) return;
+    const dx = Math.abs(e.touches[0].clientX - startX);
+    const dy = Math.abs(e.touches[0].clientY - startY);
+    if (dx < 6 && dy < 6) return; // too little movement to classify yet
+    decided = true;
+    tracking = dx >= dy; // horizontal-dominant = treat as a swipe candidate
+  }, { passive: true });
+
+  appEl.addEventListener("touchend", (e) => {
+    if (!tracking || e.changedTouches.length !== 1) { decided = false; tracking = false; return; }
+    decided = false;
+    tracking = false;
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = e.changedTouches[0].clientY - startY;
+    if (Math.abs(dx) < 40) return; // too short to be intentional
+    if (Math.abs(dy) > Math.abs(dx) * 0.6) return; // too diagonal (> ~31° off horizontal)
+    if (dx > 0) {
+      // Swipe right: reveal the sidebar, or dismiss the members panel if it's open.
+      if (document.body.classList.contains("members-open")) closeDrawers();
+      else openDrawer("sidebar");
+    } else {
+      // Swipe left: reveal the members panel, or dismiss the sidebar if it's open.
+      // Skip the members drawer in DM view (1:1 channel, no roster shown).
+      if (document.body.classList.contains("sidebar-open")) closeDrawers();
+      else if (!document.body.classList.contains("dm-active")) openDrawer("members");
+    }
+  }, { passive: true });
 }
 
 // openInviteModal lists everyone and lets you add non-members to the active
