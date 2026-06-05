@@ -74,9 +74,11 @@ export function atQuery(text, pos) {
 
 // permalinkHash builds the canonical location.hash for a message permalink:
 // `#c<channelId>/m<messageId>`. This is the single source of truth for the format
-// — both the anchor hrefs and history.replaceState must use it, and parsePermalink
-// must accept exactly what it emits (a past drift of `/m/` vs `/m` broke shared
-// links on fresh load). Pure.
+// — the message-timestamp anchor hrefs use it (so right-click → copy link yields a
+// shareable permalink), and parsePermalink must accept exactly what it emits (a
+// past drift of `/m/` vs `/m` broke shared links on fresh load). Note the app does
+// NOT keep this hash in the URL bar: after jumping to a message it resets to `/`
+// (see jumpToMessage), so the address bar stays clean during normal use. Pure.
 export function permalinkHash(channelId, messageId) {
   return `#c${channelId}/m${messageId}`;
 }

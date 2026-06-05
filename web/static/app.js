@@ -1000,7 +1000,10 @@ async function jumpToMessage(channelId, messageId) {
     flashMessageId = messageId; // highlight is applied in renderMessages so it survives re-renders
     // Hold position so the rebuild doesn't snap to the bottom; we center below.
     renderMessages(false, true);
-    history.replaceState(null, "", permalinkHash(channelId, messageId));
+    // Return the URL bar to clean SPA state — we've arrived, so the permalink hash
+    // (whether from a shared link on load or an in-app click) is now just junk.
+    // Sharing still works via the timestamp anchors' href (permalinkHash).
+    history.replaceState(null, "", "/");
     const target = document.querySelector(`[data-msg-id="${messageId}"]`);
     if (target) {
       target.scrollIntoView({ block: "center" }); // instant: a smooth scroll races the fill below
