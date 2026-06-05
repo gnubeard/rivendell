@@ -857,6 +857,18 @@ function wireScrollback() {
   });
 }
 
+// scrollToBottom pins the message list to the newest message. It re-pins across
+// the next couple of frames because layout can keep settling after the first
+// assignment — text wrapping, and on mobile the visual viewport / URL bar — which
+// would otherwise leave the view a few pixels short of the bottom.
+function scrollToBottom(wrap) {
+  wrap.scrollTop = wrap.scrollHeight;
+  requestAnimationFrame(() => {
+    wrap.scrollTop = wrap.scrollHeight;
+    requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
+  });
+}
+
 function renderMessages(forceBottom = false) {
   const wrap = $("#message-list");
   // forceBottom (channel open) always lands at the newest message; otherwise we
@@ -940,15 +952,8 @@ function renderMessages(forceBottom = false) {
   }
   // Follow the conversation when already at the bottom; otherwise hold the
   // reader's position (loadOlderMessages adjusts further for prepended history).
-  if (atBottom) {
-    wrap.scrollTop = wrap.scrollHeight;
-    // A late reflow (text wrapping, async metrics) can grow scrollHeight a few
-    // pixels after the line above, leaving us just short of the bottom. Re-pin
-    // once layout has settled so we land exactly at the end.
-    requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
-  } else {
-    wrap.scrollTop = prevTop;
-  }
+  if (atBottom) scrollToBottom(wrap);
+  else wrap.scrollTop = prevTop;
 }
 
 // --- composer + message actions -----------------------------------------
