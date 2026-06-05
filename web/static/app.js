@@ -58,6 +58,7 @@ let activeMemberIds = null;
 const PAGE = 50;
 let loadingOlder = false; // guards against overlapping fetches
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
+const viewingHistory = new Set(); // channelIds where we loaded an "around" window
 
 // Closed DMs: a per-browser set of DM channel ids the user has hidden from the
 // sidebar. The channel and its history are untouched server-side — closing only
@@ -326,7 +327,19 @@ async function enterApp() {
   renderMembers();
   renderAdminVisibility();
   renderNotificationTotal();
-  if (state.activeChannelId) {
+  // Check for a permalink hash (#c<channelId>/m<messageId>) before loading
+  // the default channel — if present, jump there instead.
+  const permalinkMatch = location.hash.match(/^#c(\d+)\/m(\d+)$/);
+  if (permalinkMatch) {
+    history.replaceState(null, "", "/");
+    const plChannel = parseInt(permalinkMatch[1]);
+    const plMessage = parseInt(permalinkMatch[2]);
+    if (state.channels[plChannel]) {
+      await jumpToMessage(plChannel, plMessage);
+    } else if (state.activeChannelId) {
+      await loadChannel(state.activeChannelId);
+    }
+  } else if (state.activeChannelId) {
     await loadChannel(state.activeChannelId);
     markActiveChannelRead();
   }
@@ -866,6 +879,8 @@ async function loadChannel(id) {
   document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
   await refreshActiveMembers();
   loadingOlder = false;
+  viewingHistory.delete(id);
+  renderHistoryBanner();
   try {
     const msgs = await api.messages(id, { limit: PAGE });
     state = S.setMessages(state, id, msgs);
@@ -908,6 +923,57 @@ async function loadOlderMessages() {
     console.warn("rivendell: could not load older messages:", ex && ex.message);
   } finally {
     loadingOlder = false;
+  }
+}
+
+function renderHistoryBanner() {
+  const banner = $("#history-banner");
+  if (!banner) return;
+  banner.hidden = !viewingHistory.has(state.activeChannelId);
+}
+
+async function jumpToMessage(channelId, messageId) {
+  // Switch channel header/state if needed without triggering a full loadChannel.
+  if (state.activeChannelId !== channelId) {
+    state = S.setActiveChannel(state, channelId);
+    try { localStorage.setItem("rivendell.activeChannel", channelId); } catch (e) { /* non-fatal */ }
+    state = S.clearUnread(state, channelId);
+    state = S.clearMention(state, channelId);
+    renderChannels();
+    renderDMs();
+    renderNotificationTotal();
+    closeDrawers();
+    const ch = state.channels[channelId];
+    if (ch && ch.is_dm) {
+      $("#channel-title").textContent = "@ " + dmDisplayName(ch);
+      $("#channel-topic").textContent = "";
+    } else {
+      $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
+      $("#channel-topic").textContent = ch ? ch.topic : "";
+    }
+    const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
+    $("#invite-btn").hidden = !realPrivate;
+    $("#leave-btn").hidden = !realPrivate;
+    $("#pins-btn").hidden = !ch;
+    document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
+    await refreshActiveMembers();
+  }
+  try {
+    const msgs = await api.messages(channelId, { around: messageId });
+    state = S.setMessages(state, channelId, msgs);
+    historyComplete.delete(channelId);
+    viewingHistory.add(channelId);
+    renderMessages(false);
+    renderHistoryBanner();
+    const target = document.querySelector(`[data-msg-id="${messageId}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("msg-anchor");
+      setTimeout(() => target.classList.remove("msg-anchor"), 2500);
+    }
+    history.replaceState(null, "", `#c${channelId}/m${messageId}`);
+  } catch (ex) {
+    console.warn("rivendell: jumpToMessage failed:", ex && ex.message);
   }
 }
 
@@ -1021,19 +1087,26 @@ function renderMessages(forceBottom = false) {
     if (m.pinned_at) cls += " pinned";
     if (mentionsMe) cls += " mentioned";
 
+    const permalink = el("a", {
+      class: "msg-time",
+      href: `#c${state.activeChannelId}/m/${m.id}`,
+      title: "Permalink",
+      onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
+    }, formatTime(m.created_at));
+
     if (grouped) {
-      wrap.append(el("div", { class: cls + " grouped" }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, actions)));
+      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, actions)));
     } else {
       const avatar = author && author.has_avatar
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
         : el("div", { class: "msg-avatar" }, initials(author ? author.display_name : "?"));
       wrap.append(
-        el("div", { class: cls },
+        el("div", { class: cls, "data-msg-id": m.id },
           avatar,
           el("div", { class: "msg-main" },
             el("div", { class: "msg-head" },
               el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
-              el("span", { class: "msg-time" }, formatTime(m.created_at)),
+              permalink,
               pinMark
             ),
             body,
@@ -1258,7 +1331,12 @@ async function refreshPins() {
       el("li", { class: "pin-row" },
         el("div", { class: "pin-head" },
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
-          el("span", { class: "msg-time" }, formatTime(m.created_at)),
+          el("a", {
+            class: "msg-time",
+            href: `#c${ch.id}/m/${m.id}`,
+            title: "Jump to message",
+            onclick: (e) => { e.preventDefault(); $("#pins-modal").hidden = true; jumpToMessage(ch.id, m.id); },
+          }, formatTime(m.created_at)),
           canPin
             ? el("button", {
                 class: "link", onclick: async () => {
@@ -1274,6 +1352,11 @@ async function refreshPins() {
 // --- controls: status, avatar, new channel, admin, logout ---------------
 
 function wireControls() {
+  $("#history-latest-btn").onclick = () => {
+    const cid = state.activeChannelId;
+    if (cid) selectChannel(cid);
+  };
+
   $("#status-select").onchange = async (e) => {
     try {
       await api.setStatus(e.target.value);

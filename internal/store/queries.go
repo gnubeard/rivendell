@@ -498,6 +498,76 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 	return out, rows.Err()
 }
 
+// GetMessagesAround returns up to halfLimit messages before messageID, the
+// message itself, and up to halfLimit messages after, sorted oldest-first.
+// Returns ErrNotFound if messageID does not exist in channelID.
+func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int64, halfLimit int) ([]Message, error) {
+	if halfLimit <= 0 || halfLimit > 100 {
+		halfLimit = 25
+	}
+
+	// Older messages (DESC so we get the closest ones; reversed below).
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+messageCols+`
+		 FROM messages
+		 WHERE channel_id = $1 AND id < $2
+		 ORDER BY id DESC LIMIT $3`, channelID, messageID, halfLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var older []Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		older = append(older, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// The anchor message itself.
+	target, err := scanMessage(s.db.QueryRowContext(ctx,
+		`SELECT `+messageCols+` FROM messages WHERE channel_id = $1 AND id = $2`,
+		channelID, messageID))
+	if err != nil {
+		return nil, err // includes ErrNotFound
+	}
+
+	// Newer messages.
+	rows2, err := s.db.QueryContext(ctx,
+		`SELECT `+messageCols+`
+		 FROM messages
+		 WHERE channel_id = $1 AND id > $2
+		 ORDER BY id ASC LIMIT $3`, channelID, messageID, halfLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows2.Close()
+	var newer []Message
+	for rows2.Next() {
+		m, err := scanMessage(rows2)
+		if err != nil {
+			return nil, err
+		}
+		newer = append(newer, m)
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	// Merge: reverse(older) + target + newer → oldest-first.
+	out := make([]Message, 0, len(older)+1+len(newer))
+	for i := len(older) - 1; i >= 0; i-- {
+		out = append(out, older[i])
+	}
+	out = append(out, target)
+	out = append(out, newer...)
+	return out, nil
+}
+
 // ListPinnedMessages returns a channel's pinned (non-deleted) messages, most
 // recently pinned first.
 func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Message, error) {

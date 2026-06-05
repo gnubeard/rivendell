@@ -195,7 +195,11 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-main { min-width: 0; flex: 1; }
 .msg-head { display: flex; align-items: baseline; gap: 0.5rem; }
 .msg-author { font-weight: 600; }
-.msg-time { color: var(--text-faint); font-size: 0.72rem; }
+.msg-time { color: var(--text-faint); font-size: 0.72rem; text-decoration: none; }
+.msg-time:hover { text-decoration: underline; }
+@keyframes anchor-flash { 0% { background: rgba(224, 164, 88, 0.28); } 100% { background: transparent; } }
+.msg-anchor { animation: anchor-flash 2.5s ease-out forwards; border-radius: 4px; }
+.history-banner { padding: 0.3rem 1.2rem; background: var(--bg-3); border-bottom: 1px solid var(--border); font-size: 0.82rem; color: var(--text-dim); }
 .msg-body { word-wrap: break-word; overflow-wrap: anywhere; }
 .msg-body.deleted { color: var(--text-faint); font-style: italic; }
 .msg.deleted-run { padding: 0.05rem 0; }

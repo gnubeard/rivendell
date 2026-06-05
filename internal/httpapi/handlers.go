@@ -742,6 +742,22 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "no access to this channel")
 		return
 	}
+	if v := r.URL.Query().Get("around"); v != "" {
+		aroundID, _ := strconv.ParseInt(v, 10, 64)
+		if aroundID > 0 {
+			msgs, err := s.st.GetMessagesAround(r.Context(), id, aroundID, 25)
+			if errors.Is(err, store.ErrNotFound) {
+				writeErr(w, http.StatusNotFound, "message not found")
+				return
+			}
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "could not load messages")
+				return
+			}
+			writeJSON(w, http.StatusOK, msgs)
+			return
+		}
+	}
 	beforeID := int64(0)
 	if v := r.URL.Query().Get("before"); v != "" {
 		beforeID, _ = strconv.ParseInt(v, 10, 64)

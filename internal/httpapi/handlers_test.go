@@ -1260,6 +1260,100 @@ func TestMuteSilencesChannel(t *testing.T) {
 	}
 }
 
+func TestGetMessagesAround(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel: %d %s", resp.StatusCode, body)
+	}
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	// Post 10 messages; collect IDs in order.
+	ids := make([]int64, 10)
+	for i := range ids {
+		_, b := doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages",
+			map[string]string{"content": "m" + itoa(int64(i))})
+		var m store.Message
+		json.Unmarshal(b, &m)
+		ids[i] = m.ID
+	}
+
+	getAround := func(msgID int64) []store.Message {
+		_, b := doJSON(t, adminC, "GET",
+			ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages?around="+itoa(msgID), nil)
+		var out []store.Message
+		json.Unmarshal(b, &out)
+		return out
+	}
+
+	// Around the middle message (ids[4]): should include ids[4] and neighbours.
+	mid := getAround(ids[4])
+	if len(mid) == 0 {
+		t.Fatal("around middle: got empty result")
+	}
+	// Must be sorted ascending.
+	for i := 1; i < len(mid); i++ {
+		if mid[i].ID <= mid[i-1].ID {
+			t.Fatalf("around middle: not sorted ascending at index %d: %v", i, mid)
+		}
+	}
+	// Anchor must be present.
+	found := false
+	for _, m := range mid {
+		if m.ID == ids[4] {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("around middle: anchor message %d missing from result", ids[4])
+	}
+
+	// Around the first message (ids[0]): no older messages, only anchor + newer.
+	first := getAround(ids[0])
+	if first[0].ID != ids[0] {
+		t.Fatalf("around first: expected first element to be anchor %d, got %d", ids[0], first[0].ID)
+	}
+	for _, m := range first {
+		if m.ID < ids[0] {
+			t.Fatalf("around first: got message with id < anchor: %d", m.ID)
+		}
+	}
+
+	// Around the last message (ids[9]): no newer messages, only older + anchor.
+	last := getAround(ids[9])
+	if last[len(last)-1].ID != ids[9] {
+		t.Fatalf("around last: expected last element to be anchor %d, got %d", ids[9], last[len(last)-1].ID)
+	}
+	for _, m := range last {
+		if m.ID > ids[9] {
+			t.Fatalf("around last: got message with id > anchor: %d", m.ID)
+		}
+	}
+
+	// Non-existent message ID → 404.
+	resp404, _ := doJSON(t, adminC, "GET",
+		ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages?around=999999999", nil)
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Fatalf("around non-existent: expected 404, got %d", resp404.StatusCode)
+	}
+
+	// Wrong channel (message exists but in a different channel) → 404.
+	resp2, b2 := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "other"})
+	if resp2.StatusCode != http.StatusCreated {
+		t.Fatalf("create other channel: %d %s", resp2.StatusCode, b2)
+	}
+	var ch2 store.Channel
+	json.Unmarshal(b2, &ch2)
+	respWrong, _ := doJSON(t, adminC, "GET",
+		ts.URL+"/api/channels/"+itoa(ch2.ID)+"/messages?around="+itoa(ids[4]), nil)
+	if respWrong.StatusCode != http.StatusNotFound {
+		t.Fatalf("around wrong channel: expected 404, got %d", respWrong.StatusCode)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }
