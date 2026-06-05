@@ -244,3 +244,40 @@ test("applyEvent read.update clears both counts for the channel", () => {
   assert.equal(s.unread[2], 5);
   assert.equal(s.mentions[2], 2);
 });
+
+test("initialState includes typing as empty object", () => {
+  const s = S.initialState();
+  assert.deepEqual(s.typing, {});
+});
+
+test("setTyping adds and removes typers", () => {
+  let s = S.initialState();
+  s = S.setTyping(s, 10, 1, true);
+  assert.deepEqual(s.typing[10], { 1: true });
+  s = S.setTyping(s, 10, 2, true);
+  assert.deepEqual(s.typing[10], { 1: true, 2: true });
+  s = S.setTyping(s, 10, 1, false);
+  assert.deepEqual(s.typing[10], { 2: true });
+  // Removing the last typer drops the channel key entirely.
+  s = S.setTyping(s, 10, 2, false);
+  assert.equal(s.typing[10], undefined);
+});
+
+test("setTyping is isolated between channels", () => {
+  let s = S.initialState();
+  s = S.setTyping(s, 10, 1, true);
+  s = S.setTyping(s, 20, 2, true);
+  assert.deepEqual(s.typing[10], { 1: true });
+  assert.deepEqual(s.typing[20], { 2: true });
+  s = S.setTyping(s, 10, 1, false);
+  assert.equal(s.typing[10], undefined);
+  assert.deepEqual(s.typing[20], { 2: true });
+});
+
+test("applyEvent routes typing.update", () => {
+  let s = S.initialState();
+  s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 3, active: true } });
+  assert.deepEqual(s.typing[7], { 3: true });
+  s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 3, active: false } });
+  assert.equal(s.typing[7], undefined);
+});

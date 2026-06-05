@@ -171,4 +171,4 @@ RIVENDELL_PUBLIC_URL=https://chat.example.com
 
 ## License
 
-MIT
+GNU General Public License v3.0 — see [LICENSE](LICENSE).

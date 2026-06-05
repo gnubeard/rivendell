@@ -14,7 +14,7 @@ func TestHubPresenceAndBroadcast(t *testing.T) {
 	events := make(chan pres, 8)
 	hub := NewHub(func(uid int64, online bool) {
 		events <- pres{uid, online}
-	})
+	}, nil)
 
 	serverNC, clientNC := net.Pipe()
 	srv := newConn(serverNC)
@@ -82,7 +82,7 @@ func TestHubSetIdle(t *testing.T) {
 		if online {
 			ready <- struct{}{}
 		}
-	})
+	}, nil)
 
 	// No connection yet — SetIdle and IsIdle are both no-ops/false.
 	if hub.SetIdle(42, true) {

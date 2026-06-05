@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"rivendell/internal/auth"
@@ -24,15 +25,23 @@ import (
 
 const sessionCookie = "rivendell_session"
 
+type typingKey struct{ channelID, userID int64 }
+
 type Server struct {
-	cfg config.Config
-	st  *store.Store
-	hub *ws.Hub
+	cfg          config.Config
+	st           *store.Store
+	hub          *ws.Hub
+	typingMu     sync.Mutex
+	typingTimers map[typingKey]*time.Timer
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
-	s := &Server{cfg: cfg, st: st}
-	s.hub = ws.NewHub(s.onPresenceChange)
+	s := &Server{
+		cfg:          cfg,
+		st:           st,
+		typingTimers: make(map[typingKey]*time.Timer),
+	}
+	s.hub = ws.NewHub(s.onPresenceChange, s.onWSMessage)
 	return s
 }
 
@@ -285,6 +294,49 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 		"status":  u.Status,
 		"idle":    s.hub.IsIdle(userID),
 	}, nil)
+}
+
+// onWSMessage is called by the hub for each inbound client frame. Currently
+// handles only "typing" frames; anything else is silently ignored.
+func (s *Server) onWSMessage(userID int64, data []byte) {
+	var msg struct {
+		Type      string `json:"type"`
+		ChannelID int64  `json:"channel_id"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "typing" || msg.ChannelID == 0 {
+		return
+	}
+	ctx := context.Background()
+	ch, err := s.st.GetChannel(ctx, msg.ChannelID)
+	if err != nil {
+		return
+	}
+	audience := s.audienceForChannel(ctx, ch)
+	// For private channels/DMs, reject typing events from non-members.
+	if ch.IsPrivate && !audience[userID] {
+		return
+	}
+	s.broadcast("typing.update", map[string]any{
+		"channel_id": ch.ID,
+		"user_id":    userID,
+		"active":     true,
+	}, audience)
+	key := typingKey{ch.ID, userID}
+	s.typingMu.Lock()
+	if t, ok := s.typingTimers[key]; ok {
+		t.Stop()
+	}
+	s.typingTimers[key] = time.AfterFunc(5*time.Second, func() {
+		s.typingMu.Lock()
+		delete(s.typingTimers, key)
+		s.typingMu.Unlock()
+		s.broadcast("typing.update", map[string]any{
+			"channel_id": ch.ID,
+			"user_id":    userID,
+			"active":     false,
+		}, audience)
+	})
+	s.typingMu.Unlock()
 }
 
 // --- static files --------------------------------------------------------

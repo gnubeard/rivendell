@@ -15,6 +15,7 @@ type Hub struct {
 	byUser     map[int64]map[*Client]struct{}
 	idle       map[int64]bool // ephemeral idle flag; cleared on last disconnect
 	onPresence func(userID int64, online bool)
+	onMessage  func(userID int64, data []byte)
 }
 
 // Client is one WebSocket connection belonging to a user.
@@ -27,11 +28,12 @@ type Client struct {
 	once   sync.Once
 }
 
-func NewHub(onPresence func(userID int64, online bool)) *Hub {
+func NewHub(onPresence func(userID int64, online bool), onMessage func(userID int64, data []byte)) *Hub {
 	return &Hub{
 		byUser:     make(map[int64]map[*Client]struct{}),
 		idle:       make(map[int64]bool),
 		onPresence: onPresence,
+		onMessage:  onMessage,
 	}
 }
 
@@ -192,11 +194,12 @@ func (c *Client) readPump() {
 	defer c.conn.Close()
 	for {
 		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-		if _, _, err := c.conn.ReadMessage(); err != nil {
+		_, data, err := c.conn.ReadMessage()
+		if err != nil {
 			return
 		}
-		// Inbound client messages (typing, etc.) are accepted but not required
-		// by the first draft; messages are sent over the REST API. Reading here
-		// keeps the connection's liveness detection and pong handling working.
+		if c.hub.onMessage != nil && len(data) > 0 {
+			c.hub.onMessage(c.userID, data)
+		}
 	}
 }

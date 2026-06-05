@@ -15,6 +15,7 @@ export function initialState() {
     unread: {}, // channelId -> count of unseen messages
     mentions: {}, // channelId -> count of unseen @-mentions of me
     muted: {}, // channelId -> true for channels the user has silenced
+    typing: {}, // channelId -> { userId -> true } for active typers
   };
 }
 
@@ -213,6 +214,19 @@ export function markMessageDeleted(state, channelId, messageId) {
   return { ...state, messages: { ...state.messages, [channelId]: next } };
 }
 
+// setTyping marks a user as typing (active=true) or done (active=false) in a channel.
+// Removing the last typer in a channel drops the channel key entirely.
+export function setTyping(state, channelId, userId, active) {
+  const prev = state.typing[channelId] || {};
+  const next = { ...prev };
+  if (active) next[userId] = true;
+  else delete next[userId];
+  const typing = { ...state.typing };
+  if (Object.keys(next).length === 0) delete typing[channelId];
+  else typing[channelId] = next;
+  return { ...state, typing };
+}
+
 // applyEvent folds a realtime websocket event into state. Returns new state.
 export function applyEvent(state, evt) {
   switch (evt.type) {
@@ -237,6 +251,8 @@ export function applyEvent(state, evt) {
     case "mute.update":
       // Another of my sessions muted/unmuted a channel; mirror it.
       return setMuted(state, evt.payload.channel_id, evt.payload.muted);
+    case "typing.update":
+      return setTyping(state, evt.payload.channel_id, evt.payload.user_id, evt.payload.active);
     default:
       return state;
   }

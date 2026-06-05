@@ -414,6 +414,9 @@ function startRealtime() {
         renderDMs();
         renderNotificationTotal();
       }
+      if (evt.type === "typing.update") {
+        if (evt.payload.channel_id === state.activeChannelId) renderTypingIndicator();
+      }
       if (evt.type.startsWith("message")) {
         // A delete seen live earns a tombstone (unlike already-deleted history).
         if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
@@ -870,6 +873,7 @@ async function loadChannel(id) {
     if (msgs.length < PAGE) historyComplete.add(id);
     else historyComplete.delete(id);
     renderMessages(true); // opening a channel always lands at the newest message
+    renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
     $("#message-list").innerHTML = "";
     $("#message-list").append(el("div", { class: "notice" }, ex.message));
@@ -926,6 +930,29 @@ function scrollToBottom(wrap) {
     wrap.scrollTop = wrap.scrollHeight;
     requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
   });
+}
+
+function renderTypingIndicator() {
+  const el = $("#typing-indicator");
+  if (!el) return;
+  const typers = state.typing[state.activeChannelId] || {};
+  const names = Object.keys(typers)
+    .filter((uid) => Number(uid) !== state.me?.id)
+    .map((uid) => { const u = state.users[uid]; return u ? (u.display_name || u.username) : null; })
+    .filter(Boolean);
+  if (!names.length) {
+    el.textContent = "";
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  if (names.length === 1) {
+    el.textContent = `${names[0]} is typing…`;
+  } else if (names.length === 2) {
+    el.textContent = `${names[0]} and ${names[1]} are typing…`;
+  } else {
+    el.textContent = `${names[0]}, ${names[1]}, and ${names.length - 2} more are typing…`;
+  }
 }
 
 function renderMessages(forceBottom = false) {
@@ -1031,6 +1058,8 @@ function wireComposer() {
   let mentionQuery = null; // { start, partial } while popup is open
   let mentionIndex = 0;
   let currentMentions = [];
+  const TYPING_INTERVAL_MS = 3000;
+  let lastTypingSent = 0;
 
   const autoGrow = () => {
     input.style.height = "auto";
@@ -1104,6 +1133,13 @@ function wireComposer() {
   input.addEventListener("input", () => {
     autoGrow();
     updatePopup();
+    if (state.activeChannelId && input.value.trim()) {
+      const now = Date.now();
+      if (now - lastTypingSent >= TYPING_INTERVAL_MS) {
+        lastTypingSent = now;
+        socket && socket.send({ type: "typing", channel_id: state.activeChannelId });
+      }
+    }
   });
 
   input.addEventListener("blur", () => {
@@ -1142,6 +1178,7 @@ function wireComposer() {
       const content = input.value;
       if (!content.trim()) return;
       input.value = "";
+      lastTypingSent = 0; // allow next keystroke to fire a fresh typing frame immediately
       autoGrow(); // collapse back to a single line after sending
       try {
         await api.sendMessage(state.activeChannelId, content);

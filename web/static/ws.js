@@ -131,5 +131,13 @@ export function connectRealtime(onEvent, onStatusChange) {
         } catch {}
       }
     },
+    send(data) {
+      if (ws && ws.readyState === WS_OPEN) {
+        try {
+          ws.send(typeof data === "string" ? data : JSON.stringify(data));
+        } catch {}
+      }
+      // Silently drop if not open — typing frames are ephemeral, no queue needed.
+    },
   };
 }
