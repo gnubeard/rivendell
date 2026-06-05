@@ -742,6 +742,12 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "no access to this channel")
 		return
 	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
 	if v := r.URL.Query().Get("around"); v != "" {
 		aroundID, _ := strconv.ParseInt(v, 10, 64)
 		if aroundID > 0 {
@@ -758,15 +764,23 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// `after` pages forward (newer) from a cursor — the counterpart to `before` —
+	// used when scrolling down through a history window toward the present.
+	if v := r.URL.Query().Get("after"); v != "" {
+		afterID, _ := strconv.ParseInt(v, 10, 64)
+		if afterID > 0 {
+			msgs, err := s.st.ListMessagesAfter(r.Context(), id, afterID, limit)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "could not list messages")
+				return
+			}
+			writeJSON(w, http.StatusOK, msgs)
+			return
+		}
+	}
 	beforeID := int64(0)
 	if v := r.URL.Query().Get("before"); v != "" {
 		beforeID, _ = strconv.ParseInt(v, 10, 64)
-	}
-	limit := 50
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
 	}
 	msgs, err := s.st.ListMessages(r.Context(), id, beforeID, limit)
 	if err != nil {

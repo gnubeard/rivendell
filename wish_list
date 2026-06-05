@@ -26,7 +26,9 @@
 - Every message timestamp links to that point in history (window-around-id store
   query, #c<id>/m<id> hash, load+scroll+highlight, "viewing history" banner) —
   v1.0.8; v1.0.9 polish: canonical permalink hash helper (fixed a /m/ vs /m drift
-  that broke shared links on fresh load) + feedback when an anchor is deleted/gone.
+  that broke shared links on fresh load) + feedback when an anchor is deleted/gone;
+  v1.0.10: bidirectional history paging (after= cursor → scroll *down* loads newer)
+  and the "viewing history" banner only shows when the window has a gap to the tail.
 
 ## Backlog (sorted by effort)
 

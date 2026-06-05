@@ -74,6 +74,7 @@ export const api = {
   messages: (channelId, opts = {}) => {
     const q = new URLSearchParams();
     if (opts.before) q.set("before", opts.before);
+    if (opts.after) q.set("after", opts.after);
     if (opts.around) q.set("around", opts.around);
     if (opts.limit) q.set("limit", opts.limit);
     const qs = q.toString();

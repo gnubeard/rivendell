@@ -498,6 +498,33 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 	return out, rows.Err()
 }
 
+// ListMessagesAfter returns up to limit messages in a channel with id > afterID,
+// oldest-first. It's the forward counterpart to ListMessages, used to page newer
+// messages when the client is viewing history below the live tail.
+func (s *Store) ListMessagesAfter(ctx context.Context, channelID int64, afterID int64, limit int) ([]Message, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+messageCols+`
+		 FROM messages
+		 WHERE channel_id = $1 AND id > $2
+		 ORDER BY id ASC LIMIT $3`, channelID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // GetMessagesAround returns up to halfLimit messages before messageID, the
 // message itself, and up to halfLimit messages after, sorted oldest-first.
 // Returns ErrNotFound if messageID does not exist in channelID.

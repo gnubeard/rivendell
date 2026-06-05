@@ -182,12 +182,29 @@ export function prependMessages(state, channelId, older) {
   return { ...state, messages: { ...state.messages, [channelId]: merged } };
 }
 
+// appendMessages adds newer messages fetched when paging forward through a
+// history window toward the present. Mirror of prependMessages; dedups and keeps
+// the list sorted ascending.
+export function appendMessages(state, channelId, newer) {
+  const existing = state.messages[channelId] || [];
+  const seen = new Set(existing.map((m) => m.id));
+  const merged = [...existing, ...(newer || []).filter((m) => !seen.has(m.id))].sort((a, b) => a.id - b.id);
+  return { ...state, messages: { ...state.messages, [channelId]: merged } };
+}
+
 // oldestMessageId returns the smallest loaded message id for a channel (messages
 // are kept sorted ascending), or null if none are loaded. Used as the `before`
 // cursor when scrolling back through history.
 export function oldestMessageId(state, channelId) {
   const arr = state.messages[channelId];
   return arr && arr.length ? arr[0].id : null;
+}
+
+// newestMessageId returns the largest loaded message id for a channel, or null.
+// Used as the `after` cursor when paging forward toward the present.
+export function newestMessageId(state, channelId) {
+  const arr = state.messages[channelId];
+  return arr && arr.length ? arr[arr.length - 1].id : null;
 }
 
 // addMessage appends or replaces a single message (realtime new/edit), keeping

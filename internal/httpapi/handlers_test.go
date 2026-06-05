@@ -1354,6 +1354,58 @@ func TestGetMessagesAround(t *testing.T) {
 	}
 }
 
+func TestListMessagesAfter(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create channel: %d %s", resp.StatusCode, body)
+	}
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	ids := make([]int64, 10)
+	for i := range ids {
+		_, b := doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages",
+			map[string]string{"content": "m" + itoa(int64(i))})
+		var m store.Message
+		json.Unmarshal(b, &m)
+		ids[i] = m.ID
+	}
+
+	getAfter := func(msgID int64) []store.Message {
+		_, b := doJSON(t, adminC, "GET",
+			ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages?after="+itoa(msgID), nil)
+		var out []store.Message
+		json.Unmarshal(b, &out)
+		return out
+	}
+
+	// After ids[4]: exactly the five newer messages, ascending, none <= anchor.
+	after := getAfter(ids[4])
+	if len(after) != 5 {
+		t.Fatalf("after middle: expected 5 newer messages, got %d", len(after))
+	}
+	for i, m := range after {
+		if m.ID <= ids[4] {
+			t.Fatalf("after middle: got id %d <= anchor %d", m.ID, ids[4])
+		}
+		if i > 0 && m.ID <= after[i-1].ID {
+			t.Fatalf("after middle: not sorted ascending at %d: %v", i, after)
+		}
+	}
+
+	// After the last message: nothing newer — an empty array, never null.
+	last := getAfter(ids[9])
+	if last == nil {
+		t.Fatal("after last: expected [], got null")
+	}
+	if len(last) != 0 {
+		t.Fatalf("after last: expected empty, got %d", len(last))
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

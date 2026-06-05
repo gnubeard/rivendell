@@ -56,9 +56,15 @@ let activeMemberIds = null;
 
 // Scrollback state: messages load a page at a time as you scroll up.
 const PAGE = 50;
-let loadingOlder = false; // guards against overlapping fetches
+// AROUND_HALF must match GetMessagesAround's halfLimit on the server: a jump that
+// returns a full half-page *after* the anchor means there are likely newer
+// messages we haven't loaded (a gap to the present), so we're "viewing history";
+// fewer means the window's bottom is already the live tail.
+const AROUND_HALF = 25;
+let loadingOlder = false; // guards against overlapping back-paging fetches
+let loadingNewer = false; // guards against overlapping forward-paging fetches
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
-const viewingHistory = new Set(); // channelIds where we loaded an "around" window
+const viewingHistory = new Set(); // channelIds whose loaded bottom isn't the live tail
 
 // Closed DMs: a per-browser set of DM channel ids the user has hidden from the
 // sidebar. The channel and its history are untouched server-side — closing only
@@ -879,6 +885,7 @@ async function loadChannel(id) {
   document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
   await refreshActiveMembers();
   loadingOlder = false;
+  loadingNewer = false;
   viewingHistory.delete(id);
   renderHistoryBanner();
   try {
@@ -926,6 +933,33 @@ async function loadOlderMessages() {
   }
 }
 
+// loadNewerMessages is the forward counterpart to loadOlderMessages: when the user
+// scrolls near the bottom while viewing a history window (below the live tail), it
+// fetches the next page forward and appends it. A short page means we've caught up
+// to the newest message — drop the history flag so normal live-follow resumes.
+async function loadNewerMessages() {
+  const cid = state.activeChannelId;
+  if (!cid || loadingNewer || !viewingHistory.has(cid)) return;
+  const newest = S.newestMessageId(state, cid);
+  if (newest == null) return;
+  loadingNewer = true;
+  try {
+    const newer = await api.messages(cid, { after: newest, limit: PAGE });
+    if (newer.length < PAGE) viewingHistory.delete(cid); // caught up to the live tail
+    if (newer.length && cid === state.activeChannelId) {
+      // Appended content sits below the viewport, so renderMessages() preserves
+      // the reader's scroll position without any manual adjustment.
+      state = S.appendMessages(state, cid, newer);
+      renderMessages();
+    }
+    if (cid === state.activeChannelId) renderHistoryBanner();
+  } catch (ex) {
+    console.warn("rivendell: could not load newer messages:", ex && ex.message);
+  } finally {
+    loadingNewer = false;
+  }
+}
+
 function renderHistoryBanner() {
   const banner = $("#history-banner");
   if (!banner) return;
@@ -962,7 +996,11 @@ async function jumpToMessage(channelId, messageId) {
     const msgs = await api.messages(channelId, { around: messageId });
     state = S.setMessages(state, channelId, msgs);
     historyComplete.delete(channelId);
-    viewingHistory.add(channelId);
+    // Only "viewing history" if the window doesn't reach the live tail. A full
+    // half-page of messages after the anchor means there's a gap to the present
+    // (enable scroll-down loading + the banner); fewer means we're at the bottom.
+    if (msgs.filter((m) => m.id > messageId).length >= AROUND_HALF) viewingHistory.add(channelId);
+    else viewingHistory.delete(channelId);
     renderMessages(false);
     renderHistoryBanner();
     history.replaceState(null, "", permalinkHash(channelId, messageId));
@@ -1004,6 +1042,7 @@ function wireScrollback() {
   const wrap = $("#message-list");
   wrap.addEventListener("scroll", () => {
     if (wrap.scrollTop < 120) loadOlderMessages();
+    else if (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 120) loadNewerMessages();
   });
 }
 

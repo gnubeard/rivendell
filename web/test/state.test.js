@@ -94,6 +94,22 @@ test("oldestMessageId returns the smallest loaded id or null", () => {
   assert.equal(S.oldestMessageId(s, 1), 1);
 });
 
+test("appendMessages merges newer without duplicates", () => {
+  let s = S.setMessages(S.initialState(), 1, [{ id: 5, channel_id: 1 }, { id: 6, channel_id: 1 }]);
+  s = S.appendMessages(s, 1, [{ id: 6, channel_id: 1 }, { id: 7, channel_id: 1 }]);
+  assert.deepEqual(s.messages[1].map((m) => m.id), [5, 6, 7]);
+});
+
+test("newestMessageId returns the largest loaded id or null", () => {
+  let s = S.initialState();
+  assert.equal(S.newestMessageId(s, 1), null);
+  s = S.setMessages(s, 1, [{ id: 5, channel_id: 1 }, { id: 3, channel_id: 1 }, { id: 8, channel_id: 1 }]);
+  assert.equal(S.newestMessageId(s, 1), 8);
+  // After appending newer messages the forward cursor advances.
+  s = S.appendMessages(s, 1, [{ id: 12, channel_id: 1 }]);
+  assert.equal(S.newestMessageId(s, 1), 12);
+});
+
 test("markMessageDeleted clears content and sets deleted_at", () => {
   let s = S.setMessages(S.initialState(), 1, [{ id: 1, channel_id: 1, content: "secret" }]);
   s = S.markMessageDeleted(s, 1, 1);
