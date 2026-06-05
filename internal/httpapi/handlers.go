@@ -930,11 +930,56 @@ func (s *Server) handleUnread(w http.ResponseWriter, r *http.Request) {
 		totalUnread += c.Unread
 		totalMentions += c.Mentions
 	}
+	muted, err := s.st.ListMutedChannelIDs(r.Context(), u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load mutes")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"channels":       channels,
 		"total_unread":   totalUnread,
 		"total_mentions": totalMentions,
+		"muted":          muted,
 	})
+}
+
+// setChannelMuted mutes/unmutes a channel for the caller and echoes the change to
+// their other connections (self-audience) so every tab/device stays in sync.
+func (s *Server) setChannelMuted(w http.ResponseWriter, r *http.Request, muted bool) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	if muted {
+		err = s.st.MuteChannel(r.Context(), u.ID, id)
+	} else {
+		err = s.st.UnmuteChannel(r.Context(), u.ID, id)
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not update mute")
+		return
+	}
+	s.broadcast("mute.update", map[string]any{"channel_id": id, "muted": muted}, map[int64]bool{u.ID: true})
+	writeJSON(w, http.StatusOK, map[string]bool{"muted": muted})
+}
+
+func (s *Server) handleMuteChannel(w http.ResponseWriter, r *http.Request) {
+	s.setChannelMuted(w, r, true)
+}
+
+func (s *Server) handleUnmuteChannel(w http.ResponseWriter, r *http.Request) {
+	s.setChannelMuted(w, r, false)
 }
 
 // handleMarkRead advances the caller's read cursor for a channel and echoes the

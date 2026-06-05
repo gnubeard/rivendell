@@ -636,17 +636,54 @@ func (s *Store) UsersByUsernames(ctx context.Context, names []string) (map[strin
 	return out, rows.Err()
 }
 
+// MuteChannel silences a channel for a user (idempotent).
+func (s *Store) MuteChannel(ctx context.Context, userID, channelID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO channel_mutes (user_id, channel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		userID, channelID)
+	return err
+}
+
+// UnmuteChannel un-silences a channel for a user (idempotent).
+func (s *Store) UnmuteChannel(ctx context.Context, userID, channelID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM channel_mutes WHERE user_id = $1 AND channel_id = $2`, userID, channelID)
+	return err
+}
+
+// ListMutedChannelIDs returns the channel ids a user has muted. Always non-nil.
+func (s *Store) ListMutedChannelIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT channel_id FROM channel_mutes WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // UnreadSummary returns the per-channel unread/mention counts for a user across
 // every channel they can access (public channels, plus private channels they
 // belong to). Channels with nothing unread are omitted. Always non-nil.
 func (s *Store) UnreadSummary(ctx context.Context, userID int64) ([]ChannelUnread, error) {
 	// "visible" = the channels whose unread we report for this user.
+	// Muted channels are excluded entirely — they contribute no unread or mention
+	// counts (mute is a full silence).
 	const visibleCTE = `
 		WITH visible AS (
 			SELECT id FROM channels
 			WHERE archived_at IS NULL
 			  AND (is_private = FALSE
 			       OR id IN (SELECT channel_id FROM channel_members WHERE user_id = $1))
+			  AND id NOT IN (SELECT channel_id FROM channel_mutes WHERE user_id = $1)
 		)`
 
 	byChannel := map[int64]*ChannelUnread{}

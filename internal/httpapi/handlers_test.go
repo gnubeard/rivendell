@@ -37,7 +37,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE message_mentions, channel_reads, messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
+	_, err = st.DB().Exec(`TRUNCATE channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -879,6 +879,7 @@ type unreadResp struct {
 	Channels      []store.ChannelUnread `json:"channels"`
 	TotalUnread   int                   `json:"total_unread"`
 	TotalMentions int                   `json:"total_mentions"`
+	Muted         []int64               `json:"muted"`
 }
 
 func getUnread(t *testing.T, c *http.Client, ts *httptest.Server) unreadResp {
@@ -1210,6 +1211,52 @@ func TestDMPinByParticipant(t *testing.T) {
 	resp, _ = doJSON(t, bobC, "PUT", ts.URL+"/api/messages/"+itoa(pubMsg.ID)+"/pin", nil)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member pinning in a normal channel should be 403, got %d", resp.StatusCode)
+	}
+}
+
+// TestMuteSilencesChannel confirms a muted channel drops out of the unread
+// summary entirely, and unmuting brings the counts back.
+func TestMuteSilencesChannel(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, _ := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var general store.Channel
+	json.Unmarshal(body, &general)
+	postMessage(t, aliceC, ts, general.ID, "one")
+	postMessage(t, aliceC, ts, general.ID, "two @bob")
+
+	// Baseline: bob is behind by two, one of them a ping.
+	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Unread != 2 || cu.Mentions != 1 {
+		t.Fatalf("baseline unread: got %+v, want unread=2 mentions=1", cu)
+	}
+
+	// Mute → the channel contributes nothing to unread or mentions.
+	resp, mb := doJSON(t, bobC, "PUT", ts.URL+"/api/channels/"+itoa(general.ID)+"/mute", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mute: %d %s", resp.StatusCode, mb)
+	}
+	u := getUnread(t, bobC, ts)
+	if cu := chUnread(u, general.ID); cu.Unread != 0 || cu.Mentions != 0 {
+		t.Fatalf("muted channel should be silent, got %+v", cu)
+	}
+	if u.TotalUnread != 0 || u.TotalMentions != 0 {
+		t.Fatalf("totals should be zero while muted, got %d/%d", u.TotalUnread, u.TotalMentions)
+	}
+	// The muted set is reported so the client can dim the row.
+	if len(u.Muted) != 1 || u.Muted[0] != general.ID {
+		t.Fatalf("muted list = %v, want [%d]", u.Muted, general.ID)
+	}
+
+	// Unmute → the still-unread messages reappear.
+	resp, _ = doJSON(t, bobC, "DELETE", ts.URL+"/api/channels/"+itoa(general.ID)+"/mute", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unmute: %d", resp.StatusCode)
+	}
+	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Unread != 2 || cu.Mentions != 1 {
+		t.Fatalf("after unmute, unread should return, got %+v", cu)
 	}
 }
 

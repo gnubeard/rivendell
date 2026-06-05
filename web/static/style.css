@@ -134,6 +134,9 @@ button.primary:hover { filter: brightness(1.08); }
 /* Unread: bold the name and show a count pill; the pill hides on hover so the
    mod controls (also right-aligned) have room. */
 .channel.unread .ch-name { color: var(--text); font-weight: 600; }
+/* Muted channels read as quieted: dimmed name and hash/dot. */
+.channel.muted .ch-name, .channel.muted .ch-hash { color: var(--text-faint); }
+.channel.muted .ch-name { font-weight: 400; }
 .unread-badge { margin-left: auto; flex-shrink: 0; background: var(--accent); color: #0b1220; font-size: 0.66rem; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
 .unread-badge.mention { background: var(--danger); color: #fff; }
 #channel-list .channel:hover .unread-badge { display: none; }

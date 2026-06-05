@@ -203,6 +203,27 @@ test("totalUnread and totalMentions sum the maps", () => {
   assert.equal(S.totalMentions(S.initialState()), 0);
 });
 
+test("setMutedChannels / setMuted / isMuted", () => {
+  let s = S.setMutedChannels(S.initialState(), [1, 2]);
+  assert.equal(S.isMuted(s, 1), true);
+  assert.equal(S.isMuted(s, 3), false);
+  s = S.setMuted(s, 3, true);
+  assert.equal(S.isMuted(s, 3), true);
+  s = S.setMuted(s, 1, false);
+  assert.equal(S.isMuted(s, 1), false);
+});
+
+test("setMutedChannels tolerates null", () => {
+  assert.deepEqual(S.setMutedChannels(S.initialState(), null).muted, {});
+});
+
+test("applyEvent mute.update folds in the mute flag", () => {
+  let s = S.applyEvent(S.initialState(), { type: "mute.update", payload: { channel_id: 5, muted: true } });
+  assert.equal(S.isMuted(s, 5), true);
+  s = S.applyEvent(s, { type: "mute.update", payload: { channel_id: 5, muted: false } });
+  assert.equal(S.isMuted(s, 5), false);
+});
+
 test("applyEvent read.update clears both counts for the channel", () => {
   let s = S.setUnreadSummary(S.initialState(), [
     { channel_id: 1, unread: 3, mentions: 1 },

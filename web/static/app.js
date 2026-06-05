@@ -292,6 +292,7 @@ async function enterApp() {
   try {
     const summary = await api.unread();
     state = S.setUnreadSummary(state, summary.channels);
+    state = S.setMutedChannels(state, summary.muted);
   } catch (e) {
     /* non-fatal: counts will populate as realtime events arrive */
   }
@@ -391,9 +392,9 @@ function startRealtime() {
           renderMembers();
         }
       }
-      if (evt.type === "read.update") {
-        // Another of my sessions caught up on a channel; reflect the cleared
-        // counts here too (state.applyEvent already cleared them).
+      if (evt.type === "read.update" || evt.type === "mute.update") {
+        // Another of my sessions caught up on / muted a channel (state.applyEvent
+        // already folded it in); reflect the badges and the global total.
         renderChannels();
         renderDMs();
         renderNotificationTotal();
@@ -405,6 +406,8 @@ function startRealtime() {
         const mentioned = isNewFromOther && mentionsUser(evt.payload.content, state.me.username);
         // A "ping" is a message directed at you: any DM, or an @-mention.
         const pingsMe = isNewFromOther && ((ch && ch.is_dm) || mentioned);
+        // A muted channel is fully silent: no badge bump, no chime/notification.
+        const muted = S.isMuted(state, cid);
         if (cid === state.activeChannelId) {
           renderMessages();
           refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
@@ -412,19 +415,19 @@ function startRealtime() {
             // It's the open channel, but the tab isn't focused — you haven't
             // actually seen it, so it counts as unread (matching the server,
             // whose cursor we only advance on focus) and pings still alert.
-            if (isNewFromOther) {
+            if (isNewFromOther && !muted) {
               state = S.bumpUnread(state, cid);
               if (mentioned) state = S.bumpMention(state, cid);
               renderChannels();
               renderDMs();
               renderNotificationTotal();
             }
-            if (pingsMe) firePing(evt, ch);
+            if (pingsMe && !muted) firePing(evt, ch);
           } else if (isNewFromOther) {
             // You're looking right at it — keep the read cursor current.
             markActiveChannelRead();
           }
-        } else if (isNewFromOther) {
+        } else if (isNewFromOther && !muted) {
           // A new message in a channel we're not looking at: flag it unread,
           // and separately flag @-mentions so they badge distinctly. A message
           // landing in a closed DM resurfaces it so you don't miss it.
@@ -467,6 +470,7 @@ async function resync() {
     try {
       const summary = await api.unread();
       state = S.setUnreadSummary(state, summary.channels);
+      state = S.setMutedChannels(state, summary.muted);
     } catch (e) {
       /* non-fatal */
     }
@@ -514,6 +518,17 @@ function dmDisplayName(ch) {
   return other ? other.display_name : ch.name;
 }
 
+// muteToggle builds the per-row mute control. It lives in the hover controls and
+// flips the channel between silenced and not. 🔔 = notifications on (click to
+// mute), 🔕 = muted (click to restore).
+function muteToggle(id) {
+  const muted = S.isMuted(state, id);
+  return el("button", {
+    class: "ch-ctl", title: muted ? "Unmute" : "Mute",
+    onclick: (e) => { e.stopPropagation(); toggleMute(id); },
+  }, muted ? "🔕" : "🔔");
+}
+
 function renderChannels() {
   const list = $("#channel-list");
   list.innerHTML = "";
@@ -523,18 +538,17 @@ function renderChannels() {
     const id = order[i];
     const ch = state.channels[id];
     const active = id === state.activeChannelId;
-    const controls = isMod
-      ? el("span", { class: "ch-controls" },
-          el("button", { class: "ch-ctl", title: "Move up", disabled: i === 0 ? "disabled" : null,
-            onclick: (e) => { e.stopPropagation(); moveChannel(id, -1); } }, "↑"),
-          el("button", { class: "ch-ctl", title: "Move down", disabled: i === order.length - 1 ? "disabled" : null,
-            onclick: (e) => { e.stopPropagation(); moveChannel(id, +1); } }, "↓"),
-          el("button", { class: "ch-ctl danger", title: "Delete channel",
-            onclick: (e) => { e.stopPropagation(); deleteChannel(id); } }, "✕"))
-      : null;
+    const controls = el("span", { class: "ch-controls" },
+      muteToggle(id),
+      isMod ? el("button", { class: "ch-ctl", title: "Move up", disabled: i === 0 ? "disabled" : null,
+        onclick: (e) => { e.stopPropagation(); moveChannel(id, -1); } }, "↑") : null,
+      isMod ? el("button", { class: "ch-ctl", title: "Move down", disabled: i === order.length - 1 ? "disabled" : null,
+        onclick: (e) => { e.stopPropagation(); moveChannel(id, +1); } }, "↓") : null,
+      isMod ? el("button", { class: "ch-ctl danger", title: "Delete channel",
+        onclick: (e) => { e.stopPropagation(); deleteChannel(id); } }, "✕") : null);
     const unread = state.unread[id] || 0;
     const mentioned = state.mentions[id] || 0;
-    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "");
+    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: "ch-hash" }, ch.is_private ? "🔒" : "#"),
@@ -557,14 +571,15 @@ function renderDMs() {
     const otherId = S.otherDMParticipant(ch, state.me.id);
     const other = otherId != null ? state.users[otherId] : null;
     const unread = state.unread[id] || 0;
-    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "");
+    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
         el("span", { class: "ch-name" }, other ? other.display_name : ch.name),
         unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
-        // Anyone can close their own copy of a DM; reopen by clicking the name.
         el("span", { class: "ch-controls" },
+          muteToggle(id),
+          // Anyone can close their own copy of a DM; reopen by clicking the name.
           el("button", { class: "ch-ctl danger", title: "Close DM",
             onclick: (e) => { e.stopPropagation(); closeDM(id); } }, "✕"))
       )
@@ -671,6 +686,31 @@ async function deleteChannel(id) {
   try {
     await api.archiveChannel(id);
   } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// toggleMute silences or un-silences a channel/DM for this user. Optimistic:
+// flip locally and render now, reconcile with the server, revert on failure.
+// Muting also drops any pending unread/mention badges for that channel.
+async function toggleMute(id) {
+  const wasMuted = S.isMuted(state, id);
+  state = S.setMuted(state, id, !wasMuted);
+  if (!wasMuted) {
+    state = S.clearUnread(state, id);
+    state = S.clearMention(state, id);
+  }
+  renderChannels();
+  renderDMs();
+  renderNotificationTotal();
+  try {
+    if (wasMuted) await api.unmuteChannel(id);
+    else await api.muteChannel(id);
+  } catch (ex) {
+    state = S.setMuted(state, id, wasMuted); // revert
+    renderChannels();
+    renderDMs();
+    renderNotificationTotal();
     alert(ex.message);
   }
 }

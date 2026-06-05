@@ -14,7 +14,28 @@ export function initialState() {
     activeChannelId: null,
     unread: {}, // channelId -> count of unseen messages
     mentions: {}, // channelId -> count of unseen @-mentions of me
+    muted: {}, // channelId -> true for channels the user has silenced
   };
+}
+
+// setMutedChannels replaces the muted set from the server's durable list.
+export function setMutedChannels(state, ids) {
+  const muted = {};
+  for (const id of ids || []) muted[id] = true;
+  return { ...state, muted };
+}
+
+// setMuted toggles a single channel's muted flag.
+export function setMuted(state, channelId, isMutedNow) {
+  const muted = { ...state.muted };
+  if (isMutedNow) muted[channelId] = true;
+  else delete muted[channelId];
+  return { ...state, muted };
+}
+
+// isMuted reports whether a channel is silenced.
+export function isMuted(state, channelId) {
+  return !!state.muted[channelId];
 }
 
 // bumpUnread increments the unseen-message count for a channel.
@@ -213,6 +234,9 @@ export function applyEvent(state, evt) {
       // Another of my own sessions advanced the read cursor for a channel; the
       // cursor only ever moves to the latest, so clear both counts here too.
       return clearMention(clearUnread(state, evt.payload.channel_id), evt.payload.channel_id);
+    case "mute.update":
+      // Another of my sessions muted/unmuted a channel; mirror it.
+      return setMuted(state, evt.payload.channel_id, evt.payload.muted);
     default:
       return state;
   }

@@ -84,6 +84,8 @@ func (s *Server) Handler() http.Handler {
 	// Durable unread / notifications.
 	mux.HandleFunc("GET /api/unread", s.auth(s.handleUnread))
 	mux.HandleFunc("POST /api/channels/{id}/read", s.auth(s.handleMarkRead))
+	mux.HandleFunc("PUT /api/channels/{id}/mute", s.auth(s.handleMuteChannel))
+	mux.HandleFunc("DELETE /api/channels/{id}/mute", s.auth(s.handleUnmuteChannel))
 
 	// Admin.
 	mux.HandleFunc("POST /api/admin/users", s.requireRole(store.RoleAdmin, s.handleCreateUser))
