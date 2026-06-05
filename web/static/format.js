@@ -72,6 +72,20 @@ export function atQuery(text, pos) {
   return { start: i, partial: text.slice(i + 1, pos) };
 }
 
+// colonQuery is the :emoji autocomplete analogue of atQuery: it scans backward
+// from `pos` for a `:shortcode` token and returns { start, partial } if found, or
+// null. The same boundary guard as mentions keeps it from firing inside words,
+// URLs, times, and ratios: the `:` must not be preceded by a word char, `/`, or
+// another `:` — so `http://`, `3:30`, `16:9`, and `Foo::Bar` never trigger, while
+// a `:` at a boundary (start of line or after whitespace) opens the picker.
+export function colonQuery(text, pos) {
+  let i = pos - 1;
+  while (i >= 0 && /[A-Za-z0-9_]/.test(text[i])) i--;
+  if (i < 0 || text[i] !== ":") return null;
+  if (i > 0 && /[A-Za-z0-9_/:]/.test(text[i - 1])) return null;
+  return { start: i, partial: text.slice(i + 1, pos) };
+}
+
 // permalinkHash builds the canonical location.hash for a message permalink:
 // `#c<channelId>/m<messageId>`. This is the single source of truth for the format
 // — the message-timestamp anchor hrefs use it (so right-click → copy link yields a

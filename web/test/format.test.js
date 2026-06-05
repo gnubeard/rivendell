@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, permalinkHash, parsePermalink } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink } from "../static/format.js";
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');
@@ -110,6 +110,24 @@ test("mention styling stays XSS-safe and never enters an href", () => {
   const out = formatMessage('@alice <img src=x onerror=1> http://x.com/@alice', "alice");
   assert.ok(!out.includes("<img"), "raw tag stays escaped");
   assert.ok(out.includes('href="http://x.com/@alice"'), "URL with @ links intact, no span inside href");
+});
+
+test("colonQuery finds the :emoji token immediately before the caret", () => {
+  assert.deepEqual(colonQuery(":part", 5), { start: 0, partial: "part" });
+  assert.deepEqual(colonQuery("hi :part", 8), { start: 3, partial: "part" });
+  assert.deepEqual(colonQuery("hi :", 4), { start: 3, partial: "" }, "bare colon at a boundary opens the picker");
+  // caret mid-token: only chars before the caret form the partial
+  assert.deepEqual(colonQuery(":party", 3), { start: 0, partial: "pa" });
+});
+
+test("colonQuery returns null inside words, URLs, times, and ratios", () => {
+  assert.equal(colonQuery("hello", 5), null, "no colon present");
+  assert.equal(colonQuery("note:", 5), null, "colon attached to a word");
+  assert.equal(colonQuery("https://x.com", 6), null, "URL scheme colon");
+  assert.equal(colonQuery("at 3:30", 7), null, "time colon (word char before)");
+  assert.equal(colonQuery("ratio 16:9", 10), null, "ratio colon");
+  assert.equal(colonQuery("Foo::Bar", 8), null, "double colon");
+  assert.equal(colonQuery(":party", 0), null, "caret before the colon");
 });
 
 test("custom emoji: known :shortcode: renders as an <img>, unknown stays literal", () => {

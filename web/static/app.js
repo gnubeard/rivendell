@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, permalinkHash, parsePermalink } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -1243,9 +1243,11 @@ function renderMessages(forceBottom = false, holdPosition = false) {
 function wireComposer() {
   const input = $("#composer-input");
   const popup = $("#mention-popup");
-  let mentionQuery = null; // { start, partial } while popup is open
-  let mentionIndex = 0;
-  let currentMentions = [];
+  // Unified autocomplete state for the composer popup. `kind` is "mention"
+  // (@-trigger, items are user objects) or "emoji" (:-trigger, items are
+  // shortcode strings); both share this one popup and the keyboard navigation
+  // below. null when no completion is active.
+  let completion = null; // { kind, query: { start, partial }, items, index }
   const TYPING_INTERVAL_MS = 3000;
   let lastTypingSent = 0;
 
@@ -1253,11 +1255,6 @@ function wireComposer() {
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
   };
-
-  // Scan backward from the caret for an @token that should trigger completion.
-  function getAtQuery() {
-    return atQuery(input.value, input.selectionStart);
-  }
 
   function filterMentions(partial) {
     const q = partial.toLowerCase();
@@ -1272,47 +1269,77 @@ function wireComposer() {
       .slice(0, 8);
   }
 
+  function filterEmojis(partial) {
+    const q = partial.toLowerCase();
+    return Object.keys(state.emojis)
+      .filter((code) => code.startsWith(q))
+      .sort()
+      .slice(0, 8);
+  }
+
+  // Detect which trigger (if any) sits just before the caret. @-mentions take
+  // precedence over :emoji — a single caret can't satisfy both.
+  function detectCompletion() {
+    const pos = input.selectionStart;
+    const at = atQuery(input.value, pos);
+    if (at) return { kind: "mention", query: at, items: filterMentions(at.partial) };
+    const colon = colonQuery(input.value, pos);
+    if (colon) return { kind: "emoji", query: colon, items: filterEmojis(colon.partial) };
+    return null;
+  }
+
   function renderPopup() {
     popup.innerHTML = "";
-    currentMentions.forEach((u, i) => {
-      popup.append(el("li", {
-        class: "mention-item" + (i === mentionIndex ? " active" : ""),
-        onpointerdown: (e) => { e.preventDefault(); pickMention(u.username); },
-      },
-        el("span", { class: "mention-item-name" }, "@" + u.username),
-        u.display_name && u.display_name !== u.username
-          ? el("span", { class: "mention-item-display" }, u.display_name)
-          : null,
-      ));
+    if (!completion) { popup.hidden = true; return; }
+    completion.items.forEach((item, i) => {
+      const active = i === completion.index ? " active" : "";
+      if (completion.kind === "mention") {
+        popup.append(el("li", {
+          class: "mention-item" + active,
+          onpointerdown: (e) => { e.preventDefault(); pick(item); },
+        },
+          el("span", { class: "mention-item-name" }, "@" + item.username),
+          item.display_name && item.display_name !== item.username
+            ? el("span", { class: "mention-item-display" }, item.display_name)
+            : null,
+        ));
+      } else {
+        popup.append(el("li", {
+          class: "mention-item" + active,
+          onpointerdown: (e) => { e.preventDefault(); pick(item); },
+        },
+          el("img", { class: "emoji", src: api.emojiURL(item), alt: `:${item}:` }),
+          el("span", { class: "mention-item-name" }, `:${item}:`),
+        ));
+      }
     });
-    popup.hidden = currentMentions.length === 0;
+    popup.hidden = completion.items.length === 0;
   }
 
   function updatePopup() {
-    const q = getAtQuery();
-    if (!q) {
-      mentionQuery = null;
-      currentMentions = [];
-      mentionIndex = 0;
+    const detected = detectCompletion();
+    if (!detected) {
+      completion = null;
       popup.hidden = true;
       return;
     }
-    mentionQuery = q;
-    currentMentions = filterMentions(q.partial);
-    mentionIndex = Math.min(mentionIndex, Math.max(0, currentMentions.length - 1));
+    const prevIndex = completion ? completion.index : 0;
+    completion = { ...detected, index: Math.min(prevIndex, Math.max(0, detected.items.length - 1)) };
     renderPopup();
   }
 
-  function pickMention(username) {
-    if (!mentionQuery) return;
-    const before = input.value.slice(0, mentionQuery.start);
+  // Insert the chosen completion, replacing from the trigger char to the caret:
+  // "@username " for a mention (item is a user), ":shortcode: " for an emoji
+  // (item is a shortcode string).
+  function pick(item) {
+    if (!completion) return;
+    const text = completion.kind === "mention" ? "@" + item.username + " " : `:${item}: `;
+    const before = input.value.slice(0, completion.query.start);
     const after = input.value.slice(input.selectionStart);
-    input.value = before + "@" + username + " " + after;
-    const newPos = mentionQuery.start + username.length + 2;
+    input.value = before + text + after;
+    const newPos = completion.query.start + text.length;
     input.setSelectionRange(newPos, newPos);
-    mentionQuery = null;
-    currentMentions = [];
-    mentionIndex = 0;
+    completion = null;
     popup.hidden = true;
     autoGrow();
     input.focus();
@@ -1332,32 +1359,31 @@ function wireComposer() {
 
   input.addEventListener("blur", () => {
     // Small delay so a pointerdown on a popup item fires before we close it.
-    setTimeout(() => { popup.hidden = true; mentionQuery = null; }, 200);
+    setTimeout(() => { popup.hidden = true; completion = null; }, 200);
   });
 
   input.onkeydown = async (e) => {
-    if (!popup.hidden) {
+    if (!popup.hidden && completion) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        mentionIndex = Math.min(mentionIndex + 1, currentMentions.length - 1);
+        completion.index = Math.min(completion.index + 1, completion.items.length - 1);
         renderPopup();
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        mentionIndex = Math.max(mentionIndex - 1, 0);
+        completion.index = Math.max(completion.index - 1, 0);
         renderPopup();
         return;
       }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
-        if (currentMentions[mentionIndex]) pickMention(currentMentions[mentionIndex].username);
+        if (completion.items[completion.index]) pick(completion.items[completion.index]);
         return;
       }
       if (e.key === "Escape") {
         popup.hidden = true;
-        mentionQuery = null;
-        currentMentions = [];
+        completion = null;
         return;
       }
     }

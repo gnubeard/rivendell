@@ -53,6 +53,10 @@
   escape-first XSS invariant even for underscore-bearing shortcodes. state.js
   holds the registry (setEmojis/upsertEmoji/removeEmoji); admin panel has an
   upload+manage section; the composer has a 😀 picker that inserts the token.
+  v1.0.21: typing ":" opens inline autocomplete just like "@" — the mention
+  popup was generalized into a two-kind completion controller (@ → user, : →
+  shortcode) sharing one popup + keyboard nav; new pure colonQuery() mirrors
+  atQuery() with the same boundary guard so URLs/times/ratios never false-trigger.
 
 ## Backlog (sorted by effort)
 
@@ -61,14 +65,12 @@
    reaction.add/remove + aggregation into the message payload/state + UI. Touches
    every layer. Pairs naturally with #4.
 
-6. [XL] OTR / end-to-end encrypted messaging.
-   The big one and a different security model: client-side crypto, key
-   generation/exchange, key + trust management (and multi-device), server storing
-   only ciphertext, verification UI. Signal/OMEMO class — wants its own design pass.
 
 ## Meta / future ideas (not yet scoped)
 
 - Let's drop the 'x' button on the About dialog and Pinned modal. It's a bit old-fashioned. Also, on desktop, the Esc key should close an open modal.
+
+- Once in a while, a logged-in user's state flickers. Let's put something in so that the displayed state only changes if it persists, oh, a full second? If that can be done easily.
 
 - Let's broaden the pinned messages modal on desktop, it's a little bit horizontally cramped.
 
@@ -78,11 +80,19 @@
 
 - Messages should render linked images inline. Messages consisting of just a link to an image should hide the URL and only render that image. (I don't have interest in running a CDN at this time, but this will allow memes and gifs.)
 
-- Links should render [text](url). Bonus points: pasting a URL onto selected text automatically formats it this way.
+- Links should render [text](url). Bonus points: pasting a URL onto selected text automatically formats it this way. (Oh, and btw, underscores should never mangle URLs.)
 
 - Edit box should be inline rather than cheap-feeling popup
 
+Piece de resistance:
 - A Claude agent running on this box, wired into the chat, so work requests can
   be sent from inside Rivendell itself (chat → agent → commits/deploys). Its own
   design pass: how it authenticates, which channel/DM it listens on, how it
   reports progress back, and the safety rails around what it's allowed to run.
+
+---
+*Come back when we have lots of tokens and a gleam in our eye.*
+DEFERRED [XL] OTR / end-to-end encrypted messaging.
+   A big one and a different security model: client-side crypto, key generation/exchange, key + trust management (and multi-device), server storing
+   only ciphertext, verification UI. Signal/OMEMO class — wants its own design pass.
+
