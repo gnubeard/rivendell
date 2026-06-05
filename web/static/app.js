@@ -1022,14 +1022,121 @@ function renderMessages(forceBottom = false) {
 
 function wireComposer() {
   const input = $("#composer-input");
-  // Grow the box to fit its content (each newline adds a line) up to the CSS
-  // max-height, after which it scrolls. "auto" first so it can also shrink back.
+  const popup = $("#mention-popup");
+  let mentionQuery = null; // { start, partial } while popup is open
+  let mentionIndex = 0;
+  let currentMentions = [];
+
   const autoGrow = () => {
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
   };
-  input.addEventListener("input", autoGrow);
+
+  // Scan backward from the caret for an @token that should trigger completion.
+  function getAtQuery() {
+    const text = input.value;
+    const pos = input.selectionStart;
+    let i = pos - 1;
+    while (i >= 0 && /[A-Za-z0-9_]/.test(text[i])) i--;
+    if (i < 0 || text[i] !== "@") return null;
+    // '@' must not be immediately after a word char (avoids email addresses).
+    if (i > 0 && /[A-Za-z0-9_/]/.test(text[i - 1])) return null;
+    return { start: i, partial: text.slice(i + 1, pos) };
+  }
+
+  function filterMentions(partial) {
+    const q = partial.toLowerCase();
+    return Object.values(state.users)
+      .filter((u) => !u.disabled && (
+        u.username.toLowerCase().startsWith(q) ||
+        (u.display_name && u.display_name.toLowerCase().startsWith(q))
+      ))
+      .sort((a, b) => a.username.localeCompare(b.username))
+      .slice(0, 8);
+  }
+
+  function renderPopup() {
+    popup.innerHTML = "";
+    currentMentions.forEach((u, i) => {
+      popup.append(el("li", {
+        class: "mention-item" + (i === mentionIndex ? " active" : ""),
+        onpointerdown: (e) => { e.preventDefault(); pickMention(u.username); },
+      },
+        el("span", { class: "mention-item-name" }, "@" + u.username),
+        u.display_name && u.display_name !== u.username
+          ? el("span", { class: "mention-item-display" }, u.display_name)
+          : null,
+      ));
+    });
+    popup.hidden = currentMentions.length === 0;
+  }
+
+  function updatePopup() {
+    const q = getAtQuery();
+    if (!q) {
+      mentionQuery = null;
+      currentMentions = [];
+      mentionIndex = 0;
+      popup.hidden = true;
+      return;
+    }
+    mentionQuery = q;
+    currentMentions = filterMentions(q.partial);
+    mentionIndex = Math.min(mentionIndex, Math.max(0, currentMentions.length - 1));
+    renderPopup();
+  }
+
+  function pickMention(username) {
+    if (!mentionQuery) return;
+    const before = input.value.slice(0, mentionQuery.start);
+    const after = input.value.slice(input.selectionStart);
+    input.value = before + "@" + username + " " + after;
+    const newPos = mentionQuery.start + username.length + 2;
+    input.setSelectionRange(newPos, newPos);
+    mentionQuery = null;
+    currentMentions = [];
+    mentionIndex = 0;
+    popup.hidden = true;
+    autoGrow();
+    input.focus();
+  }
+
+  input.addEventListener("input", () => {
+    autoGrow();
+    updatePopup();
+  });
+
+  input.addEventListener("blur", () => {
+    // Small delay so a pointerdown on a popup item fires before we close it.
+    setTimeout(() => { popup.hidden = true; mentionQuery = null; }, 200);
+  });
+
   input.onkeydown = async (e) => {
+    if (!popup.hidden) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        mentionIndex = Math.min(mentionIndex + 1, currentMentions.length - 1);
+        renderPopup();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        mentionIndex = Math.max(mentionIndex - 1, 0);
+        renderPopup();
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        if (currentMentions[mentionIndex]) pickMention(currentMentions[mentionIndex].username);
+        return;
+      }
+      if (e.key === "Escape") {
+        popup.hidden = true;
+        mentionQuery = null;
+        currentMentions = [];
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const content = input.value;

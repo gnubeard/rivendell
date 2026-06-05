@@ -216,8 +216,13 @@ button.primary:hover { filter: brightness(1.08); }
 .pin-mark { font-size: 0.7rem; opacity: 0.85; }
 .msg.grouped .msg-gutter .pin-mark { display: block; text-align: center; }
 
-.composer { padding: 0.7rem 1.2rem 1rem; border-top: 1px solid var(--border); }
+.composer { position: relative; padding: 0.7rem 1.2rem 1rem; border-top: 1px solid var(--border); }
 .composer textarea { resize: none; max-height: 180px; line-height: 1.4; }
+.mention-popup { position: absolute; bottom: 100%; left: 1.2rem; right: 1.2rem; margin: 0 0 3px; padding: 0.25rem 0; list-style: none; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.45); max-height: 240px; overflow-y: auto; z-index: 10; }
+.mention-item { padding: 0.35rem 0.8rem; cursor: pointer; display: flex; align-items: baseline; gap: 0.5em; white-space: nowrap; overflow: hidden; }
+.mention-item:hover, .mention-item.active { background: var(--bg-hover); }
+.mention-item-name { flex-shrink: 0; }
+.mention-item-display { color: var(--text-dim); font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; }
 
 /* --- members --- */
 .members { background: var(--bg-2); border-left: 1px solid var(--border); padding: 1rem; overflow-y: auto; }

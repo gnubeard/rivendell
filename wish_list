@@ -1,0 +1,74 @@
+# Wish list.
+#
+# Effort tags: XS = a few lines / one-shot · S = small, one layer · M = a
+# session, multiple layers · L = full feature (DB+API+realtime+UI) · XL = major
+# project / new security model. Backlog is sorted by effort, lowest first.
+# "→" marks a decision worth making before the work starts.
+
+## Done
+
+- Hide disabled users from the roster ordinary users see (admins still see them).
+- Drop the member button/list in DMs.
+- Refresh display name / avatar when they change (live, no refresh).
+- Let members leave a private channel; mods+ may remove others.
+- In DMs, either participant may pin/unpin.
+- Semver + About dialog. Version constant (config.Version), surfaced via
+  /api/instance and an About modal opened from the sidebar brand.
+- Durable notifications + opt-in desktop notifications (earlier work).
+- Mute channels/DMs (durable, cross-device; full silence) — v0.9.1.
+- Suppress historical "deleted" tombstones; only live-session deletes tombstone — v0.9.2.
+- Update-available banner via a WS hello{version} handshake — v0.9.3.
+- Admin stats panel (user/channel/message counts + live connections) — v1.0.0.
+
+## Backlog (sorted by effort)
+
+1. [M] Mobile: swipe right opens the channel drawer, left opens members.
+   Drawer machinery (openDrawer/closeDrawers) already exists; this is the touch
+   handling (touchstart/move/end) with thresholds, the tricky part being a
+   horizontal swipe vs. vertical scroll. Frontend only.
+
+2. [M] Typing indicators.
+   Requires building the inbound-WS path (the read pump currently discards client
+   frames). Client sends throttled "typing" frames; the hub relays to the channel
+   audience; UI shows "X is typing…" with a timeout. Ephemeral, no DB.
+
+3. [M] Autocomplete for @-pings (searchable by display name).
+   Composer popup: on "@", filter the already-loaded users by username OR display
+   name, insert the username. No backend. Fiddly bits: caret tracking, popup
+   placement, keyboard nav.
+
+4. [M→L] Every message timestamp links to that point in history.
+   Needs a store query for a window *around* a message id (today's pagination is
+   before-only keyset), a URL/hash scheme, and on open: load that window, scroll
+   to + highlight the anchor. The jump primitive #5 reuses — do this first.
+
+5. [M→L] Search.
+   Message search scoped to channels the caller can access. Postgres full-text
+   (to_tsvector + GIN index), an endpoint with pagination, and a results UI that
+   jumps to a hit (reuses #4's permalink/jump).
+
+6. [L] Custom emojis.
+   Storage (a bytes-blob table + shortcode, like avatars), upload/manage endpoints
+   (admin?), and :shortcode: rendering in format.js that PRESERVES its escape-first
+   XSS invariant. A picker is the nice-to-have.
+
+7. [L] Reactions.
+   reactions(message_id, user_id, emoji) + add/remove endpoints + realtime
+   reaction.add/remove + aggregation into the message payload/state + UI. Touches
+   every layer. Pairs naturally with #6.
+
+8. [XL] OTR / end-to-end encrypted messaging.
+   The big one and a different security model: client-side crypto, key
+   generation/exchange, key + trust management (and multi-device), server storing
+   only ciphertext, verification UI. Signal/OMEMO class — wants its own design pass.
+
+## Meta / future ideas (not yet scoped)
+
+- A Claude agent running on this box, wired into the chat, so work requests can
+  be sent from inside Rivendell itself (chat → agent → commits/deploys). Its own
+  design pass: how it authenticates, which channel/DM it listens on, how it
+  reports progress back, and the safety rails around what it's allowed to run.
+
+## Handled elsewhere
+
+- fail2ban / rate-limiting auth: owner is doing this at the nginx layer.
