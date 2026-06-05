@@ -1,4 +1,4 @@
--- 0001_init.sql — initial Snug schema.
+-- 0001_init.sql — initial Rivendell schema.
 -- BIGSERIAL keys keep the model easy to reason about. Secrets (session and
 -- magic-link tokens) are random high-entropy strings stored only as hashes,
 -- so sequential integer IDs pose no enumeration risk for secrets.

@@ -1,4 +1,4 @@
-// app.js — the Snug web client. Wires the API, websocket, formatter, and the
+// app.js — the Rivendell web client. Wires the API, websocket, formatter, and the
 // pure state reducer to the DOM. Deliberately framework-free.
 
 import { api } from "./api.js";

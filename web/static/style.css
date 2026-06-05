@@ -1,4 +1,4 @@
-/* Snug — a restrained dark theme. System font stack on purpose: no external
+/* Rivendell — a restrained dark theme. System font stack on purpose: no external
    font fetches (one less dependency, and nothing leaks to a CDN). */
 
 :root {

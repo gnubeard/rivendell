@@ -1,4 +1,4 @@
-# Snug — Makefile
+# Rivendell — Makefile
 # Common housekeeping tasks. Run `make help` for a list.
 
 # Config (override on the command line, e.g. `make run RIVENDELL_ADDR=:9000`)

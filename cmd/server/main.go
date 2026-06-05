@@ -1,4 +1,4 @@
-// Command server is the Snug chat server entrypoint. It loads configuration
+// Command server is the Rivendell chat server entrypoint. It loads configuration
 // from the environment, runs database migrations, and serves the HTTP API plus
 // the static web client.
 //

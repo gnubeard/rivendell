@@ -1,6 +1,6 @@
-# Snug — project guide for Claude Code
+# Rivendell — project guide for Claude Code
 
-Snug is a small, self-hosted chat server for ~20 friends (a private Discord/Slack
+Rivendell is a small, self-hosted chat server for ~20 friends (a private Discord/Slack
 alternative). It is a single Go binary that serves a JSON API plus a static
 vanilla-JS web client, backed by Postgres. Web UI for now; the API is meant to be
 cleanly consumable by future native/mobile clients.
