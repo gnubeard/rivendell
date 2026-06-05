@@ -366,6 +366,25 @@ function startRealtime() {
         // members panel if the event concerns the channel we're viewing.
         if (evt.payload && evt.payload.id === state.activeChannelId) refreshActiveMembers();
       }
+      if (evt.type === "member.remove") {
+        const { channel_id, user_id } = evt.payload;
+        if (user_id === state.me.id) {
+          // I left (or was removed): drop the channel, unless I already removed
+          // it locally in leaveActiveChannel.
+          if (state.channels[channel_id]) {
+            state = S.removeChannel(state, channel_id);
+            renderChannels();
+            renderDMs();
+            renderNotificationTotal();
+            if (state.activeChannelId) loadChannel(state.activeChannelId);
+          }
+        } else if (channel_id === state.activeChannelId && activeMemberIds) {
+          // Someone else left the channel I'm viewing — drop them from the roster
+          // immediately (no re-fetch).
+          activeMemberIds.delete(user_id);
+          renderMembers();
+        }
+      }
       if (evt.type === "read.update") {
         // Another of my sessions caught up on a channel; reflect the cleared
         // counts here too (state.applyEvent already cleared them).

@@ -578,6 +578,12 @@ func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusForbidden, "you can only remove yourself from this channel")
 		return
 	}
+	// Capture the audience (current members, INCLUDING the one leaving) before the
+	// removal, so one event reaches both the departing user and everyone who
+	// stays. (A moderator viewing via bypass isn't a member and so isn't notified
+	// live — consistent with how other private-channel events are scoped; they'll
+	// see the change on next open.)
+	audience := s.audienceForChannel(r.Context(), ch)
 	if err := s.st.RemoveChannelMember(r.Context(), id, target); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "not a member of this channel")
@@ -586,11 +592,9 @@ func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "could not remove member")
 		return
 	}
-	// The removed user's clients should drop the channel; reuse channel.archive
-	// (the client folds it into removeChannel), scoped to just that user.
-	s.broadcast("channel.archive", map[string]int64{"id": id}, map[int64]bool{target: true})
-	// Remaining members may be viewing the roster — nudge them to refresh it.
-	s.broadcast("channel.update", ch, s.audienceForChannel(r.Context(), ch))
+	// One event does both jobs: the departing user's clients drop the channel,
+	// and remaining members drop them from the roster — no re-fetch needed.
+	s.broadcast("member.remove", map[string]int64{"channel_id": id, "user_id": target}, audience)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
