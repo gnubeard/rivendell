@@ -109,6 +109,11 @@ export const api = {
   pinnedMessages: (channelId) => req("GET", `/api/channels/${channelId}/pins`),
   pinMessage: (id) => req("PUT", `/api/messages/${id}/pin`),
   unpinMessage: (id) => req("DELETE", `/api/messages/${id}/pin`),
+  // reactions — emoji is a custom shortcode or a literal Unicode grapheme, carried
+  // in the body so Unicode needs no URL encoding. Both return {message_id,
+  // channel_id, reactions}.
+  addReaction: (id, emoji) => req("PUT", `/api/messages/${id}/reactions`, { emoji }),
+  removeReaction: (id, emoji) => req("DELETE", `/api/messages/${id}/reactions`, { emoji }),
 
   // durable unread / notifications
   unread: () => req("GET", "/api/unread"),

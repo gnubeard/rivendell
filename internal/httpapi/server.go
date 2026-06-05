@@ -97,6 +97,10 @@ func (s *Server) Handler() http.Handler {
 	// The per-channel rule lives in the handler, so the route only needs auth.
 	mux.HandleFunc("PUT /api/messages/{id}/pin", s.auth(s.handlePinMessage))
 	mux.HandleFunc("DELETE /api/messages/{id}/pin", s.auth(s.handleUnpinMessage))
+	// Reactions: any member who can access the channel may add/remove their own.
+	// The emoji is carried in the request body (handles Unicode without encoding).
+	mux.HandleFunc("PUT /api/messages/{id}/reactions", s.auth(s.handleAddReaction))
+	mux.HandleFunc("DELETE /api/messages/{id}/reactions", s.auth(s.handleRemoveReaction))
 
 	// Durable unread / notifications.
 	mux.HandleFunc("GET /api/unread", s.auth(s.handleUnread))

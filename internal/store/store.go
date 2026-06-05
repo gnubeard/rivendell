@@ -170,4 +170,17 @@ type Message struct {
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	PinnedAt  *time.Time `json:"pinned_at,omitempty"`
 	PinnedBy  *int64     `json:"pinned_by,omitempty"`
+	// Reactions is populated by the HTTP layer on list responses (not part of the
+	// messages row); omitted when empty so the message JSON stays lean.
+	Reactions []Reaction `json:"reactions,omitempty"`
+}
+
+// Reaction is one emoji's reaction group on a message: the emoji and the ids of
+// the users who reacted with it (oldest first). Emoji is either a custom shortcode
+// or a literal Unicode grapheme; the client resolves which when rendering. The
+// server stays viewer-agnostic — the client derives count and "did I react" from
+// UserIDs.
+type Reaction struct {
+	Emoji   string  `json:"emoji"`
+	UserIDs []int64 `json:"user_ids"`
 }

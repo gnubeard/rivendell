@@ -237,19 +237,40 @@ export function addMessage(state, msg) {
   let next;
   if (idx >= 0) {
     next = [...existing];
-    next[idx] = msg;
+    // Realtime message.new/update payloads carry no reactions (the server omits
+    // them on those events); preserve the ones we already have so an edit or pin
+    // doesn't blank the reaction row until the next reload.
+    next[idx] = msg.reactions === undefined && existing[idx].reactions !== undefined
+      ? { ...msg, reactions: existing[idx].reactions }
+      : msg;
   } else {
     next = [...existing, msg].sort((a, b) => a.id - b.id);
   }
   return { ...state, messages: { ...state.messages, [msg.channel_id]: next } };
 }
 
-// markMessageDeleted flags a message as soft-deleted in place.
+// markMessageDeleted flags a message as soft-deleted in place. A deleted message
+// shows no reactions (the server drops them too), so clear them here.
 export function markMessageDeleted(state, channelId, messageId) {
   const existing = state.messages[channelId] || [];
   const next = existing.map((m) =>
-    m.id === messageId ? { ...m, deleted_at: new Date().toISOString(), content: "" } : m
+    m.id === messageId ? { ...m, deleted_at: new Date().toISOString(), content: "", reactions: [] } : m
   );
+  return { ...state, messages: { ...state.messages, [channelId]: next } };
+}
+
+// setReactions replaces the reaction groups for one message (folds a
+// reaction.update event). No-op if the channel/message isn't loaded.
+export function setReactions(state, channelId, messageId, reactions) {
+  const existing = state.messages[channelId];
+  if (!existing) return state;
+  let found = false;
+  const next = existing.map((m) => {
+    if (m.id !== messageId) return m;
+    found = true;
+    return { ...m, reactions: reactions || [] };
+  });
+  if (!found) return state;
   return { ...state, messages: { ...state.messages, [channelId]: next } };
 }
 
@@ -283,6 +304,8 @@ export function applyEvent(state, evt) {
       return addMessage(state, evt.payload);
     case "message.delete":
       return markMessageDeleted(state, evt.payload.channel_id, evt.payload.id);
+    case "reaction.update":
+      return setReactions(state, evt.payload.channel_id, evt.payload.message_id, evt.payload.reactions);
     case "read.update":
       // Another of my own sessions advanced the read cursor for a channel; the
       // cursor only ever moves to the latest, so clear both counts here too.

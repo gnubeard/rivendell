@@ -446,6 +446,14 @@ function startRealtime() {
         if (emojiPickerOpen()) renderEmojiPicker();
         refreshAdminEmojisIfOpen();
       }
+      if (evt.type === "reaction.update") {
+        // applyEvent already folded the new groups into the message; just repaint
+        // the open channel (and the pins panel, which renders reactions too).
+        if (evt.payload.channel_id === state.activeChannelId) {
+          renderMessages();
+          refreshPinsIfOpen();
+        }
+      }
       if (evt.type.startsWith("message")) {
         // A delete seen live earns a tombstone (unlike already-deleted history).
         if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
@@ -1183,12 +1191,15 @@ function renderMessages(forceBottom = false, holdPosition = false) {
 
     const isOwn = m.user_id === state.me.id;
     const canDelete = isOwn || isMod; // non-mods can only delete their own
-    const actions = isOwn || canPin || canDelete
-      ? el("div", { class: "msg-actions" },
-          isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
-          canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
-          canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null)
-      : null;
+    // Anyone who can see a message can react to it, so "react" is always present;
+    // edit/pin/delete stay conditional.
+    const actions = el("div", { class: "msg-actions" },
+      el("button", { class: "link", title: "Add reaction",
+        onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "react"),
+      isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
+      canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
+      canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null);
+    const reactions = reactionsRow(m);
     const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
     let cls = "msg";
     if (m.pinned_at) cls += " pinned";
@@ -1203,7 +1214,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }, formatTime(m.created_at));
 
     if (grouped) {
-      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, actions)));
+      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, reactions, actions)));
     } else {
       const avatar = author && author.has_avatar
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
@@ -1218,6 +1229,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
               pinMark
             ),
             body,
+            reactions,
             actions
           )
         )
@@ -1407,6 +1419,14 @@ function wireComposer() {
 
 // --- emoji picker --------------------------------------------------------
 
+// The shared emoji popup serves two targets: the composer (insert a token) and a
+// message reaction. pickerTarget tracks which, set when the popup is opened.
+let pickerTarget = { mode: "composer" };
+
+// A small set of common Unicode emoji offered alongside the instance's custom
+// emoji, so reactions aren't custom-only. These are literal graphemes (no image).
+const COMMON_EMOJI = ["👍", "❤️", "😂", "🎉", "🙌", "😮", "😢", "😡", "🙏", "🔥", "✅", "👀", "💯", "👋"];
+
 function emojiPickerOpen() {
   const p = $("#emoji-picker");
   return p && !p.hidden;
@@ -1415,22 +1435,67 @@ function emojiPickerOpen() {
 function renderEmojiPicker() {
   const picker = $("#emoji-picker");
   picker.innerHTML = "";
+  // Quick Unicode palette first — usable as a reaction or dropped into a message.
+  for (const ch of COMMON_EMOJI) {
+    picker.append(el("button", {
+      type: "button", class: "emoji-choice", title: ch,
+      onclick: () => chooseEmoji(ch, false),
+    }, el("span", { class: "emoji-uni" }, ch)));
+  }
   const codes = Object.keys(state.emojis).sort();
-  if (!codes.length) {
-    picker.append(el("span", { class: "emoji-empty" }, "No custom emojis yet. Admins add them in the admin panel."));
+  if (codes.length) {
+    picker.append(el("div", { class: "emoji-sep" }));
+    for (const code of codes) {
+      picker.append(el("button", {
+        type: "button", class: "emoji-choice", title: `:${code}:`,
+        onclick: () => chooseEmoji(code, true),
+      }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
+    }
+  }
+}
+
+// chooseEmoji routes a picked emoji to the popup's current target. isCustom marks a
+// custom shortcode (vs a literal Unicode glyph) — only the former is :colon:-wrapped
+// when inserted into a message; as a reaction value the bare shortcode is stored.
+function chooseEmoji(value, isCustom) {
+  $("#emoji-picker").hidden = true;
+  if (pickerTarget.mode === "react") {
+    toggleReaction(pickerTarget.messageId, value);
     return;
   }
-  for (const code of codes) {
-    picker.append(el("button", {
-      type: "button", class: "emoji-choice", title: `:${code}:`,
-      onclick: () => insertEmoji(code),
-    }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
-  }
+  insertIntoComposer(isCustom ? `:${value}:` : value);
+}
+
+// openReactionPicker opens the shared popup in reaction mode, floated next to the
+// message control that was clicked (it otherwise lives anchored by the composer).
+function openReactionPicker(messageId, anchorEl) {
+  pickerTarget = { mode: "react", messageId };
+  const picker = $("#emoji-picker");
+  // Render off-screen first so we can measure it, then place it relative to the
+  // control (flipping below if there's no room above).
+  picker.style.position = "fixed";
+  picker.style.left = "-9999px";
+  picker.style.top = "0";
+  picker.style.right = "auto";
+  picker.style.bottom = "auto";
+  picker.hidden = false;
+  renderEmojiPicker();
+  const a = anchorEl.getBoundingClientRect();
+  const pr = picker.getBoundingClientRect();
+  let left = Math.max(8, Math.min(a.left, window.innerWidth - pr.width - 8));
+  let top = a.top - pr.height - 6;
+  if (top < 8) top = a.bottom + 6;
+  picker.style.left = left + "px";
+  picker.style.top = top + "px";
 }
 
 function toggleEmojiPicker() {
   const picker = $("#emoji-picker");
   if (picker.hidden) {
+    pickerTarget = { mode: "composer" };
+    // Clear any fixed-position overrides left by a reaction pick so the popup
+    // returns to its CSS anchor above the composer.
+    picker.style.position = picker.style.left = picker.style.top = picker.style.right = picker.style.bottom = "";
     renderEmojiPicker();
     picker.hidden = false;
   } else {
@@ -1438,16 +1503,16 @@ function toggleEmojiPicker() {
   }
 }
 
-// insertEmoji drops a :shortcode: token at the caret, padding with spaces so it's
-// recognised as a standalone token, then fires a synthetic input event so the
-// composer's autosize/typing logic runs exactly as if it were typed.
-function insertEmoji(code) {
+// insertIntoComposer drops a token at the caret, padded with spaces so it reads as a
+// standalone token, then fires a synthetic input event so the composer's
+// autosize/typing logic runs exactly as if it were typed.
+function insertIntoComposer(token) {
   const input = $("#composer-input");
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   const before = input.value.slice(0, start);
   const lead = before && !/\s$/.test(before) ? " " : "";
-  const insert = `${lead}:${code}: `;
+  const insert = `${lead}${token} `;
   input.value = before + insert + input.value.slice(end);
   const pos = start + insert.length;
   input.setSelectionRange(pos, pos);
@@ -1481,6 +1546,57 @@ async function togglePin(m) {
   try {
     if (m.pinned_at) await api.unpinMessage(m.id);
     else await api.pinMessage(m.id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// --- reactions -----------------------------------------------------------
+
+// findMessage locates a loaded message in the active channel by id.
+function findMessage(messageId) {
+  const arr = state.messages[state.activeChannelId] || [];
+  return arr.find((m) => m.id === messageId) || null;
+}
+
+// reactionsRow renders the pill row under a message, or null if it has none. Each
+// pill shows the emoji (custom shortcode → image, else the literal Unicode glyph)
+// and its count, is highlighted when I'm among the reactors, and toggles on click.
+function reactionsRow(m) {
+  if (!m.reactions || !m.reactions.length) return null;
+  const row = el("div", { class: "reactions" });
+  for (const g of m.reactions) {
+    const ids = g.user_ids || [];
+    const mine = ids.includes(state.me.id);
+    const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
+    const glyph = state.emojis[g.emoji]
+      ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:` })
+      : el("span", { class: "r-emoji" }, g.emoji);
+    row.append(el("button", {
+      class: "reaction" + (mine ? " mine" : ""),
+      title: names,
+      // Pass the rendered "mine" so the toggle is correct even when the message
+      // isn't in the active window (the pins modal renders pins it fetched itself).
+      onclick: () => toggleReaction(m.id, g.emoji, mine),
+    }, glyph, el("span", { class: "r-count" }, String(ids.length))));
+  }
+  return row;
+}
+
+// toggleReaction adds my reaction, or removes it if I've already reacted with that
+// emoji. The reaction.update broadcast re-renders everyone (including me). knownMine
+// is the caller's already-computed "did I react" (the pill knows it); when omitted
+// (the picker path) we look it up in the active window, defaulting to add.
+async function toggleReaction(messageId, emoji, knownMine) {
+  let mine = knownMine;
+  if (mine === undefined) {
+    const m = findMessage(messageId);
+    const grp = m && m.reactions && m.reactions.find((g) => g.emoji === emoji);
+    mine = !!(grp && (grp.user_ids || []).includes(state.me.id));
+  }
+  try {
+    if (mine) await api.removeReaction(messageId, emoji);
+    else await api.addReaction(messageId, emoji);
   } catch (ex) {
     alert(ex.message);
   }
@@ -1548,7 +1664,8 @@ async function refreshPins() {
                 },
               }, "unpin")
             : null),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) }),
+        reactionsRow(m))
     );
   }
   list.innerHTML = "";

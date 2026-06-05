@@ -231,6 +231,30 @@ These were the requested next-work items; all are now implemented and tested.
 - **Status text is visible** in the member list (stacked under the name, falling
   back to the presence word); the member-row alignment fix keeps the self row in
   line with the rest.
+- **Reactions** (migration `0009`). `message_reactions` PK
+  `(message_id, user_id, emoji)` — one of each emoji per user per message is
+  intrinsic; add is idempotent (`ON CONFLICT DO NOTHING`). `emoji` is **either** a
+  known custom `:shortcode:` **or** a literal Unicode grapheme; the client resolves
+  which at render (registry hit → `<img>`, else literal). `PUT`/`DELETE
+  /api/messages/{id}/reactions` carry the emoji in the **body** (no URL-encoding of
+  Unicode); any member with channel access may toggle their own on a visible,
+  non-deleted message (deleted → **409**, no access → **403**). Validation is
+  **stdlib-only** (no emoji library — prime directive): a known shortcode, or
+  `validUnicodeEmoji` (every rune a symbol/ZWJ/variation-selector/keycap-base and
+  ≥1 emoji-ish rune — admits flags, skin-tone & ZWJ sequences, keycaps; rejects
+  words). One realtime event, **`reaction.update`**, carries the re-aggregated
+  groups (not add/remove deltas), folded client-side by `setReactions` — so a plain
+  edit/pin `message.update` that omits `reactions` must **preserve** the existing
+  ones (`addMessage` guards this; unit-tested). List/search/pins endpoints decorate
+  via the batched `ReactionsForMessages` (no N+1); soft-delete **sheds** reactions
+  (`DeleteReactionsForMessage`; cascade covers hard delete). Server stays
+  viewer-agnostic — `Reaction{Emoji, UserIDs}` only; the client derives count and
+  "did I react". UI: pill row under each message + a "react" action floating the
+  shared emoji picker (now also a common-Unicode palette); the pins modal shows
+  toggleable pills — `toggleReaction` takes the pill's known `mine` so it's correct
+  even when the pinned message is **outside the loaded window** (don't regress this
+  to a `findMessage` lookup). Search rows stay text-only (the whole row is
+  click-to-jump).
 
 When in doubt on UI, favor clarity over polish — aesthetics are explicitly
 secondary to "it works" for this draft. Keep changes small and tested.

@@ -57,13 +57,32 @@
   popup was generalized into a two-kind completion controller (@ → user, : →
   shortcode) sharing one popup + keyboard nav; new pure colonQuery() mirrors
   atQuery() with the same boundary guard so URLs/times/ratios never false-trigger.
+- Reactions (per-message emoji) — v1.0.22. message_reactions table (migration
+  0009) PK (message_id, user_id, emoji) — one of each emoji per user per message
+  is intrinsic and the add is idempotent (INSERT … ON CONFLICT DO NOTHING). emoji
+  is EITHER a known custom :shortcode: OR a literal Unicode grapheme; the client
+  resolves which at render (registry hit → <img>, else literal text).
+  PUT/DELETE /api/messages/{id}/reactions carry the emoji in the body (no URL
+  encoding of Unicode); any member with channel access may toggle their own, on a
+  visible non-deleted message (deleted → 409, no access → 403). Validation is
+  stdlib-only (no emoji lib, per the prime directive): a known shortcode, or
+  validUnicodeEmoji — every rune a symbol/ZWJ/VS/keycap-base and ≥1 emoji-ish,
+  admitting flags, skin-tone & ZWJ sequences and keycaps while rejecting words.
+  One realtime event, reaction.update, carries the re-aggregated groups (not
+  add/remove deltas — sidesteps client reconciliation); applyEvent folds it via
+  setReactions. List/search/pins endpoints decorate messages in one batched query
+  (ReactionsForMessages, no N+1); soft-delete sheds reactions (cascade covers hard
+  delete). UI: pill row under each message (custom→img, else glyph; highlighted
+  when you're a reactor; click toggles), a "react" action that floats the shared
+  emoji picker (now carrying a common-Unicode palette alongside custom emoji), and
+  read-only-but-toggleable pills in the pins modal (toggleReaction takes the
+  pill's known "mine" so it's correct even when the pinned message is outside the
+  loaded window). Search rows stay text-only — they're click-to-jump, so pills
+  would fight the row click; reactions stay fully interactive in the live view.
 
 ## Backlog (sorted by effort)
 
-5. [L] Reactions.
-   reactions(message_id, user_id, emoji) + add/remove endpoints + realtime
-   reaction.add/remove + aggregation into the message payload/state + UI. Touches
-   every layer. Pairs naturally with #4.
+(empty — all scoped backlog items shipped; see Meta / future ideas below)
 
 
 ## Meta / future ideas (not yet scoped)
