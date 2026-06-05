@@ -2058,17 +2058,22 @@ async function refreshAdminUsers() {
 
 // refreshAdminEmojis renders the custom-emoji grid with delete controls. Realtime
 // emoji.add/emoji.delete events also call refreshAdminEmojisIfOpen so the list
-// stays current if another admin changes it while the panel is open.
+// stays current if another admin changes it while the panel is open. An upload
+// fires both an explicit refresh and (via its own broadcast echo) a realtime one,
+// so two runs can overlap — we fetch FIRST, then clear+append in one synchronous
+// block, making concurrent runs last-writer-wins (always the full list once,
+// never doubled).
 async function refreshAdminEmojis() {
   const box = $("#admin-emoji-list");
-  box.innerHTML = "";
   let list;
   try {
     list = await api.emojis();
   } catch (ex) {
+    box.innerHTML = "";
     box.append(el("span", { class: "notice" }, ex.message));
     return;
   }
+  box.innerHTML = "";
   if (!list.length) {
     box.append(el("span", { class: "notice" }, "No custom emojis yet."));
     return;
