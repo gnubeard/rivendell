@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"rivendell/internal/auth"
+	"rivendell/internal/config"
 	"rivendell/internal/store"
 	"rivendell/internal/ws"
 )
@@ -280,7 +281,10 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 // handleInstance reports public, unauthenticated instance metadata (the display
 // name) so the web client can brand itself before login.
 func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.InstanceName})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"name":    s.cfg.InstanceName,
+		"version": config.Version,
+	})
 }
 
 func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {

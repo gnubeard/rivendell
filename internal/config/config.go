@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// Version is the running build's semantic version. It's surfaced via
+// GET /api/instance and the About dialog. Bump it on each release.
+const Version = "0.9.0"
+
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
 	DatabaseURL     string        // postgres connection string

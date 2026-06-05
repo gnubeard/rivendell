@@ -548,11 +548,15 @@ func TestInstanceName(t *testing.T) {
 		t.Fatalf("instance: %d %s", resp.StatusCode, body)
 	}
 	var inst struct {
-		Name string `json:"name"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
 	}
 	json.Unmarshal(body, &inst)
 	if inst.Name != "rivendell-test" {
 		t.Fatalf("instance name = %q, want rivendell-test", inst.Name)
+	}
+	if inst.Version != config.Version {
+		t.Fatalf("instance version = %q, want %q", inst.Version, config.Version)
 	}
 }
 

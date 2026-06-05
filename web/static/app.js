@@ -17,6 +17,7 @@ let state = S.initialState();
 let socket = null;
 let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
 let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
+let appVersion = ""; // server-reported semantic version, shown in the About dialog
 
 // Desktop-notification opt-in (per browser). The OS permission is separate and
 // owned by the browser; this is the user's in-app preference that gates it.
@@ -208,11 +209,17 @@ async function boot() {
 // like. Best-effort: a failed fetch just leaves the default markup.
 async function applyInstanceName() {
   try {
-    const { name } = await api.instance();
-    if (!name) return;
-    baseTitle = name;
-    document.title = name;
-    for (const node of document.querySelectorAll(".brand")) node.textContent = name;
+    const inst = await api.instance();
+    if (inst.version) {
+      appVersion = inst.version;
+      const vEl = $("#about-version");
+      if (vEl) vEl.textContent = "v" + inst.version;
+    }
+    if (inst.name) {
+      baseTitle = inst.name;
+      document.title = inst.name;
+      for (const node of document.querySelectorAll(".brand")) node.textContent = inst.name;
+    }
   } catch {
     /* keep the default branding */
   }
@@ -571,9 +578,13 @@ function renderMembers() {
   // Ordinary users don't see disabled accounts (matches the server roster);
   // admins keep seeing them so they can manage them.
   const isAdmin = state.me.role === "admin";
+  const isMod = isAdmin || state.me.role === "moderator";
   let users = Object.values(state.users).filter((u) => isAdmin || u.is_active !== false);
   // In a private channel/DM, restrict the panel to that channel's members.
   if (activeMemberIds) users = users.filter((u) => activeMemberIds.has(u.id));
+  // Moderators+ can remove others from a real private channel (not DMs/public).
+  const activeCh = state.channels[state.activeChannelId];
+  const canRemove = isMod && !!(activeCh && activeCh.is_private && !activeCh.is_dm);
   users.sort((a, b) => {
     if (!!b.online !== !!a.online) return b.online ? 1 : -1;
     return a.display_name.localeCompare(b.display_name);
@@ -586,6 +597,11 @@ function renderMembers() {
     const statusLine = u.status_text ? u.status_text : presence;
     const titleParts = [presence];
     if (!isSelf) titleParts.unshift(`Message ${u.display_name}`);
+    // Mods get a remove (✕) control on everyone but themselves (self uses Leave).
+    const remove = canRemove && !isSelf
+      ? el("button", { class: "ch-ctl danger", title: `Remove ${u.display_name}`,
+          onclick: (e) => { e.stopPropagation(); removeMember(activeCh.id, u.id, u.display_name); } }, "✕")
+      : null;
     list.append(
       el("li", {
         class: isSelf ? "member" : "member clickable",
@@ -595,9 +611,26 @@ function renderMembers() {
         el("span", { class: `dot ${presenceClass(u)}` }),
         el("div", { class: "member-text" },
           el("span", { class: "member-name" }, u.display_name),
-          el("span", { class: "member-status", title: u.status_text || null }, statusLine))
+          el("span", { class: "member-status", title: u.status_text || null }, statusLine)),
+        remove
       )
     );
+  }
+}
+
+// removeMember (moderator+) removes another user from the active private channel.
+// The server's member.remove broadcast updates everyone's roster; we also drop
+// them locally so it's instant even for a mod viewing via the not-a-member bypass.
+async function removeMember(channelId, userId, displayName) {
+  if (!confirm(`Remove ${displayName} from this channel?`)) return;
+  try {
+    await api.removeChannelMember(channelId, userId);
+    if (activeMemberIds) {
+      activeMemberIds.delete(userId);
+      renderMembers();
+    }
+  } catch (ex) {
+    alert(ex.message);
   }
 }
 
@@ -1101,6 +1134,9 @@ function wireControls() {
 
   $("#admin-btn").onclick = openAdmin;
   $("#admin-close").onclick = () => ($("#admin-modal").hidden = true);
+
+  $("#about-btn").onclick = () => ($("#about-modal").hidden = false);
+  $("#about-close").onclick = () => ($("#about-modal").hidden = true);
 
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);

@@ -229,6 +229,17 @@ body.dm-active #members-toggle { display: none; }
 .member-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
 .member-name { font-size: 0.86rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .member-status { color: var(--text-faint); font-size: 0.68rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The mod remove (✕) control stays out of the way until you hover the row. */
+.member .ch-ctl { display: none; flex-shrink: 0; }
+.member:hover .ch-ctl { display: inline; }
+
+/* About dialog (opened from the sidebar brand). */
+#about-btn { cursor: pointer; }
+#about-btn:hover { color: var(--accent); }
+.about-body { text-align: center; padding: 0.6rem 0 0.2rem; }
+.about-body .brand { font-size: 1.8rem; }
+.about-body .hint { text-align: center; }
+.about-blurb { color: var(--text-dim); font-size: 0.85rem; margin: 0.4rem 0 0; }
 
 .notice { color: var(--text-dim); font-size: 0.85rem; padding: 0.4rem 0; }
 
