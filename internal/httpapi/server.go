@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dms", s.auth(s.handleCreateDM))
 
 	// Messages.
+	mux.HandleFunc("GET /api/search", s.auth(s.handleSearch))
 	mux.HandleFunc("GET /api/channels/{id}/messages", s.auth(s.handleListMessages))
 	mux.HandleFunc("POST /api/channels/{id}/messages", s.auth(s.handleCreateMessage))
 	mux.HandleFunc("GET /api/channels/{id}/pins", s.auth(s.handleListPinnedMessages))

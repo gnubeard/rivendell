@@ -309,6 +309,15 @@ body.dm-active #members-toggle { display: none; }
 .pin-head { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.2rem; }
 .pin-head .msg-time { margin-right: auto; }
 
+/* Search results reuse the pin-row layout but are clickable and put the channel
+   name first with the timestamp pushed to the right. */
+#search-input { width: 100%; box-sizing: border-box; }
+.search-row { cursor: pointer; }
+.search-row:hover { background: var(--surface-2, rgba(127,127,127,0.08)); }
+.search-row .search-channel { font-weight: 600; }
+.search-row .msg-time { margin-right: 0; margin-left: auto; }
+#search-more { display: block; margin: 0.5rem auto 0; }
+
 @media (max-width: 720px) {
   /* The conversation takes the whole screen; the sidebar (channels/DMs/profile)
      and members panel become slide-in drawers from the left and right. */

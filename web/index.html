@@ -102,6 +102,7 @@
           <span id="channel-title" class="channel-title"></span>
           <span id="channel-topic" class="channel-topic"></span>
         </div>
+        <button id="search-btn" class="icon-btn" title="Search messages" aria-label="Search messages">🔍</button>
         <button id="pins-btn" class="icon-btn" title="Pinned messages" aria-label="Pinned messages">📌</button>
         <button id="members-toggle" class="icon-btn" title="Members" aria-label="Members">👥</button>
       </header>
@@ -141,6 +142,21 @@
         <button id="pins-close" class="icon-btn">×</button>
       </header>
       <ul id="pins-list" class="pins-list"></ul>
+    </div>
+  </div>
+
+  <!-- SEARCH MODAL -->
+  <div id="search-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Search messages</h2>
+        <button id="search-close" class="icon-btn">×</button>
+      </header>
+      <form id="search-form" class="modal-form">
+        <input id="search-input" type="search" placeholder="Search all your channels…" autocomplete="off" />
+      </form>
+      <ul id="search-results" class="pins-list"></ul>
+      <button id="search-more" class="link" hidden>Load more</button>
     </div>
   </div>
 

@@ -618,6 +618,57 @@ func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Mess
 	return out, rows.Err()
 }
 
+// SearchMessages returns up to limit non-deleted messages whose content matches
+// the full-text query, restricted to channelIDs, newest-first, with id <
+// beforeID (pass 0 for the most recent page) so callers can keyset-paginate the
+// same way they page channel history. websearch_to_tsquery tolerates arbitrary
+// user input — quoted phrases, OR, leading-minus negation — without erroring,
+// and yields no matches (an empty slice) for a query with no searchable terms.
+// An empty channel set or blank query short-circuits to [].
+func (s *Store) SearchMessages(ctx context.Context, channelIDs []int64, query string, beforeID int64, limit int) ([]Message, error) {
+	out := []Message{}
+	if len(channelIDs) == 0 || strings.TrimSpace(query) == "" {
+		return out, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	if beforeID <= 0 {
+		beforeID = 1<<62 - 1
+	}
+	// Parameterized IN list for the channel ids (keeping this file free of
+	// pq-specific imports, per UsersByUsernames), followed by the query, cursor
+	// and limit placeholders.
+	ph := make([]string, len(channelIDs))
+	args := make([]any, 0, len(channelIDs)+3)
+	for i, id := range channelIDs {
+		ph[i] = "$" + strconv.Itoa(i+1)
+		args = append(args, id)
+	}
+	n := len(channelIDs)
+	args = append(args, query, beforeID, limit)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+messageCols+`
+		 FROM messages
+		 WHERE channel_id IN (`+strings.Join(ph, ", ")+`)
+		   AND deleted_at IS NULL
+		   AND id < $`+strconv.Itoa(n+2)+`
+		   AND to_tsvector('english', content) @@ websearch_to_tsquery('english', $`+strconv.Itoa(n+1)+`)
+		 ORDER BY id DESC LIMIT $`+strconv.Itoa(n+3), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
 	return scanMessage(s.db.QueryRowContext(ctx,
 		`SELECT `+messageCols+` FROM messages WHERE id = $1`, id))

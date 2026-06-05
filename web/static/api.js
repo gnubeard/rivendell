@@ -80,6 +80,14 @@ export const api = {
   },
   sendMessage: (channelId, content, replyTo) =>
     req("POST", `/api/channels/${channelId}/messages`, { content, reply_to_id: replyTo || null }),
+  // search messages across all accessible channels, newest first; `before` is a
+  // keyset cursor (the id of the oldest result so far) for paging older hits.
+  search: (q, opts = {}) => {
+    const p = new URLSearchParams({ q });
+    if (opts.before) p.set("before", opts.before);
+    if (opts.limit) p.set("limit", opts.limit);
+    return req("GET", `/api/search?${p.toString()}`);
+  },
   editMessage: (id, content) => req("PATCH", `/api/messages/${id}`, { content }),
   deleteMessage: (id) => req("DELETE", `/api/messages/${id}`),
   pinnedMessages: (channelId) => req("GET", `/api/channels/${channelId}/pins`),

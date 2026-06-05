@@ -1406,6 +1406,148 @@ func TestListMessagesAfter(t *testing.T) {
 	}
 }
 
+// TestSearchMessages covers full-text search end to end: stemmed matching,
+// newest-first ordering, keyset pagination, deleted-message exclusion, the
+// []-not-null contract, and — most importantly — access scoping, so a caller
+// can never match a message in a private channel or DM they can't see.
+func TestSearchMessages(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	_, bob := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+	mollyC, _ := seedMember(t, ts, st, "molly", "Molly", store.RoleModerator)
+
+	// search runs a query as a given client and returns the decoded results. It
+	// also asserts the body is a JSON array, never null (the client iterates it).
+	search := func(c *http.Client, query string) []store.Message {
+		t.Helper()
+		resp, body := doJSON(t, c, "GET", ts.URL+"/api/search?q="+query, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("search %q: %d %s", query, resp.StatusCode, body)
+		}
+		if strings.TrimSpace(string(body)) == "null" {
+			t.Fatalf("search %q returned null, must be []", query)
+		}
+		var out []store.Message
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("decode search %q: %v (%s)", query, err, body)
+		}
+		return out
+	}
+	hasID := func(ms []store.Message, id int64) bool {
+		for _, m := range ms {
+			if m.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A public channel anyone can see.
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create public channel: %d %s", resp.StatusCode, body)
+	}
+	var pub store.Channel
+	json.Unmarshal(body, &pub)
+
+	// "deploying" stems to "deploy" under the english config, so a search for
+	// "deploy" must match it; the unrelated line must not.
+	pub1 := postMessage(t, adminC, ts, pub.ID, "we are deploying the server tonight")
+	postMessage(t, adminC, ts, pub.ID, "completely unrelated lunch chatter")
+	pub2 := postMessage(t, aliceC, ts, pub.ID, "another deploy update landed")
+
+	// Newest-first: pub2 before pub1, and the unrelated message is absent.
+	got := search(aliceC, "deploy")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 deploy hits, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != pub2.ID || got[1].ID != pub1.ID {
+		t.Fatalf("expected newest-first [%d,%d], got [%d,%d]", pub2.ID, pub1.ID, got[0].ID, got[1].ID)
+	}
+
+	// Deleting a hit removes it from results.
+	resp, _ = doJSON(t, aliceC, "DELETE", ts.URL+"/api/messages/"+itoa(pub2.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete own message: %d", resp.StatusCode)
+	}
+	if got = search(aliceC, "deploy"); len(got) != 1 || got[0].ID != pub1.ID {
+		t.Fatalf("deleted hit should be gone, got %+v", got)
+	}
+
+	// Scoping: a private channel Alice is NOT in. Admin (creator) is a member.
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{
+		"name": "secret-plans", "is_private": true,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create private channel: %d %s", resp.StatusCode, body)
+	}
+	var priv store.Channel
+	json.Unmarshal(body, &priv)
+	privMsg := postMessage(t, adminC, ts, priv.ID, "secret deploy of the rocket")
+
+	// Alice (non-member) must not match it; admin (member) must; a moderator
+	// keeps the private-channel bypass and matches it too.
+	if hasID(search(aliceC, "deploy"), privMsg.ID) {
+		t.Fatal("non-member matched a private-channel message")
+	}
+	if !hasID(search(adminC, "deploy"), privMsg.ID) {
+		t.Fatal("member should match their private-channel message")
+	}
+	if !hasID(search(mollyC, "deploy"), privMsg.ID) {
+		t.Fatal("moderator should match a private (non-DM) channel via the mod bypass")
+	}
+
+	// Scoping: a DM between admin and bob is members-only — even a moderator may
+	// not match it.
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": bob.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open DM: %d %s", resp.StatusCode, body)
+	}
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	dmMsg := postMessage(t, adminC, ts, dm.ID, "deploy from inside the dm")
+	if !hasID(search(adminC, "deploy"), dmMsg.ID) {
+		t.Fatal("DM participant should match their own DM message")
+	}
+	if hasID(search(aliceC, "deploy"), dmMsg.ID) {
+		t.Fatal("outsider matched a DM message")
+	}
+	if hasID(search(mollyC, "deploy"), dmMsg.ID) {
+		t.Fatal("moderator matched a DM they aren't part of")
+	}
+
+	// A blank query is a 200 with [], not an error (the client clears the box).
+	resp, body = doJSON(t, aliceC, "GET", ts.URL+"/api/search?q=", nil)
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("blank query should be 200 []: %d %s", resp.StatusCode, body)
+	}
+	// A query with no matches is also [] (never null).
+	if got = search(aliceC, "zzznomatchxyz"); len(got) != 0 {
+		t.Fatalf("no-match query should be empty, got %+v", got)
+	}
+
+	// Keyset pagination: limit=1 returns the newest live hit; before=<id> pages
+	// to the next older one. (Alice's live "deploy" hits are pub1 only in public,
+	// so add a second public hit to have two to page through.)
+	pub3 := postMessage(t, adminC, ts, pub.ID, "yet another deploy ping")
+	resp, body = doJSON(t, aliceC, "GET", ts.URL+"/api/search?q=deploy&limit=1", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("paged search: %d %s", resp.StatusCode, body)
+	}
+	var page1 []store.Message
+	json.Unmarshal(body, &page1)
+	if len(page1) != 1 || page1[0].ID != pub3.ID {
+		t.Fatalf("page1 should be newest hit %d, got %+v", pub3.ID, page1)
+	}
+	resp, body = doJSON(t, aliceC, "GET", ts.URL+"/api/search?q=deploy&limit=1&before="+itoa(pub3.ID), nil)
+	var page2 []store.Message
+	json.Unmarshal(body, &page2)
+	if len(page2) != 1 || page2[0].ID != pub1.ID {
+		t.Fatalf("page2 should be next older hit %d, got %+v", pub1.ID, page2)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

@@ -624,6 +624,24 @@ func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.Use
 	return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
 }
 
+// accessibleChannelIDs returns the ids of every channel the user may read —
+// the same visibility canAccessChannel enforces per-channel, applied across the
+// whole channel list. Used to scope full-text search so a caller can never match
+// a message in a private channel or DM they aren't part of.
+func (s *Server) accessibleChannelIDs(r *http.Request, u store.User) ([]int64, error) {
+	channels, err := s.st.ListChannels(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(channels))
+	for _, ch := range channels {
+		if s.canAccessChannel(r, ch, u) {
+			ids = append(ids, ch.ID)
+		}
+	}
+	return ids, nil
+}
+
 // pingRecipients returns the user ids a message should ping (notify durably).
 // A DM pings every member except the author; any other channel pings the
 // @-mentioned users who can see it (members, for a private channel), minus the
@@ -751,6 +769,40 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	msgs, err := s.st.ListMessages(r.Context(), id, beforeID, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list messages")
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+// handleSearch runs a full-text search over the caller's accessible channels,
+// newest match first. Paginates by keyset (`before` = exclusive upper-bound id),
+// matching the message-history endpoint. A blank query returns [] rather than an
+// error so the client can clear results by emptying the box.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusOK, []store.Message{})
+		return
+	}
+	limit := 25
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	beforeID := int64(0)
+	if v := r.URL.Query().Get("before"); v != "" {
+		beforeID, _ = strconv.ParseInt(v, 10, 64)
+	}
+	ids, err := s.accessibleChannelIDs(r, u)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not search")
+		return
+	}
+	msgs, err := s.st.SearchMessages(r.Context(), ids, q, beforeID, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not search")
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)

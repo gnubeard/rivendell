@@ -35,36 +35,44 @@
   v1.0.12: scroll loading is now driven by IntersectionObserver sentinels (the
   scrollTop math never fired reliably on mobile), and a jump probes forward once
   so brief conversations fill the cut-off tail and never show a spurious banner.
+- Message search (full-text, scoped to accessible channels) — v1.0.17. Postgres
+  to_tsvector('english') + GIN functional index (migration 0007); websearch_to_tsquery
+  tolerates arbitrary input. GET /api/search?q=&before=&limit= scopes to the caller's
+  accessible channels (accessibleChannelIDs, same rule as canAccessChannel — DMs stay
+  members-only even for mods), newest-first with keyset pagination. Header 🔍 opens a
+  debounced search modal; clicking a hit reuses jumpToMessage. Renders via the
+  escape-first formatMessage (no ts_headline, preserving the XSS invariant).
 
 ## Backlog (sorted by effort)
 
-4. [M→L] Search.
-   Message search scoped to channels the caller can access. Postgres full-text
-   (to_tsvector + GIN index), an endpoint with pagination, and a results UI that
-   jumps to a hit (reuses #3's permalink/jump).
-
-5. [L] Custom emojis.
+4. [L] Custom emojis.
    Storage (a bytes-blob table + shortcode, like avatars), upload/manage endpoints
    (admin?), and :shortcode: rendering in format.js that PRESERVES its escape-first
    XSS invariant. A picker is the nice-to-have.
 
-6. [L] Reactions.
+5. [L] Reactions.
    reactions(message_id, user_id, emoji) + add/remove endpoints + realtime
    reaction.add/remove + aggregation into the message payload/state + UI. Touches
-   every layer. Pairs naturally with #5.
+   every layer. Pairs naturally with #4.
 
-7. [XL] OTR / end-to-end encrypted messaging.
+6. [XL] OTR / end-to-end encrypted messaging.
    The big one and a different security model: client-side crypto, key
    generation/exchange, key + trust management (and multi-device), server storing
    only ciphertext, verification UI. Signal/OMEMO class — wants its own design pass.
 
 ## Meta / future ideas (not yet scoped)
 
+- Let's broaden the pinned messages modal on desktop, it's a little bit horizontally cramped.
+
+- Mods+ should be able to update channel topics
+
+- Messages should render linked images inline. Messages consisting of just a link to an image should hide the URL and only render that image. (I don't have interest in running a CDN at this time, but this will allow memes and gifs.)
+
+- Links should render [text](url). Bonus points: pasting a URL onto selected text automatically formats it this way.
+
+- Edit box should be inline rather than cheap-feeling popup
+
 - A Claude agent running on this box, wired into the chat, so work requests can
   be sent from inside Rivendell itself (chat → agent → commits/deploys). Its own
   design pass: how it authenticates, which channel/DM it listens on, how it
   reports progress back, and the safety rails around what it's allowed to run.
-
-## Handled elsewhere
-
-- fail2ban / rate-limiting auth: owner is doing this at the nginx layer.
