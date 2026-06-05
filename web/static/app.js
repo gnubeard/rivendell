@@ -58,6 +58,7 @@ let activeMemberIds = null;
 const PAGE = 50;
 let loadingOlder = false; // guards against overlapping back-paging fetches
 let loadingNewer = false; // guards against overlapping forward-paging fetches
+let pinsRefreshSeq = 0; // last-writer-wins token for concurrent refreshPins() calls
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
 const viewingHistory = new Set(); // channelIds whose loaded bottom isn't the live tail
 let flashMessageId = null; // id of a jumped-to message to highlight; survives re-renders
@@ -1405,16 +1406,28 @@ function refreshPinsIfOpen() {
 async function refreshPins() {
   const ch = state.channels[state.activeChannelId];
   const list = $("#pins-list");
-  list.innerHTML = "";
-  if (!ch) return;
+  if (!ch) {
+    list.innerHTML = "";
+    return;
+  }
+  // A pin/unpin triggers both an explicit refresh and a realtime message.update,
+  // so two refreshPins() can run at once. Build off-screen and only swap in if
+  // we're still the latest call — otherwise concurrent runs double the list
+  // (clear, clear, append, append) and you'd see the survivors rendered twice.
+  const seq = ++pinsRefreshSeq;
+  const rows = [];
   let pins;
   try {
     pins = await api.pinnedMessages(ch.id);
   } catch (ex) {
+    if (seq !== pinsRefreshSeq) return;
+    list.innerHTML = "";
     list.append(el("li", { class: "notice" }, ex.message));
     return;
   }
+  if (seq !== pinsRefreshSeq) return; // a newer refresh superseded us
   if (!pins.length) {
+    list.innerHTML = "";
     list.append(el("li", { class: "notice" }, "No pinned messages yet."));
     return;
   }
@@ -1422,7 +1435,7 @@ async function refreshPins() {
   const canPin = isMod || ch.is_dm; // DM participants may unpin too
   for (const m of pins) {
     const author = state.users[m.user_id];
-    list.append(
+    rows.push(
       el("li", { class: "pin-row" },
         el("div", { class: "pin-head" },
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
@@ -1442,6 +1455,8 @@ async function refreshPins() {
         el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) }))
     );
   }
+  list.innerHTML = "";
+  list.append(...rows);
 }
 
 // --- controls: status, avatar, new channel, admin, logout ---------------
