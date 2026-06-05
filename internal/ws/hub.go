@@ -13,25 +13,29 @@ import (
 type Hub struct {
 	mu         sync.Mutex
 	byUser     map[int64]map[*Client]struct{}
-	idle       map[int64]bool // ephemeral idle flag; cleared on last disconnect
 	onPresence func(userID int64, online bool)
-	onMessage  func(userID int64, data []byte)
+	onMessage  func(c *Client, data []byte)
 }
 
-// Client is one WebSocket connection belonging to a user.
+// Client is one WebSocket connection belonging to a user. idle is an ephemeral,
+// per-connection flag (guarded by Hub.mu): a user is "idle" only when *every*
+// one of their connections is idle, so an active tab keeps them non-idle.
 type Client struct {
 	hub    *Hub
 	conn   *Conn
 	userID int64
+	idle   bool
 	send   chan []byte
 	closed chan struct{}
 	once   sync.Once
 }
 
-func NewHub(onPresence func(userID int64, online bool), onMessage func(userID int64, data []byte)) *Hub {
+// UserID returns the user this connection belongs to.
+func (c *Client) UserID() int64 { return c.userID }
+
+func NewHub(onPresence func(userID int64, online bool), onMessage func(c *Client, data []byte)) *Hub {
 	return &Hub{
 		byUser:     make(map[int64]map[*Client]struct{}),
-		idle:       make(map[int64]bool),
 		onPresence: onPresence,
 		onMessage:  onMessage,
 	}
@@ -47,8 +51,11 @@ func (h *Hub) Serve(conn *Conn, userID int64, welcome ...[]byte) {
 		send:   make(chan []byte, 64),
 		closed: make(chan struct{}),
 	}
-	becameOnline := h.add(c)
-	if becameOnline && h.onPresence != nil {
+	becameOnline, idleChanged := h.add(c)
+	if h.onPresence != nil && (becameOnline || idleChanged) {
+		// becameOnline: the user just came online. idleChanged: this fresh
+		// (active) connection cleared the user's idle state — e.g. they opened a
+		// new tab while another was idle. Either way, refresh everyone's view.
 		h.onPresence(userID, true)
 	}
 	go c.writePump()
@@ -65,13 +72,17 @@ func (h *Hub) Serve(conn *Conn, userID int64, welcome ...[]byte) {
 		}
 	}
 	c.readPump() // blocks until the peer disconnects
-	becameOffline := h.remove(c)
-	if becameOffline && h.onPresence != nil {
+	lastForUser, idleChanged := h.remove(c)
+	if lastForUser && h.onPresence != nil {
 		h.onPresence(userID, false)
+	} else if idleChanged && h.onPresence != nil {
+		// A non-last connection dropped and flipped the user's effective idle
+		// state (e.g. the only active tab closed, leaving idle ones) — refresh.
+		h.onPresence(userID, true)
 	}
 }
 
-func (h *Hub) add(c *Client) (firstForUser bool) {
+func (h *Hub) add(c *Client) (firstForUser, idleChanged bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	conns := h.byUser[c.userID]
@@ -80,25 +91,26 @@ func (h *Hub) add(c *Client) (firstForUser bool) {
 		h.byUser[c.userID] = conns
 		firstForUser = true
 	}
-	conns[c] = struct{}{}
-	return firstForUser
+	before := h.userIdleLocked(c.userID)
+	conns[c] = struct{}{} // new connections start active (c.idle == false)
+	return firstForUser, before != h.userIdleLocked(c.userID)
 }
 
-func (h *Hub) remove(c *Client) (lastForUser bool) {
+func (h *Hub) remove(c *Client) (lastForUser, idleChanged bool) {
 	c.once.Do(func() { close(c.closed) })
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	conns := h.byUser[c.userID]
 	if conns == nil {
-		return false
+		return false, false
 	}
+	before := h.userIdleLocked(c.userID)
 	delete(conns, c)
 	if len(conns) == 0 {
-		delete(h.byUser, c.userID)
-		delete(h.idle, c.userID) // ephemeral: clear idle on last disconnect
-		return true
+		delete(h.byUser, c.userID) // ephemeral idle dies with the connections
+		return true, false
 	}
-	return false
+	return false, before != h.userIdleLocked(c.userID)
 }
 
 // Broadcast delivers data to every connection whose userID is in audience.
@@ -145,28 +157,38 @@ func (h *Hub) OnlineUserIDs() []int64 {
 	return out
 }
 
-// SetIdle marks the user idle (true) or active (false). Returns true if the
-// user currently has at least one open connection and the flag was recorded.
-// Returns false and is a no-op when the user has no connections.
-func (h *Hub) SetIdle(userID int64, idle bool) bool {
+// SetClientIdle records the idle state of a single connection and reports
+// whether the user's *effective* idle state changed as a result. Idle is
+// per-connection: a user counts as idle only when every connection they hold is
+// idle, so a second, active session keeps them non-idle.
+func (h *Hub) SetClientIdle(c *Client, idle bool) (changed bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.byUser[userID] == nil {
-		return false
-	}
-	if idle {
-		h.idle[userID] = true
-	} else {
-		delete(h.idle, userID)
-	}
-	return true
+	before := h.userIdleLocked(c.userID)
+	c.idle = idle
+	return before != h.userIdleLocked(c.userID)
 }
 
-// IsIdle reports whether the user's idle flag is set.
+// IsIdle reports whether the user is idle — true only when they hold at least
+// one connection and all of them are idle.
 func (h *Hub) IsIdle(userID int64) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.idle[userID]
+	return h.userIdleLocked(userID)
+}
+
+// userIdleLocked computes effective idle for a user. Caller must hold h.mu.
+func (h *Hub) userIdleLocked(userID int64) bool {
+	conns := h.byUser[userID]
+	if len(conns) == 0 {
+		return false
+	}
+	for c := range conns {
+		if !c.idle {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) writePump() {
@@ -199,7 +221,7 @@ func (c *Client) readPump() {
 			return
 		}
 		if c.hub.onMessage != nil && len(data) > 0 {
-			c.hub.onMessage(c.userID, data)
+			c.hub.onMessage(c, data)
 		}
 	}
 }

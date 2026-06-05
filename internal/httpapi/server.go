@@ -59,8 +59,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me", s.auth(s.handleMe))
 	mux.HandleFunc("PATCH /api/me", s.auth(s.handleUpdateMe))
 	mux.HandleFunc("PUT /api/me/status", s.auth(s.handleSetStatus))
-	mux.HandleFunc("PUT /api/me/idle", s.auth(s.handleSetIdle))
-	mux.HandleFunc("DELETE /api/me/idle", s.auth(s.handleClearIdle))
 	mux.HandleFunc("POST /api/me/avatar", s.auth(s.handleUploadAvatar))
 
 	// Users + presence.
@@ -296,14 +294,29 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 	}, nil)
 }
 
-// onWSMessage is called by the hub for each inbound client frame. Currently
-// handles only "typing" frames; anything else is silently ignored.
-func (s *Server) onWSMessage(userID int64, data []byte) {
+// onWSMessage is called by the hub for each inbound client frame. Handles
+// "typing" and "idle" frames; anything else is silently ignored. Idle is kept
+// on the WS (not a REST call) precisely so it's scoped to this one connection —
+// the hub then treats a user as idle only when all of their connections are.
+func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 	var msg struct {
 		Type      string `json:"type"`
 		ChannelID int64  `json:"channel_id"`
+		Idle      bool   `json:"idle"`
 	}
-	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "typing" || msg.ChannelID == 0 {
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return
+	}
+	userID := c.UserID()
+	if msg.Type == "idle" {
+		// Re-broadcast presence only when the user's effective idle state flips
+		// (an active session keeps the user non-idle even if this one idles).
+		if s.hub.SetClientIdle(c, msg.Idle) {
+			s.onPresenceChange(userID, true)
+		}
+		return
+	}
+	if msg.Type != "typing" || msg.ChannelID == 0 {
 		return
 	}
 	ctx := context.Background()

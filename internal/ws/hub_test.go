@@ -76,50 +76,106 @@ func TestHubPresenceAndBroadcast(t *testing.T) {
 	<-done
 }
 
-func TestHubSetIdle(t *testing.T) {
-	ready := make(chan struct{}, 1)
-	hub := NewHub(func(uid int64, online bool) {
-		if online {
-			ready <- struct{}{}
-		}
-	}, nil)
-
-	// No connection yet — SetIdle and IsIdle are both no-ops/false.
-	if hub.SetIdle(42, true) {
-		t.Fatal("SetIdle for disconnected user should return false")
+// writeClientFrame sends one text frame to the server side of a pipe. readFrame
+// accepts unmasked frames, so the test masking dance isn't needed here.
+func writeClientFrame(t *testing.T, conn net.Conn, payload []byte) {
+	t.Helper()
+	if err := writeFrame(conn, true, opText, payload); err != nil {
+		t.Fatalf("write client frame: %v", err)
 	}
+}
+
+func TestHubSetIdle(t *testing.T) {
+	ready := make(chan *Client, 1)
+	hub := NewHub(nil, nil)
+
+	// IsIdle is false for a user with no connections.
 	if hub.IsIdle(42) {
 		t.Fatal("IsIdle should be false for disconnected user")
 	}
+
+	// Capture the *Client for connection 1 via onMessage (the hub hands it to us).
+	hub.onMessage = func(c *Client, _ []byte) { ready <- c }
 
 	serverNC, clientNC := net.Pipe()
 	srv := newConn(serverNC)
 	done := make(chan struct{})
 	go func() { hub.Serve(srv, 42); close(done) }()
+	// Send a frame so onMessage fires and we learn the client handle.
+	writeClientFrame(t, clientNC, []byte("hi"))
+	var c1 *Client
 	select {
-	case <-ready:
+	case c1 = <-ready:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for connection")
 	}
 
-	if !hub.SetIdle(42, true) {
-		t.Fatal("SetIdle for connected user should return true")
+	if hub.SetClientIdle(c1, true); !hub.IsIdle(42) {
+		t.Fatal("IsIdle should be true after the only connection idles")
 	}
-	if !hub.IsIdle(42) {
-		t.Fatal("IsIdle should be true after SetIdle(true)")
-	}
-	if !hub.SetIdle(42, false) {
-		t.Fatal("SetIdle(false) for connected user should return true")
+	if !hub.SetClientIdle(c1, false) {
+		t.Fatal("clearing idle on the only connection should flip effective idle")
 	}
 	if hub.IsIdle(42) {
-		t.Fatal("IsIdle should be false after SetIdle(false)")
+		t.Fatal("IsIdle should be false after the connection clears idle")
 	}
 
-	// Set idle again then disconnect — flag must clear automatically.
-	hub.SetIdle(42, true)
+	// Idle again then disconnect — idle must die with the connection.
+	hub.SetClientIdle(c1, true)
 	clientNC.Close()
 	<-done
 	if hub.IsIdle(42) {
-		t.Fatal("idle flag must clear on disconnect")
+		t.Fatal("idle must clear on disconnect")
+	}
+}
+
+// TestHubIdleMultiSession is the regression for the reported bug: an idle
+// session must not make the user idle while another session is active.
+func TestHubIdleMultiSession(t *testing.T) {
+	clients := make(chan *Client, 2)
+	hub := NewHub(nil, func(c *Client, _ []byte) { clients <- c })
+
+	connect := func() (net.Conn, *Client) {
+		serverNC, clientNC := net.Pipe()
+		go hub.Serve(newConn(serverNC), 7)
+		writeClientFrame(t, clientNC, []byte("hi"))
+		select {
+		case c := <-clients:
+			return clientNC, c
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for connection")
+			return nil, nil
+		}
+	}
+
+	ncA, a := connect()
+	_, b := connect()
+
+	// B (a background tab) goes idle; A is still active → user is NOT idle.
+	if hub.SetClientIdle(b, true) {
+		t.Fatal("one of two sessions idling should not flip effective idle")
+	}
+	if hub.IsIdle(7) {
+		t.Fatal("user with an active session must not read as idle")
+	}
+
+	// Now A idles too → all sessions idle → user is idle.
+	if !hub.SetClientIdle(a, true) {
+		t.Fatal("the last active session idling should flip effective idle")
+	}
+	if !hub.IsIdle(7) {
+		t.Fatal("user should be idle once every session is idle")
+	}
+
+	// A reconnects with activity (drop A) → only idle B remains → still idle,
+	// and the drop should report the (non-)change correctly via remove().
+	ncA.Close()
+	// Give Serve time to run remove(). Poll IsIdle until B is the sole conn.
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.ConnectedCount() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !hub.IsIdle(7) {
+		t.Fatal("user should remain idle when only the idle session is left")
 	}
 }

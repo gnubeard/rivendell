@@ -222,40 +222,6 @@ func (s *Server) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})
 }
 
-// handleSetIdle / handleClearIdle flip the ephemeral idle flag in the hub and
-// broadcast a presence.update so every client's dot refreshes. No DB write —
-// idle is transient and clears automatically on disconnect.
-func (s *Server) handleSetIdle(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	if !s.hub.SetIdle(u.ID, true) {
-		// No WS connection: accept the call but nothing to broadcast.
-		writeJSON(w, http.StatusOK, map[string]bool{"idle": true})
-		return
-	}
-	s.broadcast("presence.update", map[string]any{
-		"user_id": u.ID,
-		"online":  u.Status != "offline",
-		"status":  u.Status,
-		"idle":    true,
-	}, nil)
-	writeJSON(w, http.StatusOK, map[string]bool{"idle": true})
-}
-
-func (s *Server) handleClearIdle(w http.ResponseWriter, r *http.Request) {
-	u := userFrom(r.Context())
-	if !s.hub.SetIdle(u.ID, false) {
-		writeJSON(w, http.StatusOK, map[string]bool{"idle": false})
-		return
-	}
-	s.broadcast("presence.update", map[string]any{
-		"user_id": u.ID,
-		"online":  u.Status != "offline",
-		"status":  u.Status,
-		"idle":    false,
-	}, nil)
-	writeJSON(w, http.StatusOK, map[string]bool{"idle": false})
-}
-
 func (s *Server) handleUploadAvatar(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	ct := r.Header.Get("Content-Type")

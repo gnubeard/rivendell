@@ -522,8 +522,9 @@ async function resync() {
       await loadChannel(state.activeChannelId);
       if (!tabUnfocused()) markActiveChannelRead();
     }
-    // The hub clears idle on disconnect; re-signal so the dot stays correct.
-    if (isIdle) api.setIdle().catch(() => {});
+    // A reconnect is a fresh connection (server defaults it to active); re-signal
+    // idle over the new socket so the dot stays correct.
+    if (isIdle) socket && socket.send({ type: "idle", idle: true });
   } catch (ex) {
     console.warn("rivendell: resync failed:", ex && ex.message);
   }
@@ -1635,10 +1636,12 @@ function wireSwipe() {
   }, { passive: true });
 }
 
-// wireIdleDetection tracks user activity and signals the server when the session
-// goes idle. Idle is purely ephemeral — no DB write; the hub clears it on
-// disconnect. The client re-signals after a reconnect (via the isIdle module var
-// read in resync). Activity events reset the 10-minute timer; a hidden tab
+// wireIdleDetection tracks user activity and signals the server when this
+// session goes idle. Idle is purely ephemeral and per-connection: it rides the
+// WebSocket (like typing) so the server scopes it to this one session — a user
+// shows idle only when every session of theirs is idle. The hub forgets idle on
+// disconnect, so the client re-signals after a reconnect (via the isIdle module
+// var read in resync). Activity events reset the 10-minute timer; a hidden tab
 // accelerates to 1 minute (the tab likely isn't being watched).
 function wireIdleDetection() {
   const IDLE_MS = 10 * 60 * 1000;
@@ -1648,14 +1651,14 @@ function wireIdleDetection() {
   function goIdle() {
     if (isIdle) return;
     isIdle = true;
-    api.setIdle().catch(() => {});
+    socket && socket.send({ type: "idle", idle: true });
   }
 
   function onActivity() {
     clearTimeout(idleTimer);
     if (isIdle) {
       isIdle = false;
-      api.clearIdle().catch(() => {});
+      socket && socket.send({ type: "idle", idle: false });
     }
     idleTimer = setTimeout(goIdle, IDLE_MS);
   }
