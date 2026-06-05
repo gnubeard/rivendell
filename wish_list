@@ -21,6 +21,7 @@
 - Admin stats panel (user/channel/message counts + live connections) — v1.0.0.
 - Autocomplete for @-pings (username + display name, channel-scoped, keyboard nav) — v1.0.4.
 - Mobile swipe gestures (right = sidebar, left = members; horizontal vs. scroll disambiguated) — v1.0.5.
+- Idle status (10-min timer, hidden-tab accelerated; ephemeral hub flag, amber dot same as away) — v1.0.6.
 
 ## Backlog (sorted by effort)
 
@@ -29,27 +30,27 @@
    frames). Client sends throttled "typing" frames; the hub relays to the channel
    audience; UI shows "X is typing…" with a timeout. Ephemeral, no DB.
 
-2. [M→L] Every message timestamp links to that point in history.
+3. [M→L] Every message timestamp links to that point in history.
    Needs a store query for a window *around* a message id (today's pagination is
    before-only keyset), a URL/hash scheme, and on open: load that window, scroll
-   to + highlight the anchor. The jump primitive #3 reuses — do this first.
+   to + highlight the anchor. The jump primitive #4 reuses — do this first.
 
-3. [M→L] Search.
+4. [M→L] Search.
    Message search scoped to channels the caller can access. Postgres full-text
    (to_tsvector + GIN index), an endpoint with pagination, and a results UI that
-   jumps to a hit (reuses #2's permalink/jump).
+   jumps to a hit (reuses #3's permalink/jump).
 
-4. [L] Custom emojis.
+5. [L] Custom emojis.
    Storage (a bytes-blob table + shortcode, like avatars), upload/manage endpoints
    (admin?), and :shortcode: rendering in format.js that PRESERVES its escape-first
    XSS invariant. A picker is the nice-to-have.
 
-5. [L] Reactions.
+6. [L] Reactions.
    reactions(message_id, user_id, emoji) + add/remove endpoints + realtime
    reaction.add/remove + aggregation into the message payload/state + UI. Touches
-   every layer. Pairs naturally with #4.
+   every layer. Pairs naturally with #5.
 
-6. [XL] OTR / end-to-end encrypted messaging.
+7. [XL] OTR / end-to-end encrypted messaging.
    The big one and a different security model: client-side crypto, key
    generation/exchange, key + trust management (and multi-device), server storing
    only ciphertext, verification UI. Signal/OMEMO class — wants its own design pass.

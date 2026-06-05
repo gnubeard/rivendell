@@ -50,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me", s.auth(s.handleMe))
 	mux.HandleFunc("PATCH /api/me", s.auth(s.handleUpdateMe))
 	mux.HandleFunc("PUT /api/me/status", s.auth(s.handleSetStatus))
+	mux.HandleFunc("PUT /api/me/idle", s.auth(s.handleSetIdle))
+	mux.HandleFunc("DELETE /api/me/idle", s.auth(s.handleClearIdle))
 	mux.HandleFunc("POST /api/me/avatar", s.auth(s.handleUploadAvatar))
 
 	// Users + presence.
@@ -281,6 +283,7 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 		"user_id": userID,
 		"online":  online && u.Status != "offline",
 		"status":  u.Status,
+		"idle":    s.hub.IsIdle(userID),
 	}, nil)
 }
 

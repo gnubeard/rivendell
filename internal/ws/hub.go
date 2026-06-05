@@ -13,6 +13,7 @@ import (
 type Hub struct {
 	mu         sync.Mutex
 	byUser     map[int64]map[*Client]struct{}
+	idle       map[int64]bool // ephemeral idle flag; cleared on last disconnect
 	onPresence func(userID int64, online bool)
 }
 
@@ -29,6 +30,7 @@ type Client struct {
 func NewHub(onPresence func(userID int64, online bool)) *Hub {
 	return &Hub{
 		byUser:     make(map[int64]map[*Client]struct{}),
+		idle:       make(map[int64]bool),
 		onPresence: onPresence,
 	}
 }
@@ -91,6 +93,7 @@ func (h *Hub) remove(c *Client) (lastForUser bool) {
 	delete(conns, c)
 	if len(conns) == 0 {
 		delete(h.byUser, c.userID)
+		delete(h.idle, c.userID) // ephemeral: clear idle on last disconnect
 		return true
 	}
 	return false
@@ -138,6 +141,30 @@ func (h *Hub) OnlineUserIDs() []int64 {
 		out = append(out, uid)
 	}
 	return out
+}
+
+// SetIdle marks the user idle (true) or active (false). Returns true if the
+// user currently has at least one open connection and the flag was recorded.
+// Returns false and is a no-op when the user has no connections.
+func (h *Hub) SetIdle(userID int64, idle bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.byUser[userID] == nil {
+		return false
+	}
+	if idle {
+		h.idle[userID] = true
+	} else {
+		delete(h.idle, userID)
+	}
+	return true
+}
+
+// IsIdle reports whether the user's idle flag is set.
+func (h *Hub) IsIdle(userID int64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.idle[userID]
 }
 
 func (c *Client) writePump() {

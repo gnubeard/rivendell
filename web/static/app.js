@@ -16,6 +16,7 @@ import {
 let state = S.initialState();
 let socket = null;
 let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
+let isIdle = false;    // tracks client-side idle state for re-signaling on reconnect
 let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
 let appVersion = ""; // server-reported semantic version, shown in the About dialog
 
@@ -335,6 +336,7 @@ async function enterApp() {
   wireControls();
   wireScrollback();
   wireSwipe();
+  wireIdleDetection();
   // Returning to the tab clears the open channel's unread (you're looking now).
   window.addEventListener("focus", onWindowFocus);
   document.addEventListener("visibilitychange", () => {
@@ -503,6 +505,8 @@ async function resync() {
       await loadChannel(state.activeChannelId);
       if (!tabUnfocused()) markActiveChannelRead();
     }
+    // The hub clears idle on disconnect; re-signal so the dot stays correct.
+    if (isIdle) api.setIdle().catch(() => {});
   } catch (ex) {
     console.warn("rivendell: resync failed:", ex && ex.message);
   }
@@ -1420,6 +1424,46 @@ function wireSwipe() {
   }, { passive: true });
 }
 
+// wireIdleDetection tracks user activity and signals the server when the session
+// goes idle. Idle is purely ephemeral — no DB write; the hub clears it on
+// disconnect. The client re-signals after a reconnect (via the isIdle module var
+// read in resync). Activity events reset the 10-minute timer; a hidden tab
+// accelerates to 1 minute (the tab likely isn't being watched).
+function wireIdleDetection() {
+  const IDLE_MS = 10 * 60 * 1000;
+  const HIDDEN_MS = 60 * 1000;
+  let idleTimer = null;
+
+  function goIdle() {
+    if (isIdle) return;
+    isIdle = true;
+    api.setIdle().catch(() => {});
+  }
+
+  function onActivity() {
+    clearTimeout(idleTimer);
+    if (isIdle) {
+      isIdle = false;
+      api.clearIdle().catch(() => {});
+    }
+    idleTimer = setTimeout(goIdle, IDLE_MS);
+  }
+
+  for (const ev of ["mousemove", "keydown", "pointerdown", "touchstart", "scroll", "click"]) {
+    window.addEventListener(ev, onActivity, { passive: true, capture: true });
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(goIdle, HIDDEN_MS);
+    } else {
+      onActivity();
+    }
+  });
+
+  idleTimer = setTimeout(goIdle, IDLE_MS);
+}
+
 // openInviteModal lists everyone and lets you add non-members to the active
 // private channel. Re-fetches the membership each open so it reflects reality.
 async function openInviteModal() {
@@ -1682,9 +1726,11 @@ function renderNotifControl() {
 
 // presenceClass maps a user to a presence-dot color class. Offline (or invisible)
 // users are grey regardless of their stored status; online users get their
-// status color (online=green, away=amber, dnd=red).
+// status color (online=green, away=amber, dnd=red). Idle shares away's amber —
+// auto-idle and user-set "away" are intentionally indistinguishable.
 function presenceClass(u) {
   if (!u.online) return "offline";
+  if (u.idle) return "away";
   if (u.status === "away" || u.status === "dnd") return u.status;
   return "online";
 }

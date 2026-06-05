@@ -112,12 +112,12 @@ export function upsertUser(state, user) {
   return { ...state, users: { ...state.users, [user.id]: { ...prev, ...user } } };
 }
 
-export function setPresence(state, userId, online, status) {
+export function setPresence(state, userId, online, status, idle = false) {
   const prev = state.users[userId];
   if (!prev) return state;
   return {
     ...state,
-    users: { ...state.users, [userId]: { ...prev, online, status } },
+    users: { ...state.users, [userId]: { ...prev, online, status, idle } },
   };
 }
 
@@ -217,7 +217,7 @@ export function markMessageDeleted(state, channelId, messageId) {
 export function applyEvent(state, evt) {
   switch (evt.type) {
     case "presence.update":
-      return setPresence(state, evt.payload.user_id, evt.payload.online, evt.payload.status);
+      return setPresence(state, evt.payload.user_id, evt.payload.online, evt.payload.status, !!evt.payload.idle);
     case "user.update":
       return upsertUser(state, evt.payload);
     case "channel.new":

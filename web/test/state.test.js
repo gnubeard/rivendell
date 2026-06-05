@@ -26,11 +26,14 @@ test("setUsers indexes by id", () => {
   assert.equal(s.users[2].username, "b");
 });
 
-test("setPresence updates only online/status and is a no-op for unknown user", () => {
+test("setPresence updates online/status/idle and is a no-op for unknown user", () => {
   let s = S.setUsers(S.initialState(), [{ id: 1, username: "a", online: false }]);
   s = S.setPresence(s, 1, true, "online");
   assert.equal(s.users[1].online, true);
   assert.equal(s.users[1].status, "online");
+  assert.equal(s.users[1].idle, false, "idle defaults to false");
+  s = S.setPresence(s, 1, true, "away", true);
+  assert.equal(s.users[1].idle, true, "idle propagates when set");
   const before = s;
   s = S.setPresence(s, 99, true, "online");
   assert.equal(s, before, "unknown user returns same state reference");
@@ -102,6 +105,11 @@ test("applyEvent routes presence.update", () => {
   let s = S.setUsers(S.initialState(), [{ id: 1, online: false }]);
   s = S.applyEvent(s, { type: "presence.update", payload: { user_id: 1, online: true, status: "online" } });
   assert.equal(s.users[1].online, true);
+  assert.equal(s.users[1].idle, false, "idle false when absent from payload");
+  s = S.applyEvent(s, { type: "presence.update", payload: { user_id: 1, online: true, status: "online", idle: true } });
+  assert.equal(s.users[1].idle, true, "idle propagated from event payload");
+  s = S.applyEvent(s, { type: "presence.update", payload: { user_id: 1, online: true, status: "online", idle: false } });
+  assert.equal(s.users[1].idle, false, "idle cleared by event payload");
 });
 
 test("applyEvent routes message.new and message.delete", () => {

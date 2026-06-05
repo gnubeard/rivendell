@@ -75,3 +75,51 @@ func TestHubPresenceAndBroadcast(t *testing.T) {
 	}
 	<-done
 }
+
+func TestHubSetIdle(t *testing.T) {
+	ready := make(chan struct{}, 1)
+	hub := NewHub(func(uid int64, online bool) {
+		if online {
+			ready <- struct{}{}
+		}
+	})
+
+	// No connection yet — SetIdle and IsIdle are both no-ops/false.
+	if hub.SetIdle(42, true) {
+		t.Fatal("SetIdle for disconnected user should return false")
+	}
+	if hub.IsIdle(42) {
+		t.Fatal("IsIdle should be false for disconnected user")
+	}
+
+	serverNC, clientNC := net.Pipe()
+	srv := newConn(serverNC)
+	done := make(chan struct{})
+	go func() { hub.Serve(srv, 42); close(done) }()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for connection")
+	}
+
+	if !hub.SetIdle(42, true) {
+		t.Fatal("SetIdle for connected user should return true")
+	}
+	if !hub.IsIdle(42) {
+		t.Fatal("IsIdle should be true after SetIdle(true)")
+	}
+	if !hub.SetIdle(42, false) {
+		t.Fatal("SetIdle(false) for connected user should return true")
+	}
+	if hub.IsIdle(42) {
+		t.Fatal("IsIdle should be false after SetIdle(false)")
+	}
+
+	// Set idle again then disconnect — flag must clear automatically.
+	hub.SetIdle(42, true)
+	clientNC.Close()
+	<-done
+	if hub.IsIdle(42) {
+		t.Fatal("idle flag must clear on disconnect")
+	}
+}
