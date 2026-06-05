@@ -399,8 +399,15 @@ function startRealtime() {
         renderChannels();
         renderDMs();
         // Membership may have changed (e.g. someone was invited) — re-scope the
-        // members panel if the event concerns the channel we're viewing.
-        if (evt.payload && evt.payload.id === state.activeChannelId) refreshActiveMembers();
+        // members panel if the event concerns the channel we're viewing. A topic
+        // edit by another mod also arrives here, so repaint the header (unless I'm
+        // mid-edit, to avoid clobbering my own input).
+        if (evt.payload && evt.payload.id === state.activeChannelId) {
+          if (!$("#channel-topic").querySelector("input")) {
+            renderChannelHeader(state.channels[state.activeChannelId]);
+          }
+          refreshActiveMembers();
+        }
       }
       if (evt.type === "member.remove") {
         const { channel_id, user_id } = evt.payload;
@@ -889,15 +896,84 @@ async function markActiveChannelRead() {
   }
 }
 
-async function loadChannel(id) {
-  const ch = state.channels[id];
+// isModPlus reports whether the current user is a moderator or admin.
+function isModPlus() {
+  return !!(state.me && (state.me.role === "admin" || state.me.role === "moderator"));
+}
+
+// renderChannelHeader paints the active channel's title + topic into the header.
+// For a real channel (not a DM) a moderator+ may click the topic to edit it inline;
+// the span advertises that and shows a prompt to add one when the topic is empty.
+function renderChannelHeader(ch) {
+  const topicEl = $("#channel-topic");
   if (ch && ch.is_dm) {
     $("#channel-title").textContent = "@ " + dmDisplayName(ch);
-    $("#channel-topic").textContent = "";
-  } else {
-    $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
-    $("#channel-topic").textContent = ch ? ch.topic : "";
+    topicEl.textContent = "";
+    topicEl.classList.remove("editable", "placeholder");
+    topicEl.removeAttribute("title");
+    return;
   }
+  $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
+  const canEdit = !!(ch && !ch.is_dm && isModPlus());
+  topicEl.classList.toggle("editable", canEdit);
+  if (canEdit) {
+    topicEl.textContent = ch.topic || "Add a topic…";
+    topicEl.classList.toggle("placeholder", !ch.topic);
+    topicEl.title = "Click to edit the channel topic";
+  } else {
+    topicEl.textContent = ch ? ch.topic : "";
+    topicEl.classList.remove("placeholder");
+    topicEl.removeAttribute("title");
+  }
+}
+
+// beginTopicEdit swaps the topic text for an input so a moderator+ can set the
+// active channel's topic in place (no popup). Enter or blur saves; Escape cancels.
+// The PATCH broadcasts channel.update, so everyone with access sees the new topic.
+function beginTopicEdit() {
+  const ch = state.channels[state.activeChannelId];
+  if (!ch || ch.is_dm || !isModPlus()) return;
+  const topicEl = $("#channel-topic");
+  if (topicEl.querySelector("input")) return; // already editing
+  const input = el("input", {
+    class: "topic-edit", type: "text", maxlength: "256",
+    placeholder: "Channel topic", value: ch.topic || "",
+  });
+  topicEl.textContent = "";
+  topicEl.classList.remove("placeholder");
+  topicEl.append(input);
+  input.focus();
+  input.select();
+  let settled = false; // guards the Enter→save→blur double-fire
+  const restore = () => {
+    if (settled) return;
+    settled = true;
+    renderChannelHeader(state.channels[state.activeChannelId]);
+  };
+  const save = async () => {
+    if (settled) return;
+    settled = true;
+    const next = input.value.trim();
+    if (next !== (ch.topic || "")) {
+      try {
+        const updated = await api.updateChannel(ch.id, { topic: next });
+        state = S.upsertChannel(state, updated);
+      } catch (ex) {
+        alert(ex.message);
+      }
+    }
+    renderChannelHeader(state.channels[state.activeChannelId]);
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); restore(); }
+  };
+  input.onblur = save;
+}
+
+async function loadChannel(id) {
+  const ch = state.channels[id];
+  renderChannelHeader(ch);
   // Invite + leave affordances only make sense for a real private channel
   // (not DMs/public).
   const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
@@ -1003,13 +1079,7 @@ async function jumpToMessage(channelId, messageId) {
     renderNotificationTotal();
     closeDrawers();
     const ch = state.channels[channelId];
-    if (ch && ch.is_dm) {
-      $("#channel-title").textContent = "@ " + dmDisplayName(ch);
-      $("#channel-topic").textContent = "";
-    } else {
-      $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
-      $("#channel-topic").textContent = ch ? ch.topic : "";
-    }
+    renderChannelHeader(ch);
     const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
     $("#invite-btn").hidden = !realPrivate;
     $("#leave-btn").hidden = !realPrivate;
@@ -1425,7 +1495,7 @@ let pickerTarget = { mode: "composer" };
 
 // A small set of common Unicode emoji offered alongside the instance's custom
 // emoji, so reactions aren't custom-only. These are literal graphemes (no image).
-const COMMON_EMOJI = ["👍", "❤️", "😂", "🎉", "🙌", "😮", "😢", "😡", "🙏", "🔥", "✅", "👀", "💯", "👋"];
+const COMMON_EMOJI = ["👍", "👎", "❤️", "😂", "😉", "😍", "🤔", "🎉", "🙌", "😮", "😢", "😡", "🙏", "🔥", "✅", "👀", "💯", "👋"];
 
 function emojiPickerOpen() {
   const p = $("#emoji-picker");
@@ -1853,7 +1923,6 @@ function wireControls() {
     closeDrawers(); // on mobile, get the sidebar drawer out from behind the modal
     $("#about-modal").hidden = false;
   };
-  $("#about-close").onclick = () => ($("#about-modal").hidden = true);
 
   // Update banner: reload to pick up the newer server build, or dismiss for now.
   $("#update-reload").onclick = () => location.reload();
@@ -1865,7 +1934,9 @@ function wireControls() {
   $("#leave-btn").onclick = leaveActiveChannel;
 
   $("#pins-btn").onclick = openPinsModal;
-  $("#pins-close").onclick = () => ($("#pins-modal").hidden = true);
+
+  // Moderator+ click the channel topic to edit it inline (guarded inside).
+  $("#channel-topic").onclick = beginTopicEdit;
 
   $("#emoji-btn").onclick = (e) => { e.stopPropagation(); toggleEmojiPicker(); };
   // Dismiss the emoji picker on any click outside it (the button toggles itself).
@@ -1891,6 +1962,14 @@ function wireControls() {
 
   for (const m of document.querySelectorAll(".modal"))
     m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
+
+  // Desktop: Escape closes the top-most open modal (mobile dismisses by tapping the
+  // backdrop). Closing just the last-opened one lets a stacked flow unwind a step.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const open = [...document.querySelectorAll(".modal")].filter((m) => !m.hidden);
+    if (open.length) open[open.length - 1].hidden = true;
+  });
 
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
   // toggled from the header; they share one tap-to-close backdrop.

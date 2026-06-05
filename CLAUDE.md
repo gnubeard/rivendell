@@ -255,6 +255,17 @@ These were the requested next-work items; all are now implemented and tested.
   even when the pinned message is **outside the loaded window** (don't regress this
   to a `findMessage` lookup). Search rows stay text-only (the whole row is
   click-to-jump).
+- **Channel topics** are editable inline by **moderator+** (the backend already
+  existed: `PATCH /api/channels/{id}`, mod-gated, broadcasts `channel.update`).
+  `renderChannelHeader()` is the single place that paints the header title/topic
+  (both `loadChannel` and `selectChannel` call it — don't re-inline that paint).
+  Clicking the topic span opens an inline `<input>` (`beginTopicEdit`; Enter/blur
+  save, Esc cancel). Note the realtime gotcha: a `channel.update` for the **active**
+  channel must repaint the header — for a while it only re-rendered the channel
+  *list*, so a topic change wouldn't show live; the handler now calls
+  `renderChannelHeader` too, but **skips it while an edit input is open** so it
+  doesn't clobber your own typing. Modals: Esc closes the top-most open one; the
+  About/Pinned modals have no × (backdrop-tap dismisses on mobile).
 
 When in doubt on UI, favor clarity over polish — aesthetics are explicitly
 secondary to "it works" for this draft. Keep changes small and tested.
