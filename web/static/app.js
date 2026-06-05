@@ -313,7 +313,6 @@ async function enterApp() {
   renderMembers();
   renderAdminVisibility();
   renderNotificationTotal();
-  refreshNotifUI();
   if (state.activeChannelId) {
     await loadChannel(state.activeChannelId);
     markActiveChannelRead();
@@ -1025,13 +1024,22 @@ function wireControls() {
   $("#me-status-text").onclick = openProfileModal;
   $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
 
-  // Desktop-notification opt-in lives in two synced places: a discoverable bell
-  // in the channel header (one click, no nagging popup) and the detailed toggle
-  // in the profile modal. Both route through toggleNotifications.
+  // Desktop-notification opt-in. Turning it on requests the OS permission;
+  // turning it off just drops the in-app preference (the OS grant is sticky and
+  // only the browser can revoke it).
   const notifCb = $("#notif-enable");
-  if (notifCb) notifCb.onchange = () => toggleNotifications(notifCb.checked);
-  const notifBtn = $("#notif-btn");
-  if (notifBtn) notifBtn.onclick = () => toggleNotifications(!notificationsOn());
+  if (notifCb) {
+    notifCb.onchange = async () => {
+      if (notifCb.checked) {
+        const perm = await requestNotificationPermission();
+        notifEnabled = perm === "granted";
+      } else {
+        notifEnabled = false;
+      }
+      saveNotifPref();
+      renderNotifControl();
+    };
+  }
   $("#profile-form").onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#profile-error");
@@ -1198,7 +1206,7 @@ function openProfileModal() {
   $("#profile-error").textContent = "";
   $("#profile-display").value = me.display_name || "";
   $("#profile-status-text").value = me.status_text || "";
-  refreshNotifUI();
+  renderNotifControl();
   $("#profile-modal").hidden = false;
   $("#profile-display").focus();
 }
@@ -1342,51 +1350,6 @@ function firePing(evt, ch) {
     icon: author && author.has_avatar ? api.avatarURL(author.id) : undefined,
     onclick: () => selectChannel(evt.payload.channel_id),
   });
-}
-
-// notificationsOn reports the *effective* on-state: opted in AND the OS granted
-// permission (either alone isn't enough to actually raise a notification).
-function notificationsOn() {
-  return notifEnabled && currentPermission() === "granted";
-}
-
-// toggleNotifications turns desktop notifications on or off. Turning on requests
-// the OS permission — the click that calls this is the required user gesture; a
-// denial simply leaves them off. Shared by the header bell and the profile
-// checkbox so the two controls never disagree.
-async function toggleNotifications(turnOn) {
-  if (turnOn) {
-    const perm = await requestNotificationPermission();
-    notifEnabled = perm === "granted";
-  } else {
-    notifEnabled = false;
-  }
-  saveNotifPref();
-  refreshNotifUI();
-}
-
-// refreshNotifUI re-renders both notification controls so they stay in sync.
-function refreshNotifUI() {
-  renderNotifButton();
-  renderNotifControl();
-}
-
-// renderNotifButton reflects state into the header bell: a ringing bell when on,
-// a struck bell otherwise. Hidden entirely when the browser lacks the API.
-function renderNotifButton() {
-  const btn = $("#notif-btn");
-  if (!btn) return;
-  if (!notificationsSupported()) {
-    btn.hidden = true;
-    return;
-  }
-  btn.hidden = false;
-  const on = notificationsOn();
-  btn.textContent = on ? "🔔" : "🔕";
-  btn.classList.toggle("active", on);
-  if (on) btn.title = "Desktop notifications on — click to turn off";
-  else if (currentPermission() === "denied") btn.title = "Notifications blocked in your browser settings";
-  else btn.title = "Turn on desktop notifications (DMs & @-mentions)";
 }
 
 // renderNotifControl reflects the desktop-notification opt-in into the profile
