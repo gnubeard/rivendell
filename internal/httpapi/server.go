@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	// Channel membership (private channels; invites require membership/mod+).
 	mux.HandleFunc("GET /api/channels/{id}/members", s.auth(s.handleListChannelMembers))
 	mux.HandleFunc("POST /api/channels/{id}/members", s.auth(s.handleAddChannelMember))
+	mux.HandleFunc("DELETE /api/channels/{id}/members/{userId}", s.auth(s.handleRemoveChannelMember))
 
 	// Direct messages (a DM is a two-member private channel; any user may open one).
 	mux.HandleFunc("POST /api/dms", s.auth(s.handleCreateDM))
@@ -75,8 +76,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/channels/{id}/pins", s.auth(s.handleListPinnedMessages))
 	mux.HandleFunc("PATCH /api/messages/{id}", s.auth(s.handleEditMessage))
 	mux.HandleFunc("DELETE /api/messages/{id}", s.auth(s.handleDeleteMessage))
-	mux.HandleFunc("PUT /api/messages/{id}/pin", s.requireRole(store.RoleModerator, s.handlePinMessage))
-	mux.HandleFunc("DELETE /api/messages/{id}/pin", s.requireRole(store.RoleModerator, s.handleUnpinMessage))
+	// Pin/unpin: moderator+ in normal channels, but either participant in a DM.
+	// The per-channel rule lives in the handler, so the route only needs auth.
+	mux.HandleFunc("PUT /api/messages/{id}/pin", s.auth(s.handlePinMessage))
+	mux.HandleFunc("DELETE /api/messages/{id}/pin", s.auth(s.handleUnpinMessage))
 
 	// Durable unread / notifications.
 	mux.HandleFunc("GET /api/unread", s.auth(s.handleUnread))

@@ -258,15 +258,21 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, id := range s.hub.OnlineUserIDs() {
 		online[id] = true
 	}
+	// Ordinary users don't see disabled accounts in the roster; admins still see
+	// everyone, since the admin panel reuses this endpoint to re-enable them.
+	showDisabled := roleRank(userFrom(r.Context()).Role) >= roleRank(store.RoleAdmin)
 	type userWithPresence struct {
 		store.User
 		Online bool `json:"online"`
 	}
-	out := make([]userWithPresence, len(users))
-	for i, u := range users {
+	out := make([]userWithPresence, 0, len(users))
+	for _, u := range users {
+		if !u.IsActive && !showDisabled {
+			continue
+		}
 		// Invisible users (chosen status "offline") read as offline even while
 		// they hold a connection — matching the presence.update broadcasts.
-		out[i] = userWithPresence{User: u, Online: online[u.ID] && u.Status != "offline"}
+		out = append(out, userWithPresence{User: u, Online: online[u.ID] && u.Status != "offline"})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -536,6 +542,56 @@ func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) 
 	// member's client learns the channel exists in realtime.
 	s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
 	writeJSON(w, http.StatusOK, target)
+}
+
+// handleRemoveChannelMember removes a user from a private channel. A user may
+// always remove themselves (leave); removing someone else requires moderator+.
+// Public channels have no membership and DMs are fixed at two participants, so
+// both are refused.
+func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	target, err := pathInt(r, "userId")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !ch.IsPrivate {
+		writeErr(w, http.StatusBadRequest, "public channels have no membership to manage")
+		return
+	}
+	if ch.IsDM {
+		writeErr(w, http.StatusForbidden, "a DM is fixed at its two participants")
+		return
+	}
+	// Self-removal (leave) is always allowed; removing others needs moderator+.
+	if target != u.ID && roleRank(u.Role) < roleRank(store.RoleModerator) {
+		writeErr(w, http.StatusForbidden, "you can only remove yourself from this channel")
+		return
+	}
+	if err := s.st.RemoveChannelMember(r.Context(), id, target); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not a member of this channel")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not remove member")
+		return
+	}
+	// The removed user's clients should drop the channel; reuse channel.archive
+	// (the client folds it into removeChannel), scoped to just that user.
+	s.broadcast("channel.archive", map[string]int64{"id": id}, map[int64]bool{target: true})
+	// Remaining members may be viewing the roster — nudge them to refresh it.
+	s.broadcast("channel.update", ch, s.audienceForChannel(r.Context(), ch))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 // --- messages ------------------------------------------------------------
@@ -820,6 +876,12 @@ func (s *Server) setMessagePinned(w http.ResponseWriter, r *http.Request, pinned
 	}
 	if !s.canAccessChannel(r, ch, u) {
 		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	// In a DM, either participant may pin (canAccessChannel already proved
+	// membership). Everywhere else pinning is a moderator+ action.
+	if !ch.IsDM && roleRank(u.Role) < roleRank(store.RoleModerator) {
+		writeErr(w, http.StatusForbidden, "only moderators can pin in this channel")
 		return
 	}
 	updated, err := s.st.SetMessagePinned(r.Context(), id, u.ID, pinned)

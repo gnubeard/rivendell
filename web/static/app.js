@@ -24,6 +24,10 @@ let notifEnabled = loadNotifPref();
 // Highest message id we've told the server we've read, per channel — dedupes the
 // mark-read POST so refocusing a tab doesn't spam the endpoint.
 const lastMarkedRead = {};
+// Per-user avatar cache-bust token. The avatar URL is otherwise stable and
+// cached, so when someone changes their avatar we bump their token to force a
+// re-fetch (the server broadcasts user.update on avatar change).
+const avatarVersion = {};
 
 function loadNotifPref() {
   try {
@@ -345,9 +349,15 @@ function startRealtime() {
       state = S.applyEvent(state, evt);
       // Targeted re-renders based on event type.
       if (evt.type.startsWith("presence") || evt.type === "user.update") {
+        if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
+          // Their avatar may have changed — force a re-fetch on next render.
+          avatarVersion[evt.payload.id] = Date.now();
+        }
         renderMembers();
         renderMe();
         renderDMs(); // a DM row shows the other participant's name + presence
+        // Author display name / avatar in the open message list may have changed.
+        if (evt.type === "user.update") renderMessages();
       }
       if (evt.type.startsWith("channel")) {
         renderChannels();
@@ -460,7 +470,7 @@ function renderMe() {
   const me = state.users[state.me.id] || state.me;
   $("#me-name").textContent = me.display_name;
   $("#me-status-text").textContent = me.status_text || "";
-  $("#me-avatar").style.backgroundImage = me.has_avatar ? `url(${api.avatarURL(me.id)}?t=${Date.now()})` : "";
+  $("#me-avatar").style.backgroundImage = me.has_avatar ? `url(${avatarSrc(me.id)})` : "";
   $("#me-avatar").textContent = me.has_avatar ? "" : initials(me.display_name);
   $("#status-select").value = me.status;
 }
@@ -540,8 +550,11 @@ function renderDMs() {
 function renderMembers() {
   const list = $("#member-list");
   list.innerHTML = "";
+  // Ordinary users don't see disabled accounts (matches the server roster);
+  // admins keep seeing them so they can manage them.
+  const isAdmin = state.me.role === "admin";
+  let users = Object.values(state.users).filter((u) => isAdmin || u.is_active !== false);
   // In a private channel/DM, restrict the panel to that channel's members.
-  let users = Object.values(state.users);
   if (activeMemberIds) users = users.filter((u) => activeMemberIds.has(u.id));
   users.sort((a, b) => {
     if (!!b.online !== !!a.online) return b.online ? 1 : -1;
@@ -606,6 +619,25 @@ async function deleteChannel(id) {
   if (!confirm(`Delete #${ch.name}? It will be removed for everyone.`)) return;
   try {
     await api.archiveChannel(id);
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
+// leaveActiveChannel removes the current user from the active private channel.
+// The server also broadcasts a self-scoped channel.archive, but we drop it
+// locally too so the UI updates instantly even if the socket is down.
+async function leaveActiveChannel() {
+  const ch = state.channels[state.activeChannelId];
+  if (!ch || !ch.is_private || ch.is_dm) return;
+  if (!confirm(`Leave #${ch.name}? You'll need an invite to rejoin.`)) return;
+  try {
+    await api.removeChannelMember(ch.id, state.me.id);
+    state = S.removeChannel(state, ch.id); // also re-points activeChannelId
+    renderChannels();
+    renderDMs();
+    renderNotificationTotal();
+    if (state.activeChannelId) await loadChannel(state.activeChannelId);
   } catch (ex) {
     alert(ex.message);
   }
@@ -710,9 +742,15 @@ async function loadChannel(id) {
     $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
     $("#channel-topic").textContent = ch ? ch.topic : "";
   }
-  // Invite affordance only makes sense for a real private channel (not DMs/public).
-  $("#invite-btn").hidden = !(ch && ch.is_private && !ch.is_dm);
+  // Invite + leave affordances only make sense for a real private channel
+  // (not DMs/public).
+  const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
+  $("#invite-btn").hidden = !realPrivate;
+  $("#leave-btn").hidden = !realPrivate;
   $("#pins-btn").hidden = !ch;
+  // A DM is 1:1 — there's no roster worth showing, so collapse the members
+  // column and hide its toggle (CSS keys off body.dm-active).
+  document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
   await refreshActiveMembers();
   loadingOlder = false;
   try {
@@ -775,6 +813,10 @@ function renderMessages() {
   wrap.innerHTML = "";
   const msgs = state.messages[state.activeChannelId] || [];
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  // In a DM, either participant may pin (mirrors the server rule); elsewhere
+  // pinning is moderator+.
+  const activeCh = state.channels[state.activeChannelId];
+  const canPin = isMod || !!(activeCh && activeCh.is_dm);
   let lastUser = null;
   let lastTime = 0;
   let i = 0;
@@ -807,12 +849,13 @@ function renderMessages() {
     const body = el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
     const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
 
-    const canManage = m.user_id === state.me.id || isMod;
-    const actions = canManage
+    const isOwn = m.user_id === state.me.id;
+    const canDelete = isOwn || isMod; // non-mods can only delete their own
+    const actions = isOwn || canPin || canDelete
       ? el("div", { class: "msg-actions" },
-          m.user_id === state.me.id ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
-          isMod ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
-          el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete"))
+          isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
+          canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
+          canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null)
       : null;
     const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
     let cls = "msg";
@@ -823,7 +866,7 @@ function renderMessages() {
       wrap.append(el("div", { class: cls + " grouped" }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, actions)));
     } else {
       const avatar = author && author.has_avatar
-        ? el("div", { class: "msg-avatar", style: `background-image:url(${api.avatarURL(author.id)})` })
+        ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
         : el("div", { class: "msg-avatar" }, initials(author ? author.display_name : "?"));
       wrap.append(
         el("div", { class: cls },
@@ -928,6 +971,7 @@ async function refreshPins() {
     return;
   }
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  const canPin = isMod || ch.is_dm; // DM participants may unpin too
   for (const m of pins) {
     const author = state.users[m.user_id];
     list.append(
@@ -935,7 +979,7 @@ async function refreshPins() {
         el("div", { class: "pin-head" },
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
           el("span", { class: "msg-time" }, formatTime(m.created_at)),
-          isMod
+          canPin
             ? el("button", {
                 class: "link", onclick: async () => {
                   try { await api.unpinMessage(m.id); await refreshPins(); } catch (ex) { alert(ex.message); }
@@ -992,9 +1036,11 @@ function wireControls() {
     try {
       await api.uploadAvatar(file);
       const me = await api.me();
+      avatarVersion[me.id] = Date.now(); // bust the cache so the new avatar shows now
       state = S.upsertUser(state, me);
       state = S.setMe(state, me);
       renderMe();
+      renderMessages(); // my own messages in view should pick up the new avatar
     } catch (ex) {
       alert(ex.message);
     }
@@ -1031,6 +1077,8 @@ function wireControls() {
 
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
+
+  $("#leave-btn").onclick = leaveActiveChannel;
 
   $("#pins-btn").onclick = openPinsModal;
   $("#pins-close").onclick = () => ($("#pins-modal").hidden = true);
@@ -1347,6 +1395,14 @@ function presenceClass(u) {
   if (!u.online) return "offline";
   if (u.status === "away" || u.status === "dnd") return u.status;
   return "online";
+}
+
+// avatarSrc returns the avatar URL for a user, with a cache-bust token appended
+// when we know their avatar changed this session (see avatarVersion).
+function avatarSrc(userId) {
+  const v = avatarVersion[userId];
+  const base = api.avatarURL(userId);
+  return v ? `${base}?v=${v}` : base;
 }
 
 function initials(name) {

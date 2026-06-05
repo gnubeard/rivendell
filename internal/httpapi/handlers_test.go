@@ -1068,6 +1068,147 @@ func TestNewUserSeededCaughtUp(t *testing.T) {
 	}
 }
 
+// TestDisabledUsersHiddenFromOrdinaryRoster confirms a disabled account drops out
+// of the roster ordinary users see, while admins still see it (to re-enable it).
+func TestDisabledUsersHiddenFromOrdinaryRoster(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	_, ghost := seedMember(t, ts, st, "ghost", "Ghost", store.RoleMember)
+
+	// Admin disables ghost.
+	resp, body := doJSON(t, adminC, "PUT", ts.URL+"/api/admin/users/"+itoa(ghost.ID)+"/active",
+		map[string]bool{"active": false})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("disable ghost: %d %s", resp.StatusCode, body)
+	}
+
+	hasGhost := func(c *http.Client) bool {
+		_, b := doJSON(t, c, "GET", ts.URL+"/api/users", nil)
+		var users []store.User
+		json.Unmarshal(b, &users)
+		for _, u := range users {
+			if u.ID == ghost.ID {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasGhost(aliceC) {
+		t.Fatalf("ordinary user should not see a disabled account in the roster")
+	}
+	if !hasGhost(adminC) {
+		t.Fatalf("admin should still see the disabled account")
+	}
+}
+
+// TestLeaveAndRemovePrivateChannel covers leaving a private channel (self) and
+// the moderator-removes-other path, plus the guards (public 400, DM 403,
+// non-member 404, removing someone else as a non-mod 403).
+func TestLeaveAndRemovePrivateChannel(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, admin := seedAdmin(t, ts, st)
+	daveC, dave := seedMember(t, ts, st, "dave", "Dave", store.RoleMember)
+	mollyC, _ := seedMember(t, ts, st, "molly", "Molly", store.RoleModerator)
+
+	// Admin creates a private channel (auto-joined) and invites Dave.
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "secret", "is_private": true})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+	doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members", map[string]int64{"user_id": dave.ID})
+
+	// A non-member non-mod (Molly isn't in the channel) can't remove someone.
+	resp, _ := doJSON(t, daveC, "DELETE", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members/"+itoa(admin.ID), nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member removing another should be 403, got %d", resp.StatusCode)
+	}
+
+	// Dave leaves (self-removal).
+	resp, lb := doJSON(t, daveC, "DELETE", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members/"+itoa(dave.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("leave: %d %s", resp.StatusCode, lb)
+	}
+	// Now Dave can't read it and it's gone from his list.
+	resp, _ = doJSON(t, daveC, "GET", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("after leaving, reading should be 403, got %d", resp.StatusCode)
+	}
+	// Leaving again -> 404 (not a member).
+	resp, _ = doJSON(t, daveC, "DELETE", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members/"+itoa(dave.ID), nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("leaving twice should be 404, got %d", resp.StatusCode)
+	}
+
+	// A moderator may remove another member: re-add Dave, then Molly removes him.
+	// (Molly must be a member to act here in spirit, but mod+ is allowed regardless.)
+	doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members", map[string]int64{"user_id": dave.ID})
+	resp, rb := doJSON(t, mollyC, "DELETE", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members/"+itoa(dave.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("moderator remove: %d %s", resp.StatusCode, rb)
+	}
+
+	// Public channels have no membership to leave (400).
+	_, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var pub store.Channel
+	json.Unmarshal(body, &pub)
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/channels/"+itoa(pub.ID)+"/members/"+itoa(admin.ID), nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("leaving a public channel should be 400, got %d", resp.StatusCode)
+	}
+
+	// You can't leave a DM via this endpoint (403).
+	_, body = doJSON(t, adminC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": dave.ID})
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/channels/"+itoa(dm.ID)+"/members/"+itoa(admin.ID), nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("leaving a DM should be 403, got %d", resp.StatusCode)
+	}
+}
+
+// TestDMPinByParticipant confirms either DM participant (not just moderators) can
+// pin/unpin, while pinning in a normal channel still requires moderator+.
+func TestDMPinByParticipant(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, bob := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	// Alice opens a DM with Bob and posts.
+	_, body := doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": bob.ID})
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	msg := postMessage(t, aliceC, ts, dm.ID, "pin me")
+
+	// Bob — a plain member, but a participant — can pin Alice's message.
+	resp, pb := doJSON(t, bobC, "PUT", ts.URL+"/api/messages/"+itoa(msg.ID)+"/pin", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DM participant pin: %d %s", resp.StatusCode, pb)
+	}
+	var pinned store.Message
+	json.Unmarshal(pb, &pinned)
+	if pinned.PinnedAt == nil {
+		t.Fatalf("message should be pinned: %s", pb)
+	}
+	// And unpin.
+	resp, _ = doJSON(t, bobC, "DELETE", ts.URL+"/api/messages/"+itoa(msg.ID)+"/pin", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DM participant unpin: %d", resp.StatusCode)
+	}
+
+	// In a normal channel, a plain member still cannot pin.
+	adminC, _ := seedMember(t, ts, st, "boss", "Boss", store.RoleAdmin)
+	_, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var pub store.Channel
+	json.Unmarshal(body, &pub)
+	pubMsg := postMessage(t, adminC, ts, pub.ID, "no touchy")
+	resp, _ = doJSON(t, bobC, "PUT", ts.URL+"/api/messages/"+itoa(pubMsg.ID)+"/pin", nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member pinning in a normal channel should be 403, got %d", resp.StatusCode)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

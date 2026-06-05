@@ -207,6 +207,13 @@ button.primary:hover { filter: brightness(1.08); }
 
 /* --- members --- */
 .members { background: var(--bg-2); border-left: 1px solid var(--border); padding: 1rem; overflow-y: auto; }
+/* DMs are 1:1 — no roster to show. Hide the members toggle at every width; on
+   desktop also collapse the members column so it leaves no empty gap. */
+body.dm-active #members-toggle { display: none; }
+@media (min-width: 721px) {
+  body.dm-active .app { grid-template-columns: 240px 1fr 0; }
+  body.dm-active .members { display: none; }
+}
 .members-head { display: flex; align-items: center; justify-content: space-between; }
 .member-list { list-style: none; margin: 0.6rem 0 0; padding: 0; }
 /* All rows share the same negative margin + padding so the clickable hover

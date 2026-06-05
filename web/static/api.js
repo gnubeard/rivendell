@@ -63,6 +63,7 @@ export const api = {
   archiveChannel: (id) => req("DELETE", `/api/channels/${id}`),
   channelMembers: (id) => req("GET", `/api/channels/${id}/members`),
   addChannelMember: (id, userId) => req("POST", `/api/channels/${id}/members`, { user_id: userId }),
+  removeChannelMember: (id, userId) => req("DELETE", `/api/channels/${id}/members/${userId}`),
 
   // direct messages (create-or-find the two-member private channel)
   createDM: (userId) => req("POST", "/api/dms", { user_id: userId }),

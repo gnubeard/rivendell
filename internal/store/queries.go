@@ -360,6 +360,13 @@ func (s *Store) AddChannelMember(ctx context.Context, channelID, userID int64) e
 		 ON CONFLICT DO NOTHING`, channelID, userID)
 }
 
+// RemoveChannelMember drops a user's membership in a channel. Returns
+// ErrNotFound if they weren't a member.
+func (s *Store) RemoveChannelMember(ctx context.Context, channelID, userID int64) error {
+	return s.exec(ctx, `DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
+		channelID, userID)
+}
+
 func (s *Store) IsChannelMember(ctx context.Context, channelID, userID int64) (bool, error) {
 	var ok bool
 	err := s.db.QueryRowContext(ctx,
