@@ -186,7 +186,6 @@ func (s *Store) EmojiExists(ctx context.Context, shortcode string) (bool, error)
 	return ok, err
 }
 
-// CountAdmins is used to guard against demoting/deactivating the last admin.
 // ListPrivilegedUserIDs returns the ids of active moderators and admins. They
 // hold a read/write bypass on private (non-DM) channels even when they aren't
 // members, so realtime audiences for those channels include them — keeping the
@@ -209,6 +208,7 @@ func (s *Store) ListPrivilegedUserIDs(ctx context.Context) ([]int64, error) {
 	return ids, rows.Err()
 }
 
+// CountAdmins is used to guard against demoting/deactivating the last admin.
 func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,

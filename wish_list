@@ -94,6 +94,16 @@
     topic paint that loadChannel + selectChannel had copy-pasted.
   - Bonus: common-Unicode reaction palette grown 14→18 (added 👎 😉 😍 🤔) so it
     rows up evenly in the picker.
+- Inline message editing — v1.0.24. Replaced the prompt() with an in-place editor:
+  clicking "edit" swaps the message body for a textarea (Enter saves, Shift+Enter
+  newline, Esc cancels; empty/unchanged just cancels — delete still removes).
+  renderMessages is the source of truth — a message whose id == editingMessageId
+  draws the editor (seeded from editDraft) instead of body+reactions+actions — so
+  an incoming message event re-rendering the whole list can't blow the editor away:
+  the draft + caret + focus are captured before innerHTML reset and restored after
+  (focus only re-grabbed if it was focused, so a background re-render never steals
+  it). Switching channels abandons the edit; a save failure keeps the editor open
+  so the draft isn't lost.
 
 ## Backlog (sorted by effort)
 
@@ -107,8 +117,6 @@
 - Messages should render linked images inline. Messages consisting of just a link to an image should hide the URL and only render that image. (I don't have interest in running a CDN at this time, but this will allow memes and gifs.)
 
 - Links should render [text](url). Bonus points: pasting a URL onto selected text automatically formats it this way. (Oh, and btw, underscores should never mangle URLs.)
-
-- Edit box should be inline rather than cheap-feeling popup
 
 Piece de resistance:
 - A Claude agent running on this box, wired into the chat, so work requests can

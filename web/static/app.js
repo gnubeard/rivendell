@@ -62,6 +62,13 @@ let pinsRefreshSeq = 0; // last-writer-wins token for concurrent refreshPins() c
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
 const viewingHistory = new Set(); // channelIds whose loaded bottom isn't the live tail
 let flashMessageId = null; // id of a jumped-to message to highlight; survives re-renders
+// Inline message editing. renderMessages is the source of truth: when a message's
+// id == editingMessageId it draws an inline editor (not the body+actions) seeded
+// from editDraft. editDraft + caret are captured/restored across re-renders so an
+// incoming message event mid-edit can't blow the editor away (see renderMessages).
+let editingMessageId = null;  // id of the message being edited inline, or null
+let editDraft = "";           // current text of the inline editor, preserved on re-render
+let editFocusPending = false; // focus the editor on the next render (it just opened)
 
 // Closed DMs: a per-browser set of DM channel ids the user has hidden from the
 // sidebar. The channel and its history are untouched server-side — closing only
@@ -854,6 +861,10 @@ async function refreshActiveMembers() {
 }
 
 async function selectChannel(id) {
+  // Leaving a channel abandons any inline edit in progress.
+  editingMessageId = null;
+  editDraft = "";
+  editFocusPending = false;
   state = S.setActiveChannel(state, id);
   try {
     localStorage.setItem("rivendell.activeChannel", id);
@@ -1212,6 +1223,16 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   // they just loaded. The caller restores/sets the scroll position itself.
   const atBottom = !holdPosition && (forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80);
   const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
+  // Capture an in-progress inline edit before innerHTML wipes the textarea, so a
+  // re-render triggered by an incoming event keeps the draft, caret, and focus.
+  let editRestore = null;
+  if (editingMessageId != null) {
+    const live = wrap.querySelector(".msg-edit-input");
+    if (live) {
+      editDraft = live.value;
+      editRestore = { focused: document.activeElement === live, start: live.selectionStart, end: live.selectionEnd };
+    }
+  }
   wrap.innerHTML = "";
   const msgs = state.messages[state.activeChannelId] || [];
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
@@ -1256,7 +1277,10 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     lastUser = m.user_id;
     lastTime = t;
 
-    const body = el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+    const editing = m.id === editingMessageId;
+    const body = editing
+      ? editorFor(m)
+      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
     const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
 
     const isOwn = m.user_id === state.me.id;
@@ -1269,7 +1293,8 @@ function renderMessages(forceBottom = false, holdPosition = false) {
       isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
       canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
       canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null);
-    const reactions = reactionsRow(m);
+    const reactions = editing ? null : reactionsRow(m);
+    const rowActions = editing ? null : actions;
     const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
     let cls = "msg";
     if (m.pinned_at) cls += " pinned";
@@ -1284,7 +1309,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }, formatTime(m.created_at));
 
     if (grouped) {
-      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, reactions, actions)));
+      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, reactions, rowActions)));
     } else {
       const avatar = author && author.has_avatar
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
@@ -1300,7 +1325,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
             ),
             body,
             reactions,
-            actions
+            rowActions
           )
         )
       );
@@ -1318,6 +1343,24 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   // reader's position (loadOlderMessages adjusts further for prepended history).
   if (atBottom) scrollToBottom(wrap);
   else wrap.scrollTop = prevTop;
+  // Re-establish the inline editor's size and (if it was focused, or just opened)
+  // its focus + caret after the rebuild. If the edited message is gone (e.g. a mod
+  // deleted it mid-edit), drop the pending-focus flag.
+  if (editingMessageId != null) {
+    const ta = wrap.querySelector(".msg-edit-input");
+    if (ta) {
+      autoGrowEdit(ta);
+      if (editFocusPending) {
+        ta.focus();
+        const end = ta.value.length;
+        ta.setSelectionRange(end, end);
+      } else if (editRestore && editRestore.focused) {
+        ta.focus();
+        ta.setSelectionRange(editRestore.start, editRestore.end);
+      }
+    }
+    editFocusPending = false;
+  }
 }
 
 // --- composer + message actions -----------------------------------------
@@ -1591,13 +1634,64 @@ function insertIntoComposer(token) {
   input.dispatchEvent(new Event("input"));
 }
 
-async function startEdit(m) {
-  const next = prompt("Edit message:", m.content);
-  if (next == null || next === m.content) return;
+// autoGrowEdit sizes the inline-edit textarea to its content (capped by CSS).
+function autoGrowEdit(ta) {
+  ta.style.height = "auto";
+  ta.style.height = ta.scrollHeight + "px";
+}
+
+// editorFor builds the inline editor that replaces a message's body while editing.
+// Enter saves, Shift+Enter inserts a newline, Escape cancels — mirroring the
+// composer. Typing updates editDraft so the text survives re-renders.
+function editorFor(m) {
+  const ta = el("textarea", { class: "msg-edit-input", rows: "1", "aria-label": "Edit message" });
+  ta.value = editDraft;
+  ta.addEventListener("input", () => { editDraft = ta.value; autoGrowEdit(ta); });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEdit(m); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelEdit(); }
+  });
+  return el("div", { class: "msg-edit" },
+    ta,
+    el("div", { class: "msg-edit-controls" },
+      el("button", { class: "link", onclick: () => commitEdit(m) }, "save"),
+      el("button", { class: "link", onclick: cancelEdit }, "cancel"),
+      el("span", { class: "msg-edit-hint" }, "Enter to save · Esc to cancel")));
+}
+
+// startEdit opens the inline editor on a message (own, non-deleted). renderMessages
+// then draws the editor in place and focuses it (editFocusPending).
+function startEdit(m) {
+  if (m.deleted_at) return;
+  editingMessageId = m.id;
+  editDraft = m.content;
+  editFocusPending = true;
+  renderMessages();
+}
+
+// cancelEdit discards the inline edit and repaints the message normally.
+function cancelEdit() {
+  editingMessageId = null;
+  editDraft = "";
+  editFocusPending = false;
+  renderMessages();
+}
+
+// commitEdit saves the inline edit. An empty or unchanged draft just cancels (use
+// delete to remove a message). On failure the editor stays open so the draft isn't
+// lost; on success the message.update broadcast re-renders with the new content.
+async function commitEdit(m) {
+  const next = editDraft.trim();
+  if (!next || next === m.content.trim()) { cancelEdit(); return; }
   try {
     await api.editMessage(m.id, next);
+    editingMessageId = null;
+    editDraft = "";
+    renderMessages();
   } catch (ex) {
     alert(ex.message);
+    editFocusPending = true; // keep the editor and restore focus for a retry
+    renderMessages();
   }
 }
 

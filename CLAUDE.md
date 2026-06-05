@@ -266,6 +266,16 @@ These were the requested next-work items; all are now implemented and tested.
   `renderChannelHeader` too, but **skips it while an edit input is open** so it
   doesn't clobber your own typing. Modals: Esc closes the top-most open one; the
   About/Pinned modals have no × (backdrop-tap dismisses on mobile).
+- **Inline message editing** replaces the old `prompt()`. The invariant: `render­Messages`
+  is the source of truth — a message whose id == `editingMessageId` draws the inline
+  editor (seeded from `editDraft`) instead of body/reactions/actions. Because the
+  whole list re-renders on every message event, the editor would be destroyed mid-
+  edit; `renderMessages` therefore **captures the live draft + caret + focus before
+  `innerHTML` reset and restores them after** (re-grabbing focus only if it was
+  focused, so a background re-render never steals the caret). Don't "simplify" this
+  to a DOM node it tries to preserve across renders — drive it from state. Enter
+  saves / Shift+Enter newline / Esc cancels; empty-or-unchanged cancels (delete
+  removes); channel switch abandons the edit; a save error keeps the editor open.
 
 When in doubt on UI, favor clarity over polish — aesthetics are explicitly
 secondary to "it works" for this draft. Keep changes small and tested.

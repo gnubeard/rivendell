@@ -220,6 +220,12 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-actions { display: none; gap: 0.6rem; margin-top: 0.15rem; pointer-events: none; }
 .msg:hover .msg-actions { display: flex; animation: msg-actions-activate 0s 300ms forwards; }
 @keyframes msg-actions-activate { to { pointer-events: auto; } }
+/* Inline message editor (replaces the body while editing your own message). */
+.msg-edit { margin-top: 0.15rem; }
+.msg-edit-input { width: 100%; resize: none; max-height: 200px; line-height: 1.4; padding: 0.5rem 0.6rem; background: var(--bg-3); border: 1px solid var(--accent-dim); border-radius: var(--radius); color: var(--text); font: inherit; }
+.msg-edit-input:focus { outline: none; border-color: var(--accent); }
+.msg-edit-controls { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
+.msg-edit-hint { color: var(--text-faint); font-size: 0.72rem; }
 .msg.pinned { background: rgba(110, 168, 254, 0.06); border-radius: 6px; }
 .msg.mentioned { background: rgba(224, 164, 88, 0.09); border-radius: 6px; box-shadow: inset 2px 0 0 var(--away); }
 .mention { color: var(--accent); background: rgba(110, 168, 254, 0.14); border-radius: 4px; padding: 0 0.15em; }
