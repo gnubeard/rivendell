@@ -22,16 +22,21 @@ with a vanilla-JS web client and no frontend dependencies.
 
 ## Features
 
-- Public and private channels, direct messages
+- Public and private channels (with topics), direct messages
 - Roles: admin / moderator / member
 - Realtime messaging over WebSocket (hand-rolled RFC 6455)
 - Edit and soft-delete messages, pinned messages, scrollback with keyset pagination
-- Presence and status (online / away / do not disturb / invisible)
-- Unread indicators with DM chime
+- Emoji reactions, with instance-wide custom `:shortcode:` emoji
+- Full-text message search, scoped to your accessible channels
+- @-mentions with inline autocomplete, and live typing indicators
+- Presence and status (online / away / do not disturb / invisible, with auto-idle)
+- Unread indicators with DM chime, per-channel/DM mute, and opt-in desktop notifications
+- Message permalinks — every timestamp links to that point in history
 - Avatars (PNG, JPEG, WebP, GIF)
 - Magic-link onboarding — no email server required; admins mint single-use links
 - Soft-delete channels with admin restore or hard purge
 - Private-channel invites
+- Admin panel with instance stats (users, channels, messages, live connections)
 
 ---
 
@@ -95,12 +100,12 @@ All configuration is via environment variables. All are optional except
 | `RIVENDELL_DATABASE_URL` | `postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable` | **Required in production.** Postgres connection string. |
 | `RIVENDELL_ADDR` | `:8080` | Listen address. |
 | `RIVENDELL_PUBLIC_URL` | `http://localhost:8080` | Base URL used to build magic links. No trailing slash. |
-| `RIVENDELL_WEB_DIR` | `./web` | Path to the static web client. |
+| `RIVENDELL_WEB_DIR` | `web` | Path to the static web client. |
 | `RIVENDELL_COOKIE_SECURE` | `false` | Set the `Secure` flag on session cookies. Enable when behind TLS. |
 | `RIVENDELL_SESSION_TTL` | `720h` | Session lifetime (Go duration syntax: `720h`, `30m`, etc.). |
 | `RIVENDELL_MAGIC_LINK_TTL` | `72h` | Set-password link lifetime. |
-| `RIVENDELL_MAX_MESSAGE_BYTES` | `8192` | Reject messages larger than this. |
-| `RIVENDELL_MAX_AVATAR_BYTES` | `1048576` | Reject avatar uploads larger than this (bytes). |
+| `RIVENDELL_MAX_MESSAGE_BYTES` | `8000` | Reject messages larger than this. |
+| `RIVENDELL_MAX_AVATAR_BYTES` | `524288` | Reject avatar uploads larger than this (bytes; 512 KiB). |
 | `RIVENDELL_INSTANCE_NAME` | `rivendell` | Display name for this instance — shown as the page title and brand. |
 | `RIVENDELL_BOOTSTRAP_ADMIN` | `admin` | Username auto-created on first boot when no admins exist. |
 
