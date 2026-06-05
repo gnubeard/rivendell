@@ -29,6 +29,10 @@ const lastMarkedRead = {};
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
 const avatarVersion = {};
+// Message ids deleted *during this session* (seen live via message.delete). Only
+// these get a "message deleted" tombstone; messages that arrive already-deleted
+// from history render as nothing, so a fresh load isn't littered with tombstones.
+const liveDeleted = new Set();
 
 function loadNotifPref() {
   try {
@@ -400,6 +404,8 @@ function startRealtime() {
         renderNotificationTotal();
       }
       if (evt.type.startsWith("message")) {
+        // A delete seen live earns a tombstone (unlike already-deleted history).
+        if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
         const cid = evt.payload.channel_id;
         const ch = state.channels[cid];
         const isNewFromOther = evt.type === "message.new" && evt.payload.user_id !== state.me.id;
@@ -926,20 +932,28 @@ function renderMessages(forceBottom = false) {
   let lastTime = 0;
   let i = 0;
   while (i < msgs.length) {
-    // Collapse a run of consecutive deleted messages into a single line so
-    // tombstones don't eat vertical space.
+    // Walk a run of consecutive deleted messages. Only those deleted live this
+    // session (in liveDeleted) get a collapsed "N deleted" tombstone; ones that
+    // arrived already-deleted from history render as nothing — so reopening a
+    // channel isn't cluttered with old tombstones.
     if (msgs[i].deleted_at) {
       let j = i;
-      while (j < msgs.length && msgs[j].deleted_at) j++;
-      const n = j - i;
-      wrap.append(
-        el("div", { class: "msg deleted-run" },
-          el("div", { class: "msg-gutter" }),
-          el("div", { class: "msg-main" },
-            el("div", { class: "msg-body deleted" }, n === 1 ? "message deleted" : `${n} messages deleted`)))
-      );
-      lastUser = null;
-      lastTime = 0;
+      let live = 0;
+      while (j < msgs.length && msgs[j].deleted_at) {
+        if (liveDeleted.has(msgs[j].id)) live++;
+        j++;
+      }
+      if (live > 0) {
+        wrap.append(
+          el("div", { class: "msg deleted-run" },
+            el("div", { class: "msg-gutter" }),
+            el("div", { class: "msg-main" },
+              el("div", { class: "msg-body deleted" }, live === 1 ? "message deleted" : `${live} messages deleted`)))
+        );
+        lastUser = null;
+        lastTime = 0;
+      }
+      // A run with no live deletions is invisible and doesn't break grouping.
       i = j;
       continue;
     }
