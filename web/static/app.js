@@ -396,6 +396,14 @@ function startRealtime() {
           renderMembers();
         }
       }
+      if (evt.type === "hello") {
+        // The server greets each connection with its version. If it differs from
+        // the build we loaded, a newer server is running (a deploy happened) —
+        // offer a graceful reload rather than yanking the page out from under.
+        if (appVersion && evt.payload && evt.payload.version && evt.payload.version !== appVersion) {
+          $("#update-banner").hidden = false;
+        }
+      }
       if (evt.type === "read.update" || evt.type === "mute.update") {
         // Another of my sessions caught up on / muted a channel (state.applyEvent
         // already folded it in); reflect the badges and the global total.
@@ -1208,6 +1216,10 @@ function wireControls() {
     $("#about-modal").hidden = false;
   };
   $("#about-close").onclick = () => ($("#about-modal").hidden = true);
+
+  // Update banner: reload to pick up the newer server build, or dismiss for now.
+  $("#update-reload").onclick = () => location.reload();
+  $("#update-dismiss").onclick = () => ($("#update-banner").hidden = true);
 
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);

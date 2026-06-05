@@ -35,7 +35,7 @@ func NewHub(onPresence func(userID int64, online bool)) *Hub {
 
 // Serve registers a connection and blocks running its read loop until the
 // connection closes. Intended to be called from an HTTP handler after Accept.
-func (h *Hub) Serve(conn *Conn, userID int64) {
+func (h *Hub) Serve(conn *Conn, userID int64, welcome ...[]byte) {
 	c := &Client{
 		hub:    h,
 		conn:   conn,
@@ -48,6 +48,18 @@ func (h *Hub) Serve(conn *Conn, userID int64) {
 		h.onPresence(userID, true)
 	}
 	go c.writePump()
+	// Optional per-connection welcome frame(s) sent before the read loop blocks —
+	// e.g. the server version, so the client can detect it's running against a
+	// newer build after a reconnect.
+	for _, w := range welcome {
+		if w == nil {
+			continue
+		}
+		select {
+		case c.send <- w:
+		default:
+		}
+	}
 	c.readPump() // blocks until the peer disconnects
 	becameOffline := h.remove(c)
 	if becameOffline && h.onPresence != nil {

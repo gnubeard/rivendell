@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -1241,5 +1242,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // handshake failed; Accept wrote nothing usable
 	}
-	s.hub.Serve(conn, u.ID)
+	// Greet the connection with the server version so the client can notice it's
+	// running an older build (e.g. after a deploy) and offer to reload.
+	welcome, _ := json.Marshal(event{Type: "hello", Payload: map[string]string{"version": config.Version}})
+	s.hub.Serve(conn, u.ID, welcome)
 }

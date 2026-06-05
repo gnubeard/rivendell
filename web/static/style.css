@@ -114,6 +114,17 @@ button.primary:hover { filter: brightness(1.08); }
 .sidebar-head .conn { margin-left: 0.5rem; }
 .hint { color: var(--text-faint); font-size: 0.8rem; margin: 0.1rem 0 0.6rem; min-height: 1.1em; }
 
+/* "A new version is available" — a small, non-blocking bar pinned bottom-centre,
+   above the composer. Relies on [hidden]{display:none!important}. */
+.update-banner {
+  position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
+  z-index: 50; display: flex; align-items: center; gap: 0.6rem;
+  background: var(--bg-3); border: 1px solid var(--accent-dim); border-radius: var(--radius);
+  padding: 0.5rem 0.6rem 0.5rem 0.9rem; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 0.85rem; max-width: calc(100vw - 2rem);
+}
+.update-banner .link { color: var(--accent); font-weight: 600; }
+
 .section-label { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.08em; color: var(--text-faint); font-weight: 600; }
 /* The scroll region holds both the Channels and Direct messages lists so they
    share one scrollbar and the sidebar foot stays pinned. */
