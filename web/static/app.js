@@ -56,15 +56,11 @@ let activeMemberIds = null;
 
 // Scrollback state: messages load a page at a time as you scroll up.
 const PAGE = 50;
-// AROUND_HALF must match GetMessagesAround's halfLimit on the server: a jump that
-// returns a full half-page *after* the anchor means there are likely newer
-// messages we haven't loaded (a gap to the present), so we're "viewing history";
-// fewer means the window's bottom is already the live tail.
-const AROUND_HALF = 25;
 let loadingOlder = false; // guards against overlapping back-paging fetches
 let loadingNewer = false; // guards against overlapping forward-paging fetches
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
 const viewingHistory = new Set(); // channelIds whose loaded bottom isn't the live tail
+let flashMessageId = null; // id of a jumped-to message to highlight; survives re-renders
 
 // Closed DMs: a per-browser set of DM channel ids the user has hidden from the
 // sidebar. The channel and its history are untouched server-side — closing only
@@ -353,7 +349,6 @@ async function enterApp() {
   // leave the composer/admin/avatar handlers unattached.
   wireComposer();
   wireControls();
-  wireScrollback();
   wireSwipe();
   wireIdleDetection();
   // Returning to the tab clears the open channel's unread (you're looking now).
@@ -997,30 +992,38 @@ async function jumpToMessage(channelId, messageId) {
     const msgs = await api.messages(channelId, { around: messageId });
     state = S.setMessages(state, channelId, msgs);
     historyComplete.delete(channelId);
-    // Only "viewing history" if the window doesn't reach the live tail. A full
-    // half-page of messages after the anchor means there's a gap to the present
-    // (enable scroll-down loading + the banner); fewer means we're at the bottom.
-    if (msgs.filter((m) => m.id > messageId).length >= AROUND_HALF) viewingHistory.add(channelId);
-    else viewingHistory.delete(channelId);
-    // Hold position so the rebuild doesn't snap to the bottom (its rAF scroll would
-    // otherwise fight the scrollIntoView centering below, esp. on mobile).
+    // Assume history until a forward probe proves otherwise. The around-window
+    // only loads a partial page after the anchor, so the live tail — and, in a
+    // brief conversation, the last few messages — may be missing.
+    viewingHistory.add(channelId);
+    flashMessageId = messageId; // highlight is applied in renderMessages so it survives re-renders
+    // Hold position so the rebuild doesn't snap to the bottom; we center below.
     renderMessages(false, true);
-    renderHistoryBanner();
     history.replaceState(null, "", permalinkHash(channelId, messageId));
     const target = document.querySelector(`[data-msg-id="${messageId}"]`);
     if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
-      target.classList.add("msg-anchor");
-      setTimeout(() => target.classList.remove("msg-anchor"), 2500);
-      return;
+      target.scrollIntoView({ block: "center" }); // instant: a smooth scroll races the fill below
+    } else {
+      // The around-window fetch returns the anchor even if it's deleted, but one
+      // that arrived already-deleted renders as nothing (no data-msg-id), so
+      // distinguish "deleted" from "truly gone".
+      const anchor = (state.messages[channelId] || []).find((m) => m.id === messageId);
+      flashNotice(anchor && anchor.deleted_at
+        ? "That message was deleted."
+        : "Message not found — it may have been deleted.");
     }
-    // No element to highlight. The around-window fetch returns the anchor even if
-    // it's deleted, but a deleted message that didn't die this session renders as
-    // nothing (no data-msg-id), so distinguish "deleted" from "truly gone".
-    const anchor = (state.messages[channelId] || []).find((m) => m.id === messageId);
-    flashNotice(anchor && anchor.deleted_at
-      ? "That message was deleted."
-      : "Message not found — it may have been deleted.");
+    // Probe forward once. loadNewerMessages holds the scroll position, so the
+    // anchor stays put while any missing newer messages fill in below. A short
+    // page means we've reached the live tail (it clears the history flag, hiding
+    // the banner); a full page confirms a real gap, and the bottom sentinel pages
+    // the rest as the reader scrolls down.
+    await loadNewerMessages();
+    renderHistoryBanner();
+    setTimeout(() => {
+      flashMessageId = null;
+      const n = $("#message-list").querySelector(".msg-anchor");
+      if (n) n.classList.remove("msg-anchor");
+    }, 2500);
   } catch (ex) {
     console.warn("rivendell: jumpToMessage failed:", ex && ex.message);
     flashNotice("Message not found — it may have been deleted.");
@@ -1039,16 +1042,28 @@ function flashNotice(text) {
   setTimeout(() => n.remove(), 4000);
 }
 
-// wireScrollback attaches the scroll listener once; #message-list is reused
-// across channel switches (only its innerHTML changes), so this stays valid.
-function wireScrollback() {
-  const wrap = $("#message-list");
-  wrap.addEventListener("scroll", () => {
-    if (wrap.scrollTop < 120) loadOlderMessages();
-    // Prefetch the next forward page about a screen early so reading downward
-    // through history stays seamless and never strands at the bottom.
-    else if (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < wrap.clientHeight) loadNewerMessages();
-  });
+// Infinite scroll is driven by two zero-height sentinels that renderMessages
+// places at the very top and bottom of the list. When a sentinel nears the
+// viewport the matching page loads. We use an IntersectionObserver rather than
+// scrollTop math because the latter fired unreliably on mobile (momentum
+// scrolling and the dynamic viewport) and could strand the reader at the end so
+// the next forward page never loaded. rootMargin "100%" prefetches ~a screen
+// early in both directions, so reading in either direction stays seamless.
+let scrollObserver = null;
+function observeScrollSentinels(topSentinel, bottomSentinel) {
+  if (!scrollObserver) {
+    scrollObserver = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        if (e.target.dataset.sentinel === "top") loadOlderMessages();
+        else loadNewerMessages();
+      }
+    }, { root: $("#message-list"), rootMargin: "100% 0px" });
+  }
+  // Sentinels are fresh nodes each render (innerHTML is cleared), so rebind.
+  scrollObserver.disconnect();
+  scrollObserver.observe(topSentinel);
+  scrollObserver.observe(bottomSentinel);
 }
 
 // scrollToBottom pins the message list to the newest message. It re-pins across
@@ -1154,6 +1169,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     let cls = "msg";
     if (m.pinned_at) cls += " pinned";
     if (mentionsMe) cls += " mentioned";
+    if (m.id === flashMessageId) cls += " msg-anchor"; // jumped-to highlight, applied each render
 
     const permalink = el("a", {
       class: "msg-time",
@@ -1185,6 +1201,13 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }
     i++;
   }
+  // Zero-height sentinels at each end drive infinite scroll via IntersectionObserver
+  // (see observeScrollSentinels). They're re-created every render, so rebind each time.
+  const topSentinel = el("div", { class: "scroll-sentinel", "data-sentinel": "top" });
+  const bottomSentinel = el("div", { class: "scroll-sentinel", "data-sentinel": "bottom" });
+  wrap.prepend(topSentinel);
+  wrap.append(bottomSentinel);
+  observeScrollSentinels(topSentinel, bottomSentinel);
   // Follow the conversation when already at the bottom; otherwise hold the
   // reader's position (loadOlderMessages adjusts further for prepended history).
   if (atBottom) scrollToBottom(wrap);

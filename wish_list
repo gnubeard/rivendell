@@ -31,7 +31,10 @@
   and the "viewing history" banner only shows when the window has a gap to the tail;
   v1.0.11: forward paging now holds scroll position instead of snapping to the
   bottom (the snap stranded mobile readers at the end so the next page never
-  loaded), and prefetches ~a screen early so reading downward stays seamless.
+  loaded), and prefetches ~a screen early so reading downward stays seamless;
+  v1.0.12: scroll loading is now driven by IntersectionObserver sentinels (the
+  scrollTop math never fired reliably on mobile), and a jump probes forward once
+  so brief conversations fill the cut-off tail and never show a spurious banner.
 
 ## Backlog (sorted by effort)
 

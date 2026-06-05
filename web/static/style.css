@@ -188,6 +188,8 @@ button.primary:hover { filter: brightness(1.08); }
 .channel-topic { color: var(--text-dim); font-size: 0.85rem; }
 
 .message-list { flex: 1; min-height: 0; overflow-y: auto; padding: 1rem 1.2rem; }
+/* Infinite-scroll trip wires; height 1px so they're real IntersectionObserver targets. */
+.scroll-sentinel { height: 1px; margin: 0; padding: 0; pointer-events: none; }
 .msg { display: flex; gap: 0.7rem; padding: 0.18rem 0; }
 .msg.grouped { padding-top: 0; }
 .msg-gutter { width: 38px; flex-shrink: 0; }
