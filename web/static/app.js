@@ -1022,16 +1022,25 @@ function renderMessages(forceBottom = false) {
 
 function wireComposer() {
   const input = $("#composer-input");
+  // Grow the box to fit its content (each newline adds a line) up to the CSS
+  // max-height, after which it scrolls. "auto" first so it can also shrink back.
+  const autoGrow = () => {
+    input.style.height = "auto";
+    input.style.height = input.scrollHeight + "px";
+  };
+  input.addEventListener("input", autoGrow);
   input.onkeydown = async (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const content = input.value;
       if (!content.trim()) return;
       input.value = "";
+      autoGrow(); // collapse back to a single line after sending
       try {
         await api.sendMessage(state.activeChannelId, content);
       } catch (ex) {
         input.value = content;
+        autoGrow(); // restore the box to fit the put-back text
         alert(ex.message);
       }
     }
