@@ -255,8 +255,14 @@ func (s *Server) broadcast(typ string, payload any, audience map[int64]bool) {
 	s.hub.Broadcast(data, audience)
 }
 
-// audienceForChannel returns nil (everyone) for public channels, or the member
-// set for private channels.
+// audienceForChannel returns nil (everyone) for public channels, or the set of
+// users who may receive a private channel's realtime events. That set mirrors
+// canAccessChannel exactly: the members, plus — for a non-DM private channel —
+// every moderator/admin, who hold a read/write bypass there even without
+// membership. Without the mod+ union, an admin who posts (or edits/deletes) in a
+// channel they aren't a member of never sees their own change echoed, since the
+// client renders messages only from the broadcast, not the POST response. DMs
+// are exempt from the bypass and stay strictly members-only.
 func (s *Server) audienceForChannel(ctx context.Context, ch store.Channel) map[int64]bool {
 	if !ch.IsPrivate {
 		return nil
@@ -269,6 +275,16 @@ func (s *Server) audienceForChannel(ctx context.Context, ch store.Channel) map[i
 	set := make(map[int64]bool, len(ids))
 	for _, id := range ids {
 		set[id] = true
+	}
+	if !ch.IsDM {
+		mods, err := s.st.ListPrivilegedUserIDs(ctx)
+		if err != nil {
+			log.Printf("audienceForChannel mods: %v", err)
+			return set // best-effort: members still receive the event
+		}
+		for _, id := range mods {
+			set[id] = true
+		}
 	}
 	return set
 }

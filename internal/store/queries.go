@@ -117,6 +117,28 @@ func (s *Store) GetAvatar(ctx context.Context, id int64) (mime string, data []by
 }
 
 // CountAdmins is used to guard against demoting/deactivating the last admin.
+// ListPrivilegedUserIDs returns the ids of active moderators and admins. They
+// hold a read/write bypass on private (non-DM) channels even when they aren't
+// members, so realtime audiences for those channels include them — keeping the
+// realtime delivery model in step with canAccessChannel.
+func (s *Store) ListPrivilegedUserIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM users WHERE is_active AND role IN ('admin', 'moderator')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,

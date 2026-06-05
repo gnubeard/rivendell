@@ -107,7 +107,12 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
 - **Roles:** admin > moderator > member (`roleRank` in handlers). Guard against
   removing/disabling the last admin (`CountAdmins`).
 - **Realtime:** the hub broadcasts `{type, payload}` events. Private-channel events
-  are scoped to an audience set (`audienceForChannel`, fail-closed). `/api/ws` is
+  are scoped to an audience set (`audienceForChannel`, fail-closed). That set must
+  mirror `canAccessChannel`: for a non-DM private channel it's the members **plus
+  all moderators/admins** (who can read/write it via the bypass), so an admin who
+  posts/edits/deletes in a channel they aren't a member of still gets their own
+  broadcast echo (the client renders from the broadcast, not the POST response).
+  DMs are exempt from the bypass and stay strictly members-only. `/api/ws` is
   deliberately not logged by `logMW` (to preserve the Hijacker) — its absence from
   logs is expected, not a bug.
 - **Presence vs. status:** `users.status` is the user's *durable chosen* presence

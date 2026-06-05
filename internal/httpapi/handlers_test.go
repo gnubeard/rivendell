@@ -1548,6 +1548,73 @@ func TestSearchMessages(t *testing.T) {
 	}
 }
 
+// TestAudienceMirrorsAccess locks the realtime audience to the access model:
+// a non-DM private channel's audience includes moderators/admins (who can read
+// and write it without membership), so an admin posting into a channel they
+// aren't a member of receives their own broadcast echo. A DM's audience stays
+// members-only — even a moderator who isn't a participant is excluded.
+func TestAudienceMirrorsAccess(t *testing.T) {
+	ts, st, cfg := newTestServer(t)
+	adminC, admin := seedAdmin(t, ts, st)
+	mollyC, molly := seedMember(t, ts, st, "molly", "Molly", store.RoleModerator)
+	_, alice := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+
+	// Molly (a moderator) creates a private channel; she's its only member.
+	resp, body := doJSON(t, mollyC, "POST", ts.URL+"/api/channels", map[string]any{
+		"name": "secret-plans", "is_private": true,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create private channel: %d %s", resp.StatusCode, body)
+	}
+	var priv store.Channel
+	json.Unmarshal(body, &priv)
+
+	// A DM between admin and molly (alice is not a participant).
+	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": molly.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open DM: %d %s", resp.StatusCode, body)
+	}
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+
+	// audienceForChannel reads only the store, so a fresh Server over the same
+	// store computes the same audiences without standing up a second listener.
+	srv := New(cfg, st)
+	ctx := context.Background()
+
+	privAud := srv.audienceForChannel(ctx, priv)
+	if !privAud[admin.ID] {
+		t.Error("private-channel audience must include a non-member admin (mod+ bypass)")
+	}
+	if !privAud[molly.ID] {
+		t.Error("private-channel audience must include its member")
+	}
+	if privAud[alice.ID] {
+		t.Error("private-channel audience must exclude a non-member, non-privileged user")
+	}
+
+	dmAud := srv.audienceForChannel(ctx, dm)
+	if !dmAud[admin.ID] || !dmAud[molly.ID] {
+		t.Error("DM audience must include both participants")
+	}
+	if dmAud[alice.ID] {
+		t.Error("DM audience must exclude a non-participant")
+	}
+	// The mod+ bypass must NOT leak into DMs: alice is a moderator-free member,
+	// but even molly's moderator peer admin only sees this DM because he's a
+	// participant. Confirm a privileged outsider is excluded from a DM they're
+	// not in by checking a DM that excludes the admin.
+	resp, body = doJSON(t, mollyC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": alice.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open molly↔alice DM: %d %s", resp.StatusCode, body)
+	}
+	var dm2 store.Channel
+	json.Unmarshal(body, &dm2)
+	if aud := srv.audienceForChannel(ctx, dm2); aud[admin.ID] {
+		t.Error("an admin must not be in the audience of a DM he isn't part of")
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }
