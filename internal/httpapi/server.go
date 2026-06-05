@@ -78,6 +78,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/messages/{id}/pin", s.requireRole(store.RoleModerator, s.handlePinMessage))
 	mux.HandleFunc("DELETE /api/messages/{id}/pin", s.requireRole(store.RoleModerator, s.handleUnpinMessage))
 
+	// Durable unread / notifications.
+	mux.HandleFunc("GET /api/unread", s.auth(s.handleUnread))
+	mux.HandleFunc("POST /api/channels/{id}/read", s.auth(s.handleMarkRead))
+
 	// Admin.
 	mux.HandleFunc("POST /api/admin/users", s.requireRole(store.RoleAdmin, s.handleCreateUser))
 	mux.HandleFunc("POST /api/admin/users/{id}/magic-link", s.requireRole(store.RoleAdmin, s.handleCreateMagicLink))

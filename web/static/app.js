@@ -5,10 +5,41 @@ import { api } from "./api.js";
 import { connectRealtime } from "./ws.js";
 import { formatMessage, mentionsUser } from "./format.js";
 import * as S from "./state.js";
+import {
+  shouldNotify,
+  showNotification,
+  requestNotificationPermission,
+  currentPermission,
+  notificationsSupported,
+} from "./notify.js";
 
 let state = S.initialState();
 let socket = null;
 let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
+let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
+
+// Desktop-notification opt-in (per browser). The OS permission is separate and
+// owned by the browser; this is the user's in-app preference that gates it.
+let notifEnabled = loadNotifPref();
+// Highest message id we've told the server we've read, per channel — dedupes the
+// mark-read POST so refocusing a tab doesn't spam the endpoint.
+const lastMarkedRead = {};
+
+function loadNotifPref() {
+  try {
+    return localStorage.getItem("rivendell.notifications") === "1";
+  } catch (e) {
+    return false;
+  }
+}
+
+function saveNotifPref() {
+  try {
+    localStorage.setItem("rivendell.notifications", notifEnabled ? "1" : "0");
+  } catch (e) {
+    /* best-effort: persistence is non-fatal */
+  }
+}
 // Member ids of the active channel when it's private (incl. DMs); null means
 // "show everyone" (public channels have no membership rows).
 let activeMemberIds = null;
@@ -175,6 +206,7 @@ async function applyInstanceName() {
   try {
     const { name } = await api.instance();
     if (!name) return;
+    baseTitle = name;
     document.title = name;
     for (const node of document.querySelectorAll(".brand")) node.textContent = name;
   } catch {
@@ -244,6 +276,14 @@ async function enterApp() {
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
   state = S.setUsers(state, users);
   state = S.setChannels(state, channels);
+  // Seed durable unread/mention counts from the server so badges and the global
+  // total survive a refresh (best-effort: a failure just leaves them empty).
+  try {
+    const summary = await api.unread();
+    state = S.setUnreadSummary(state, summary.channels);
+  } catch (e) {
+    /* non-fatal: counts will populate as realtime events arrive */
+  }
   // Restore the channel the user last had open (if it's still accessible);
   // otherwise prefer a real channel over a DM on first load.
   let saved = null;
@@ -268,17 +308,31 @@ async function enterApp() {
   renderDMs();
   renderMembers();
   renderAdminVisibility();
-  if (state.activeChannelId) await loadChannel(state.activeChannelId);
+  renderNotificationTotal();
+  if (state.activeChannelId) {
+    await loadChannel(state.activeChannelId);
+    markActiveChannelRead();
+  }
   // Wire interactive controls BEFORE realtime, so a transport problem can never
   // leave the composer/admin/avatar handlers unattached.
   wireComposer();
   wireControls();
   wireScrollback();
+  // Returning to the tab clears the open channel's unread (you're looking now).
+  window.addEventListener("focus", onWindowFocus);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) onWindowFocus();
+  });
   try {
     startRealtime();
   } catch (e) {
     console.warn("rivendell: realtime unavailable:", e && e.message);
   }
+}
+
+// onWindowFocus marks the active channel read when the user returns to the tab.
+function onWindowFocus() {
+  if (state.activeChannelId) markActiveChannelRead();
 }
 
 // --- realtime ------------------------------------------------------------
@@ -301,6 +355,13 @@ function startRealtime() {
         // members panel if the event concerns the channel we're viewing.
         if (evt.payload && evt.payload.id === state.activeChannelId) refreshActiveMembers();
       }
+      if (evt.type === "read.update") {
+        // Another of my sessions caught up on a channel; reflect the cleared
+        // counts here too (state.applyEvent already cleared them).
+        renderChannels();
+        renderDMs();
+        renderNotificationTotal();
+      }
       if (evt.type.startsWith("message")) {
         const cid = evt.payload.channel_id;
         const ch = state.channels[cid];
@@ -311,9 +372,22 @@ function startRealtime() {
         if (cid === state.activeChannelId) {
           renderMessages();
           refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
-          // You're on this channel, but if the tab itself isn't focused you
-          // still won't have seen it — chime anyway.
-          if (pingsMe && tabUnfocused()) boop();
+          if (tabUnfocused()) {
+            // It's the open channel, but the tab isn't focused — you haven't
+            // actually seen it, so it counts as unread (matching the server,
+            // whose cursor we only advance on focus) and pings still alert.
+            if (isNewFromOther) {
+              state = S.bumpUnread(state, cid);
+              if (mentioned) state = S.bumpMention(state, cid);
+              renderChannels();
+              renderDMs();
+              renderNotificationTotal();
+            }
+            if (pingsMe) firePing(evt, ch);
+          } else if (isNewFromOther) {
+            // You're looking right at it — keep the read cursor current.
+            markActiveChannelRead();
+          }
         } else if (isNewFromOther) {
           // A new message in a channel we're not looking at: flag it unread,
           // and separately flag @-mentions so they badge distinctly. A message
@@ -323,9 +397,10 @@ function startRealtime() {
           if (mentioned) state = S.bumpMention(state, cid);
           renderChannels();
           renderDMs();
-          // Chime for pings (DMs and @-mentions); plain channel chatter stays
-          // silent with just the unread badge.
-          if (pingsMe) boop();
+          renderNotificationTotal();
+          // Chime + (if opted in and not looking here) raise an OS notification
+          // for pings; plain channel chatter stays silent with just the badge.
+          if (pingsMe) firePing(evt, ch);
         }
       }
     },
@@ -351,6 +426,14 @@ async function resync() {
     const [users, channels] = await Promise.all([api.users(), api.channels()]);
     state = S.setUsers(state, users);
     state = S.setChannels(state, channels);
+    // Re-pull durable unread counts: events missed while the socket was dead are
+    // exactly the gap this closes (the old code couldn't recompute unread here).
+    try {
+      const summary = await api.unread();
+      state = S.setUnreadSummary(state, summary.channels);
+    } catch (e) {
+      /* non-fatal */
+    }
     // The channel we were on may have been archived while we were away.
     if (state.activeChannelId && !state.channels[state.activeChannelId]) {
       const next = regularChannelOrder()[0] || state.channelOrder[0] || null;
@@ -360,7 +443,11 @@ async function resync() {
     renderChannels();
     renderDMs();
     renderMembers();
-    if (state.activeChannelId) await loadChannel(state.activeChannelId);
+    renderNotificationTotal();
+    if (state.activeChannelId) {
+      await loadChannel(state.activeChannelId);
+      if (!tabUnfocused()) markActiveChannelRead();
+    }
   } catch (ex) {
     console.warn("rivendell: resync failed:", ex && ex.message);
   }
@@ -581,8 +668,36 @@ async function selectChannel(id) {
   state = S.clearMention(state, id);
   renderChannels();
   renderDMs();
+  renderNotificationTotal();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
+  // Persist the read cursor server-side using the newest loaded message.
+  markActiveChannelRead();
+}
+
+// markActiveChannelRead advances the server read cursor for the open channel to
+// its newest loaded message and clears its local counts. The mark-read POST is
+// deduped per (channel, newest id) so refocusing the tab doesn't spam the server.
+async function markActiveChannelRead() {
+  const cid = state.activeChannelId;
+  if (!cid) return;
+  const msgs = state.messages[cid] || [];
+  if (!msgs.length) return;
+  const newest = msgs[msgs.length - 1].id; // messages are kept sorted ascending
+  if (state.unread[cid] || state.mentions[cid]) {
+    state = S.clearUnread(state, cid);
+    state = S.clearMention(state, cid);
+    renderChannels();
+    renderDMs();
+    renderNotificationTotal();
+  }
+  if (lastMarkedRead[cid] === newest) return; // server already knows
+  lastMarkedRead[cid] = newest;
+  try {
+    await api.markRead(cid, newest);
+  } catch (e) {
+    lastMarkedRead[cid] = undefined; // let a later attempt retry
+  }
 }
 
 async function loadChannel(id) {
@@ -845,6 +960,23 @@ function wireControls() {
   $("#me-name").onclick = openProfileModal;
   $("#me-status-text").onclick = openProfileModal;
   $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
+
+  // Desktop-notification opt-in. Turning it on requests the OS permission;
+  // turning it off just drops the in-app preference (the OS grant is sticky and
+  // only the browser can revoke it).
+  const notifCb = $("#notif-enable");
+  if (notifCb) {
+    notifCb.onchange = async () => {
+      if (notifCb.checked) {
+        const perm = await requestNotificationPermission();
+        notifEnabled = perm === "granted";
+      } else {
+        notifEnabled = false;
+      }
+      saveNotifPref();
+      renderNotifControl();
+    };
+  }
   $("#profile-form").onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#profile-error");
@@ -1007,6 +1139,7 @@ function openProfileModal() {
   $("#profile-error").textContent = "";
   $("#profile-display").value = me.display_name || "";
   $("#profile-status-text").value = me.status_text || "";
+  renderNotifControl();
   $("#profile-modal").hidden = false;
   $("#profile-display").focus();
 }
@@ -1120,6 +1253,55 @@ async function refreshDeletedChannels() {
 }
 
 // --- helpers -------------------------------------------------------------
+
+// renderNotificationTotal reflects the global "missed notifications" count (the
+// sum of pings across channels) in the sidebar badge and the page title, so it's
+// visible even when the tab is in the background.
+function renderNotificationTotal() {
+  const n = S.totalMentions(state);
+  const badge = $("#notif-total");
+  if (badge) {
+    badge.textContent = n > 99 ? "99+" : String(n);
+    badge.hidden = n === 0;
+  }
+  document.title = n > 0 ? `(${n}) ${baseTitle}` : baseTitle;
+}
+
+// firePing alerts the user to a ping (DM or @-mention): always a soft chime, plus
+// an OS notification when they've opted in and aren't already looking here.
+function firePing(evt, ch) {
+  boop();
+  if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: !tabUnfocused() })) {
+    return;
+  }
+  const author = state.users[evt.payload.user_id];
+  const who = author ? author.display_name : "Someone";
+  const title = ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
+  showNotification(title, {
+    body: evt.payload.content || "",
+    tag: `rivendell-ch-${evt.payload.channel_id}`,
+    icon: author && author.has_avatar ? api.avatarURL(author.id) : undefined,
+    onclick: () => selectChannel(evt.payload.channel_id),
+  });
+}
+
+// renderNotifControl reflects the desktop-notification opt-in into the profile
+// modal: the checkbox shows the *effective* state (preference AND OS permission),
+// and the hint explains anything blocking it.
+function renderNotifControl() {
+  const cb = $("#notif-enable");
+  const status = $("#notif-status");
+  if (!cb) return;
+  const supported = notificationsSupported();
+  const perm = currentPermission();
+  cb.checked = notifEnabled && perm === "granted";
+  cb.disabled = !supported || perm === "denied";
+  if (!status) return;
+  if (!supported) status.textContent = "Your browser doesn't support notifications.";
+  else if (perm === "denied") status.textContent = "Blocked in your browser settings — allow notifications there to use this.";
+  else if (notifEnabled && perm === "granted") status.textContent = "On — you'll be notified of DMs and @-mentions when this tab isn't focused.";
+  else status.textContent = "Off — turn on to get desktop alerts for DMs and @-mentions.";
+}
 
 // presenceClass maps a user to a presence-dot color class. Offline (or invisible)
 // users are grey regardless of their stored status; online users get their

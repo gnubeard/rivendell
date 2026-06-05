@@ -46,6 +46,36 @@ export function clearMention(state, channelId) {
   return { ...state, mentions };
 }
 
+// setUnreadSummary replaces the unread + mention maps wholesale from the server's
+// durable counts (the /api/unread payload's `channels` array). This is what makes
+// the badges survive a refresh/reconnect: the client trusts the server's numbers
+// rather than its own ephemeral tally. Zero counts are dropped so the maps only
+// hold channels that actually have something unseen.
+export function setUnreadSummary(state, channels) {
+  const unread = {};
+  const mentions = {};
+  for (const c of channels || []) {
+    if (c.unread) unread[c.channel_id] = c.unread;
+    if (c.mentions) mentions[c.channel_id] = c.mentions;
+  }
+  return { ...state, unread, mentions };
+}
+
+// totalUnread / totalMentions sum the per-channel maps. totalMentions is the
+// global "missed notifications" number (DMs + @-mentions) shown in the title and
+// header badge.
+export function totalUnread(state) {
+  let n = 0;
+  for (const id in state.unread) n += state.unread[id];
+  return n;
+}
+
+export function totalMentions(state) {
+  let n = 0;
+  for (const id in state.mentions) n += state.mentions[id];
+  return n;
+}
+
 export function setMe(state, me) {
   return { ...state, me };
 }
@@ -179,6 +209,10 @@ export function applyEvent(state, evt) {
       return addMessage(state, evt.payload);
     case "message.delete":
       return markMessageDeleted(state, evt.payload.channel_id, evt.payload.id);
+    case "read.update":
+      // Another of my own sessions advanced the read cursor for a channel; the
+      // cursor only ever moves to the latest, so clear both counts here too.
+      return clearMention(clearUnread(state, evt.payload.channel_id), evt.payload.channel_id);
     default:
       return state;
   }

@@ -139,6 +139,16 @@ type Channel struct {
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
+// ChannelUnread is the per-channel unread/mention summary for a user, returned
+// by UnreadSummary. Unread counts messages the user hasn't seen (excluding their
+// own and deleted ones); Mentions counts the subset that pinged them (DMs and
+// @-mentions).
+type ChannelUnread struct {
+	ChannelID int64 `json:"channel_id"`
+	Unread    int   `json:"unread"`
+	Mentions  int   `json:"mentions"`
+}
+
 type Message struct {
 	ID        int64      `json:"id"`
 	ChannelID int64      `json:"channel_id"`

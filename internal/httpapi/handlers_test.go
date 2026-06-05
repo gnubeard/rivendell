@@ -37,7 +37,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
+	_, err = st.DB().Exec(`TRUNCATE message_mentions, channel_reads, messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -867,6 +867,204 @@ func TestUpdateProfileValidation(t *testing.T) {
 	json.Unmarshal(body, &me)
 	if me.DisplayName != "Big Admin" || me.StatusText != "around" {
 		t.Fatalf("profile not updated: %s", body)
+	}
+}
+
+// unreadResp mirrors the /api/unread payload.
+type unreadResp struct {
+	Channels      []store.ChannelUnread `json:"channels"`
+	TotalUnread   int                   `json:"total_unread"`
+	TotalMentions int                   `json:"total_mentions"`
+}
+
+func getUnread(t *testing.T, c *http.Client, ts *httptest.Server) unreadResp {
+	t.Helper()
+	resp, body := doJSON(t, c, "GET", ts.URL+"/api/unread", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unread: %d %s", resp.StatusCode, body)
+	}
+	var u unreadResp
+	if err := json.Unmarshal(body, &u); err != nil {
+		t.Fatalf("unread unmarshal: %v (%s)", err, body)
+	}
+	return u
+}
+
+func chUnread(u unreadResp, channelID int64) store.ChannelUnread {
+	for _, c := range u.Channels {
+		if c.ChannelID == channelID {
+			return c
+		}
+	}
+	return store.ChannelUnread{ChannelID: channelID}
+}
+
+func postMessage(t *testing.T, c *http.Client, ts *httptest.Server, channelID int64, content string) store.Message {
+	t.Helper()
+	resp, body := doJSON(t, c, "POST", ts.URL+"/api/channels/"+itoa(channelID)+"/messages",
+		map[string]string{"content": content})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post message: %d %s", resp.StatusCode, body)
+	}
+	var m store.Message
+	json.Unmarshal(body, &m)
+	return m
+}
+
+// TestUnreadEmptyArray pins the list-endpoint contract: a fresh user's unread
+// payload must carry an empty array, never JSON null (the client iterates it).
+func TestUnreadEmptyArray(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	resp, body := doJSON(t, adminC, "GET", ts.URL+"/api/unread", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unread: %d %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte(`"channels":[]`)) {
+		t.Fatalf("empty unread must carry channels:[], got %s", body)
+	}
+}
+
+// TestUnreadCountsAndMarkRead drives the durable-count path end to end: unread
+// accrues for messages you didn't send, @-mentions and DMs additionally count as
+// pings, marking a channel read clears it, and the read cursor is monotonic.
+func TestUnreadCountsAndMarkRead(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, bob := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	// Public channel.
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var general store.Channel
+	json.Unmarshal(body, &general)
+
+	// Alice posts a plain line and an @bob mention; bob (not the author) is behind.
+	postMessage(t, aliceC, ts, general.ID, "hello everyone")
+	mentionMsg := postMessage(t, aliceC, ts, general.ID, "hey @bob look at this")
+
+	u := getUnread(t, bobC, ts)
+	if cu := chUnread(u, general.ID); cu.Unread != 2 || cu.Mentions != 1 {
+		t.Fatalf("bob general unread: got %+v, want unread=2 mentions=1", cu)
+	}
+
+	// Alice's own view: she authored both, so nothing unread for her.
+	if cu := chUnread(getUnread(t, aliceC, ts), general.ID); cu.Unread != 0 {
+		t.Fatalf("author should have 0 unread, got %+v", cu)
+	}
+
+	// A DM from alice to bob: every DM message is a ping.
+	_, body = doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": bob.ID})
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	postMessage(t, aliceC, ts, dm.ID, "yo bob")
+
+	u = getUnread(t, bobC, ts)
+	if cu := chUnread(u, dm.ID); cu.Unread != 1 || cu.Mentions != 1 {
+		t.Fatalf("bob dm unread: got %+v, want unread=1 mentions=1", cu)
+	}
+	// Totals: 2 unread in general + 1 in dm = 3; pings = 1 mention + 1 dm = 2.
+	if u.TotalUnread != 3 || u.TotalMentions != 2 {
+		t.Fatalf("totals: got unread=%d mentions=%d, want 3/2", u.TotalUnread, u.TotalMentions)
+	}
+
+	// Bob marks general read up to the mention message.
+	resp, mrBody := doJSON(t, bobC, "POST", ts.URL+"/api/channels/"+itoa(general.ID)+"/read",
+		map[string]int64{"message_id": mentionMsg.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mark read: %d %s", resp.StatusCode, mrBody)
+	}
+	u = getUnread(t, bobC, ts)
+	if cu := chUnread(u, general.ID); cu.Unread != 0 || cu.Mentions != 0 {
+		t.Fatalf("general should be cleared, got %+v", cu)
+	}
+	if u.TotalMentions != 1 { // only the DM ping remains
+		t.Fatalf("after clearing general, total mentions = %d, want 1", u.TotalMentions)
+	}
+
+	// Monotonic cursor: marking read with an older id must not reopen unread.
+	doJSON(t, bobC, "POST", ts.URL+"/api/channels/"+itoa(general.ID)+"/read",
+		map[string]int64{"message_id": 1})
+	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Unread != 0 {
+		t.Fatalf("cursor moved backward: general unread = %d, want 0", cu.Unread)
+	}
+}
+
+// TestMentionClearedOnDeleteAndEdit confirms pings track the message: deleting a
+// mention clears its ping, and editing recomputes (adding a mention pings).
+func TestMentionClearedOnDeleteAndEdit(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, _ := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var general store.Channel
+	json.Unmarshal(body, &general)
+
+	mention := postMessage(t, aliceC, ts, general.ID, "ping @bob")
+	if chUnread(getUnread(t, bobC, ts), general.ID).Mentions != 1 {
+		t.Fatalf("expected 1 mention before delete")
+	}
+	// Alice deletes it; the ping goes away.
+	doJSON(t, aliceC, "DELETE", ts.URL+"/api/messages/"+itoa(mention.ID), nil)
+	if chUnread(getUnread(t, bobC, ts), general.ID).Mentions != 0 {
+		t.Fatalf("mention should clear after delete")
+	}
+
+	// A plain message edited to add @bob becomes a ping.
+	plain := postMessage(t, aliceC, ts, general.ID, "nothing here")
+	if chUnread(getUnread(t, bobC, ts), general.ID).Mentions != 0 {
+		t.Fatalf("plain message should not mention bob")
+	}
+	resp, eb := doJSON(t, aliceC, "PATCH", ts.URL+"/api/messages/"+itoa(plain.ID),
+		map[string]string{"content": "actually @bob"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit: %d %s", resp.StatusCode, eb)
+	}
+	if chUnread(getUnread(t, bobC, ts), general.ID).Mentions != 1 {
+		t.Fatalf("edit should have added a mention ping")
+	}
+}
+
+// TestNewUserSeededCaughtUp verifies a user created through the admin endpoint is
+// seeded "caught up" on existing public channels rather than facing the backlog.
+func TestNewUserSeededCaughtUp(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var general store.Channel
+	json.Unmarshal(body, &general)
+	postMessage(t, adminC, ts, general.ID, "history one")
+	postMessage(t, adminC, ts, general.ID, "history two")
+
+	// Create a fresh user via the handler (which seeds public read cursors).
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/admin/users",
+		map[string]string{"username": "newbie", "display_name": "Newbie"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create user: %d %s", resp.StatusCode, body)
+	}
+	var newbie store.User
+	json.Unmarshal(body, &newbie)
+
+	// Give them a password directly and log in.
+	hash, _ := auth.HashPassword("newbie-strong-pw")
+	if err := st.SetPassword(context.Background(), newbie.ID, hash); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+	c := newClient(t)
+	doJSON(t, c, "POST", ts.URL+"/api/auth/login",
+		map[string]string{"username": "newbie", "password": "newbie-strong-pw"})
+
+	if cu := chUnread(getUnread(t, c, ts), general.ID); cu.Unread != 0 {
+		t.Fatalf("new user should start caught up, got general unread=%d", cu.Unread)
+	}
+
+	// A message posted *after* they joined does count as unread.
+	postMessage(t, adminC, ts, general.ID, "fresh news")
+	if cu := chUnread(getUnread(t, c, ts), general.ID); cu.Unread != 1 {
+		t.Fatalf("post-join message should be unread, got %d", cu.Unread)
 	}
 }
 

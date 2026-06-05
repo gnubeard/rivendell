@@ -83,6 +83,11 @@ export const api = {
   pinMessage: (id) => req("PUT", `/api/messages/${id}/pin`),
   unpinMessage: (id) => req("DELETE", `/api/messages/${id}/pin`),
 
+  // durable unread / notifications
+  unread: () => req("GET", "/api/unread"),
+  markRead: (channelId, messageId) =>
+    req("POST", `/api/channels/${channelId}/read`, { message_id: messageId }),
+
   // admin
   createUser: (username, displayName, role) =>
     req("POST", "/api/admin/users", { username, display_name: displayName, role }),

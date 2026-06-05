@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -525,6 +527,11 @@ func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "could not add member")
 		return
 	}
+	// Start the invitee caught up on this channel's backlog rather than facing it
+	// all as unread.
+	if err := s.st.SeedReadCursor(r.Context(), target.ID, ch.ID); err != nil {
+		log.Printf("addChannelMember: seed read cursor: %v", err)
+	}
 	// Re-broadcast the channel to the (now-larger) audience so the newly-added
 	// member's client learns the channel exists in realtime.
 	s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
@@ -545,6 +552,74 @@ func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.Use
 		return isMember
 	}
 	return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
+}
+
+// pingRecipients returns the user ids a message should ping (notify durably).
+// A DM pings every member except the author; any other channel pings the
+// @-mentioned users who can see it (members, for a private channel), minus the
+// author. Best-effort: lookup failures are logged and yield no pings rather than
+// failing the send.
+func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, authorID int64, content string) []int64 {
+	if ch.IsDM {
+		ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
+		if err != nil {
+			log.Printf("pingRecipients: dm members: %v", err)
+			return nil
+		}
+		out := make([]int64, 0, len(ids))
+		for _, id := range ids {
+			if id != authorID {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	names := parseMentions(content)
+	if len(names) == 0 {
+		return nil
+	}
+	byName, err := s.st.UsersByUsernames(ctx, names)
+	if err != nil {
+		log.Printf("pingRecipients: resolve usernames: %v", err)
+		return nil
+	}
+	// For a private channel, only members can be pinged.
+	var members map[int64]bool
+	if ch.IsPrivate {
+		ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
+		if err != nil {
+			log.Printf("pingRecipients: channel members: %v", err)
+			return nil
+		}
+		members = make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			members[id] = true
+		}
+	}
+	out := make([]int64, 0, len(byName))
+	for _, id := range byName {
+		if id == authorID {
+			continue
+		}
+		if members != nil && !members[id] {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+// recordPings computes and stores the ping rows for a message (used on create
+// and, after clearing the old rows, on edit). Best-effort: a failure is logged
+// but does not fail the request — the message itself is already persisted.
+func (s *Server) recordPings(ctx context.Context, ch store.Channel, msg store.Message) {
+	recipients := s.pingRecipients(ctx, ch, msg.UserID, msg.Content)
+	if len(recipients) == 0 {
+		return
+	}
+	if err := s.st.RecordMentions(ctx, msg.ID, ch.ID, recipients); err != nil {
+		log.Printf("recordPings: %v", err)
+	}
 }
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
@@ -619,6 +694,9 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not send message")
 		return
 	}
+	// Record durable pings (DM recipients / @-mentions) before broadcasting, so a
+	// client that reacts to message.new by re-fetching unread sees them.
+	s.recordPings(r.Context(), ch, msg)
 	s.broadcast("message.new", msg, s.audienceForChannel(r.Context(), ch))
 	writeJSON(w, http.StatusCreated, msg)
 }
@@ -655,6 +733,12 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ch, _ := s.st.GetChannel(r.Context(), msg.ChannelID)
+	// An edit may add or remove an @-mention; recompute the ping rows from the
+	// new content so durable counts stay accurate.
+	if err := s.st.DeleteMentionsForMessage(r.Context(), msg.ID); err != nil {
+		log.Printf("editMessage: clear mentions: %v", err)
+	}
+	s.recordPings(r.Context(), ch, msg)
 	s.broadcast("message.update", msg, s.audienceForChannel(r.Context(), ch))
 	writeJSON(w, http.StatusOK, msg)
 }
@@ -675,6 +759,10 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, "could not delete message")
 		return
+	}
+	// A deleted message should stop pinging anyone.
+	if err := s.st.DeleteMentionsForMessage(r.Context(), msg.ID); err != nil {
+		log.Printf("deleteMessage: clear mentions: %v", err)
 	}
 	ch, _ := s.st.GetChannel(r.Context(), msg.ChannelID)
 	s.broadcast("message.delete", map[string]int64{
@@ -755,6 +843,67 @@ func (s *Server) handleUnpinMessage(w http.ResponseWriter, r *http.Request) {
 	s.setMessagePinned(w, r, false)
 }
 
+// --- read state / notifications ------------------------------------------
+
+// handleUnread returns the caller's durable unread + mention (ping) counts per
+// channel, plus the totals. The per-channel list always serializes as an array,
+// never null (the client iterates it).
+func (s *Server) handleUnread(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	channels, err := s.st.UnreadSummary(r.Context(), u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load unread")
+		return
+	}
+	var totalUnread, totalMentions int
+	for _, c := range channels {
+		totalUnread += c.Unread
+		totalMentions += c.Mentions
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"channels":       channels,
+		"total_unread":   totalUnread,
+		"total_mentions": totalMentions,
+	})
+}
+
+// handleMarkRead advances the caller's read cursor for a channel and echoes the
+// change to the caller's *other* connections (self-audience) so every tab/device
+// clears the badge together.
+func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	var req struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := s.st.MarkRead(r.Context(), u.ID, id, req.MessageID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not mark read")
+		return
+	}
+	s.broadcast("read.update", map[string]int64{
+		"channel_id":           id,
+		"last_read_message_id": req.MessageID,
+	}, map[int64]bool{u.ID: true})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // --- admin ---------------------------------------------------------------
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -788,6 +937,11 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, "could not create user")
 		return
+	}
+	// Start the new user caught up on existing public channels, so their first
+	// login isn't a wall of unread history.
+	if err := s.st.SeedPublicReadCursors(r.Context(), u.ID); err != nil {
+		log.Printf("createUser: seed public read cursors: %v", err)
 	}
 	writeJSON(w, http.StatusCreated, u)
 }

@@ -58,6 +58,7 @@
     <aside class="sidebar">
       <header class="sidebar-head">
         <span class="brand small">rivendell</span>
+        <span id="notif-total" class="notif-total" title="Missed notifications" hidden></span>
         <span id="conn-status" class="conn offline" title="Reconnecting…"></span>
       </header>
 
@@ -181,6 +182,11 @@
         <label>Status text <span class="optional">(optional)</span>
           <input id="profile-status-text" maxlength="128" placeholder="what you're up to" autocomplete="off">
         </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="notif-enable">
+          Desktop notifications
+        </label>
+        <p id="notif-status" class="hint"></p>
         <button type="submit" class="primary">Save</button>
         <p id="profile-error" class="error" role="alert"></p>
       </form>

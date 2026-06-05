@@ -171,3 +171,47 @@ test("otherDMParticipant returns the member that isn't me", () => {
   // Not a DM -> null.
   assert.equal(S.otherDMParticipant({ is_dm: false, name: "general" }, 1), null);
 });
+
+test("setUnreadSummary seeds both maps and drops zero counts", () => {
+  let s = S.initialState();
+  s = S.setUnreadSummary(s, [
+    { channel_id: 1, unread: 3, mentions: 1 },
+    { channel_id: 2, unread: 5, mentions: 0 },
+    { channel_id: 3, unread: 0, mentions: 0 },
+  ]);
+  assert.deepEqual(s.unread, { 1: 3, 2: 5 });
+  assert.deepEqual(s.mentions, { 1: 1 });
+  // It replaces wholesale (durability: server is the source of truth).
+  s = S.setUnreadSummary(s, [{ channel_id: 9, unread: 2, mentions: 2 }]);
+  assert.deepEqual(s.unread, { 9: 2 });
+  assert.deepEqual(s.mentions, { 9: 2 });
+});
+
+test("setUnreadSummary tolerates null", () => {
+  const s = S.setUnreadSummary(S.initialState(), null);
+  assert.deepEqual(s.unread, {});
+  assert.deepEqual(s.mentions, {});
+});
+
+test("totalUnread and totalMentions sum the maps", () => {
+  const s = S.setUnreadSummary(S.initialState(), [
+    { channel_id: 1, unread: 3, mentions: 1 },
+    { channel_id: 2, unread: 5, mentions: 2 },
+  ]);
+  assert.equal(S.totalUnread(s), 8);
+  assert.equal(S.totalMentions(s), 3);
+  assert.equal(S.totalMentions(S.initialState()), 0);
+});
+
+test("applyEvent read.update clears both counts for the channel", () => {
+  let s = S.setUnreadSummary(S.initialState(), [
+    { channel_id: 1, unread: 3, mentions: 1 },
+    { channel_id: 2, unread: 5, mentions: 2 },
+  ]);
+  s = S.applyEvent(s, { type: "read.update", payload: { channel_id: 1, last_read_message_id: 99 } });
+  assert.equal(s.unread[1], undefined);
+  assert.equal(s.mentions[1], undefined);
+  // Other channels untouched.
+  assert.equal(s.unread[2], 5);
+  assert.equal(s.mentions[2], 2);
+});
