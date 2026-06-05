@@ -947,10 +947,11 @@ async function loadNewerMessages() {
     const newer = await api.messages(cid, { after: newest, limit: PAGE });
     if (newer.length < PAGE) viewingHistory.delete(cid); // caught up to the live tail
     if (newer.length && cid === state.activeChannelId) {
-      // Appended content sits below the viewport, so renderMessages() preserves
-      // the reader's scroll position without any manual adjustment.
+      // Hold position: the new messages land below the viewport, so the reader
+      // stays put and scrolls down into them (rather than being snapped to the
+      // new bottom, which on mobile left no room to trigger the next page).
       state = S.appendMessages(state, cid, newer);
-      renderMessages();
+      renderMessages(false, true);
     }
     if (cid === state.activeChannelId) renderHistoryBanner();
   } catch (ex) {
@@ -1001,7 +1002,9 @@ async function jumpToMessage(channelId, messageId) {
     // (enable scroll-down loading + the banner); fewer means we're at the bottom.
     if (msgs.filter((m) => m.id > messageId).length >= AROUND_HALF) viewingHistory.add(channelId);
     else viewingHistory.delete(channelId);
-    renderMessages(false);
+    // Hold position so the rebuild doesn't snap to the bottom (its rAF scroll would
+    // otherwise fight the scrollIntoView centering below, esp. on mobile).
+    renderMessages(false, true);
     renderHistoryBanner();
     history.replaceState(null, "", permalinkHash(channelId, messageId));
     const target = document.querySelector(`[data-msg-id="${messageId}"]`);
@@ -1042,7 +1045,9 @@ function wireScrollback() {
   const wrap = $("#message-list");
   wrap.addEventListener("scroll", () => {
     if (wrap.scrollTop < 120) loadOlderMessages();
-    else if (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 120) loadNewerMessages();
+    // Prefetch the next forward page about a screen early so reading downward
+    // through history stays seamless and never strands at the bottom.
+    else if (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < wrap.clientHeight) loadNewerMessages();
   });
 }
 
@@ -1081,11 +1086,14 @@ function renderTypingIndicator() {
   }
 }
 
-function renderMessages(forceBottom = false) {
+function renderMessages(forceBottom = false, holdPosition = false) {
   const wrap = $("#message-list");
   // forceBottom (channel open) always lands at the newest message; otherwise we
   // only follow the conversation if the reader is already near the bottom.
-  const atBottom = forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+  // holdPosition wins over both: when paging forward through history (or jumping)
+  // we must NOT snap to the bottom — that would strand the reader past the content
+  // they just loaded. The caller restores/sets the scroll position itself.
+  const atBottom = !holdPosition && (forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80);
   const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
   wrap.innerHTML = "";
   const msgs = state.messages[state.activeChannelId] || [];

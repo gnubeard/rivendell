@@ -28,7 +28,10 @@
   v1.0.8; v1.0.9 polish: canonical permalink hash helper (fixed a /m/ vs /m drift
   that broke shared links on fresh load) + feedback when an anchor is deleted/gone;
   v1.0.10: bidirectional history paging (after= cursor → scroll *down* loads newer)
-  and the "viewing history" banner only shows when the window has a gap to the tail.
+  and the "viewing history" banner only shows when the window has a gap to the tail;
+  v1.0.11: forward paging now holds scroll position instead of snapping to the
+  bottom (the snap stranded mobile readers at the end so the next page never
+  loaded), and prefetches ~a screen early so reading downward stays seamless.
 
 ## Backlog (sorted by effort)
 
