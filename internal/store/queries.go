@@ -595,14 +595,14 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 	return out, nil
 }
 
-// ListPinnedMessages returns a channel's pinned (non-deleted) messages, most
-// recently pinned first.
+// ListPinnedMessages returns a channel's pinned (non-deleted) messages, oldest
+// pinned first.
 func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+messageCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND pinned_at IS NOT NULL AND deleted_at IS NULL
-		 ORDER BY pinned_at DESC`, channelID)
+		 ORDER BY pinned_at ASC`, channelID)
 	if err != nil {
 		return nil, err
 	}
