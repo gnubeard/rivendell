@@ -810,7 +810,7 @@ async function loadChannel(id) {
     // A short first page means there's nothing older to scroll back to.
     if (msgs.length < PAGE) historyComplete.add(id);
     else historyComplete.delete(id);
-    renderMessages();
+    renderMessages(true); // opening a channel always lands at the newest message
   } catch (ex) {
     $("#message-list").innerHTML = "";
     $("#message-list").append(el("div", { class: "notice" }, ex.message));
@@ -857,9 +857,11 @@ function wireScrollback() {
   });
 }
 
-function renderMessages() {
+function renderMessages(forceBottom = false) {
   const wrap = $("#message-list");
-  const atBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+  // forceBottom (channel open) always lands at the newest message; otherwise we
+  // only follow the conversation if the reader is already near the bottom.
+  const atBottom = forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
   const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
   wrap.innerHTML = "";
   const msgs = state.messages[state.activeChannelId] || [];
@@ -938,8 +940,15 @@ function renderMessages() {
   }
   // Follow the conversation when already at the bottom; otherwise hold the
   // reader's position (loadOlderMessages adjusts further for prepended history).
-  if (atBottom) wrap.scrollTop = wrap.scrollHeight;
-  else wrap.scrollTop = prevTop;
+  if (atBottom) {
+    wrap.scrollTop = wrap.scrollHeight;
+    // A late reflow (text wrapping, async metrics) can grow scrollHeight a few
+    // pixels after the line above, leaving us just short of the bottom. Re-pin
+    // once layout has settled so we land exactly at the end.
+    requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
+  } else {
+    wrap.scrollTop = prevTop;
+  }
 }
 
 // --- composer + message actions -----------------------------------------
