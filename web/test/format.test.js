@@ -50,6 +50,76 @@ test("does not autolink javascript scheme", () => {
   assert.ok(!out.includes("<a "), "non-http schemes must not become links");
 });
 
+test("underscores in a URL never get italicized (no mangling)", () => {
+  const out = formatMessage("see https://example.com/a_b_c_d");
+  assert.ok(out.includes('href="https://example.com/a_b_c_d"'), "full URL preserved in href");
+  assert.ok(out.includes(">https://example.com/a_b_c_d</a>"), "full URL preserved as link text");
+  assert.ok(!out.includes("<em>"), "no stray italic from the underscores");
+});
+
+test("markdown link [text](url) renders as an anchor", () => {
+  const out = formatMessage("see [the docs](https://example.com/docs)");
+  assert.ok(out.includes('<a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">the docs</a>'));
+  assert.ok(!out.includes("](https"), "raw markdown syntax consumed");
+});
+
+test("markdown link text may carry inline markup", () => {
+  const out = formatMessage("[**bold** link](https://x.com)");
+  assert.ok(out.includes('<a href="https://x.com"'));
+  assert.ok(out.includes("<strong>bold</strong>"));
+});
+
+test("markdown link with a non-http scheme stays literal text", () => {
+  const out = formatMessage("[click](javascript:alert(1))");
+  assert.ok(!out.includes("<a "), "javascript: target must not become a link");
+  assert.ok(out.includes("[click]"), "left as literal text");
+});
+
+test("markdown link URL is not also autolinked or imaged", () => {
+  const out = formatMessage("[pic](https://x.com/c.png)");
+  assert.ok(out.includes(">pic</a>"), "renders the author's text, not an image");
+  assert.ok(!out.includes("<img"), "explicit link text suppresses image embedding");
+});
+
+test("bare image URL renders inline as an image", () => {
+  const out = formatMessage("https://example.com/cat.gif");
+  assert.ok(out.includes('<img class="msg-image" src="https://example.com/cat.gif"'));
+  assert.ok(out.includes('class="msg-image-link"'), "image wrapped in a link to the full URL");
+});
+
+test("image embedding can be disabled (search rows)", () => {
+  const out = formatMessage("https://example.com/cat.gif", null, null, { embedImages: false });
+  assert.ok(!out.includes("<img"), "no inline image when embedImages is false");
+  assert.ok(out.includes('href="https://example.com/cat.gif"'), "falls back to a plain link");
+});
+
+test("image URL with a query string is still detected", () => {
+  const out = formatMessage("https://example.com/pic.jpg?w=200&h=100");
+  // & was escaped before matching; the image must still be recognized.
+  assert.ok(out.includes('<img class="msg-image" src="https://example.com/pic.jpg?w=200&amp;h=100"'));
+});
+
+test("non-image bare URL still autolinks (not imaged)", () => {
+  const out = formatMessage("https://example.com/page");
+  assert.ok(out.includes('<a href="https://example.com/page"'));
+  assert.ok(!out.includes("<img"));
+});
+
+test("links and images stay XSS-safe", () => {
+  const out = formatMessage('[x](https://e.com/"onmouseover="alert(1))');
+  assert.ok(!out.includes('"onmouseover='), "a quote in the URL is escaped, can't break the attribute");
+  const img = formatMessage('https://e.com/a.png" onerror="alert(1)');
+  // The space ends the bare URL token, so the trailing attribute payload is just
+  // escaped text, never part of the tag.
+  assert.ok(!img.includes('onerror="alert'), "no live event handler injected");
+});
+
+test("an image URL inside a code span is left as text", () => {
+  const out = formatMessage("`https://example.com/cat.gif`");
+  assert.ok(out.includes("<code>https://example.com/cat.gif</code>"));
+  assert.ok(!out.includes("<img"), "code spans are never imaged");
+});
+
 test("newlines become breaks", () => {
   assert.equal(formatMessage("a\nb"), "a<br>b");
 });

@@ -6,7 +6,8 @@
 // only ever introduce the specific tags we add ourselves.
 //
 // Supported: ```fenced code```, `inline code`, **bold**, *italic*, _italic_,
-// ~~strike~~, > blockquote, autolinked http(s) URLs, and newlines.
+// ~~strike~~, > blockquote, [text](url) links, autolinked http(s) URLs, inline
+// images (a bare URL pointing at an image renders the image), and newlines.
 //
 // This module is pure (no DOM, no globals) so it can be unit-tested under Node.
 
@@ -37,28 +38,69 @@ export function mentionsUser(content, username) {
   return false;
 }
 
-// Apply inline rules to a single already-escaped line (no code spans here).
-function inline(escaped, meLower) {
+// Apply text-only inline rules (bold/italic/strike/mentions) to an already-escaped
+// run. This deliberately does NOT touch links — link extraction happens one layer
+// up in inline(), so a URL is never fed through these regexes (that is what keeps
+// underscores in a URL from being chewed into <em>).
+function inlineMarkup(escaped, meLower) {
   let out = escaped;
   // Bold then italic (order matters so ** isn't eaten by *).
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  // Mentions: style @username; flag the current user's own. MUST run before
-  // autolinking so the span (which contains a quoted class attr) is never
-  // injected inside an href="...". The captured name is [A-Za-z0-9_], so it
-  // can't carry HTML metacharacters.
+  // Mentions: style @username; flag the current user's own. The captured name is
+  // [A-Za-z0-9_], so it can't carry HTML metacharacters.
   out = out.replace(MENTION_RE, (full, pre, name) => {
     const cls = meLower && name.toLowerCase() === meLower ? "mention mention-me" : "mention";
     return `${pre}<span class="${cls}">@${name}</span>`;
   });
-  // Autolink http/https URLs. URLs in escaped text can contain &amp; etc.
-  out = out.replace(
-    /\bhttps?:\/\/[^\s<]+/g,
-    (m) => `<a href="${m}" target="_blank" rel="noopener noreferrer">${m}</a>`
-  );
   return out;
+}
+
+// LINK_RE matches, in priority order, a markdown link [text](url) OR a bare
+// http(s) URL. Run against the *escaped* string: `[`, `]`, `(`, `)` survive
+// escaping untouched, and only https?:// schemes are accepted (so `[x](javascript:…)`
+// and a bare `javascript:` never become links). The markdown URL stops at `)` or
+// whitespace; the bare URL stops at whitespace (the `<` guard is moot post-escape).
+const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+
+// IMAGE_URL_RE recognizes a URL whose path ends in a known image extension
+// (optionally followed by a ?query or #fragment). Used only on *bare* URLs — an
+// explicit [text](url) keeps its text and never becomes an image.
+const IMAGE_URL_RE = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg)(?:[?#]\S*)?$/i;
+
+function linkAnchor(url, text) {
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+}
+
+function imageEmbed(url) {
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="msg-image-link">` +
+    `<img class="msg-image" src="${url}" alt="" loading="lazy"></a>`;
+}
+
+// inline renders an escaped, non-code, non-emoji run. It SPLITS out links the same
+// way inlineWithEmoji splits out emoji: the markdown pass (inlineMarkup) only runs
+// on the gaps between links, so it can never mangle a URL. A bare URL pointing at
+// an image renders the image inline (unless embedImages is false, e.g. in search
+// rows, where it falls back to a plain link).
+function inline(escaped, meLower, embedImages) {
+  let out = "";
+  let last = 0;
+  let m;
+  LINK_RE.lastIndex = 0;
+  while ((m = LINK_RE.exec(escaped)) !== null) {
+    out += inlineMarkup(escaped.slice(last, m.index), meLower);
+    if (m[1] !== undefined) {
+      // [text](url): keep the author's text (with markup); never an image.
+      out += linkAnchor(m[2], inlineMarkup(m[1], meLower));
+    } else {
+      const url = m[3];
+      out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url) : linkAnchor(url, url);
+    }
+    last = m.index + m[0].length;
+  }
+  return out + inlineMarkup(escaped.slice(last), meLower);
 }
 
 // atQuery scans backward from `pos` in `text` for an @token that should
@@ -122,8 +164,13 @@ function emojiImg(name) {
   return `<img class="emoji" src="/api/emojis/${name}/image" alt=":${name}:" title=":${name}:" loading="lazy">`;
 }
 
-export function formatMessage(text, me, emojis) {
+// formatMessage opts: { embedImages } — when false, bare image URLs render as
+// plain links instead of inline <img> (used in the whole-row-clickable search
+// results, where an embedded image would fight the row's click-to-jump). Defaults
+// to embedding.
+export function formatMessage(text, me, emojis, opts) {
   if (text == null) return "";
+  const embedImages = !opts || opts.embedImages !== false;
   const meLower = me ? String(me).toLowerCase() : null;
   const escaped = escapeHtml(String(text));
 
@@ -143,9 +190,9 @@ export function formatMessage(text, me, emojis) {
       const rendered = lines.map((line) => {
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
-          return `<blockquote>${inlineWithCode(body, meLower, emojis)}</blockquote>`;
+          return `<blockquote>${inlineWithCode(body, meLower, emojis, embedImages)}</blockquote>`;
         }
-        return inlineWithCode(line, meLower, emojis);
+        return inlineWithCode(line, meLower, emojis, embedImages);
       });
       html += rendered.join("<br>");
     }
@@ -154,14 +201,14 @@ export function formatMessage(text, me, emojis) {
 }
 
 // Handle `inline code` spans, leaving their contents free of inline markdown.
-function inlineWithCode(escapedLine, meLower, emojis) {
+function inlineWithCode(escapedLine, meLower, emojis, embedImages) {
   const segs = escapedLine.split(/`/);
   let out = "";
   for (let i = 0; i < segs.length; i++) {
     if (i % 2 === 1) {
       out += `<code>${segs[i]}</code>`;
     } else {
-      out += inlineWithEmoji(segs[i], meLower, emojis);
+      out += inlineWithEmoji(segs[i], meLower, emojis, embedImages);
     }
   }
   return out;
@@ -173,16 +220,16 @@ function inlineWithCode(escapedLine, meLower, emojis) {
 // over (and mangle) a generated <img> tag, even when a shortcode contains the
 // underscores that the italic rule keys on. Unknown shortcodes are left in place
 // as literal text for inline() to render.
-function inlineWithEmoji(seg, meLower, emojis) {
-  if (!emojis) return inline(seg, meLower);
+function inlineWithEmoji(seg, meLower, emojis, embedImages) {
+  if (!emojis) return inline(seg, meLower, embedImages);
   let out = "";
   let last = 0;
   let m;
   EMOJI_RE.lastIndex = 0;
   while ((m = EMOJI_RE.exec(seg)) !== null) {
     if (!hasEmoji(emojis, m[1])) continue;
-    out += inline(seg.slice(last, m.index), meLower) + emojiImg(m[1]);
+    out += inline(seg.slice(last, m.index), meLower, embedImages) + emojiImg(m[1]);
     last = m.index + m[0].length;
   }
-  return out + inline(seg.slice(last), meLower);
+  return out + inline(seg.slice(last), meLower, embedImages);
 }

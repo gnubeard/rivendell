@@ -1487,6 +1487,22 @@ function wireComposer() {
     setTimeout(() => { popup.hidden = true; completion = null; }, 200);
   });
 
+  // Paste a single URL onto a non-empty selection → wrap it as a [text](url)
+  // markdown link. Only fires when the clipboard is exactly one URL and there's a
+  // selection; otherwise the default paste runs untouched.
+  input.addEventListener("paste", (e) => {
+    const url = ((e.clipboardData || window.clipboardData)?.getData("text") || "").trim();
+    if (!/^https?:\/\/\S+$/.test(url)) return;
+    const start = input.selectionStart, end = input.selectionEnd;
+    if (start === end) return; // no selection — let the URL paste as plain text
+    e.preventDefault();
+    const md = `[${input.value.slice(start, end)}](${url})`;
+    input.value = input.value.slice(0, start) + md + input.value.slice(end);
+    const caret = start + md.length;
+    input.setSelectionRange(caret, caret);
+    autoGrow();
+  });
+
   input.onkeydown = async (e) => {
     if (!popup.hidden && completion) {
       if (e.key === "ArrowDown") {
@@ -1905,7 +1921,7 @@ async function runSearch(reset) {
           el("span", { class: "search-channel" }, channelLabel(ch)),
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
           el("span", { class: "msg-time" }, formatTime(m.created_at))),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { embedImages: false }) }))
     );
   }
   // A full page implies more may exist; advance the cursor to the oldest hit.

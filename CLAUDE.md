@@ -276,6 +276,19 @@ These were the requested next-work items; all are now implemented and tested.
   to a DOM node it tries to preserve across renders — drive it from state. Enter
   saves / Shift+Enter newline / Esc cancels; empty-or-unchanged cancels (delete
   removes); channel switch abandons the edit; a save error keeps the editor open.
+- **Markdown links + inline images.** `format.js` extracts links from each escaped
+  run *before* the markdown pass: `inlineMarkup` (bold/italic/strike/mentions) runs
+  only on the gaps between links, so a URL is never fed through the italic rule —
+  this is what fixes underscores mangling URLs (don't refactor it back to a single
+  regex sweep that linkifies last). `LINK_RE` matches `[text](url)` (https only, so
+  `[x](javascript:…)` stays literal) or a bare http(s) URL; a bare URL whose path
+  ends in an image extension renders inline as an `<img class=msg-image>` (wrapped
+  in a link to the full URL) instead of its text. The escape-first XSS invariant is
+  preserved — URLs land in `href`/`src` already escaped, so a quote can't break out.
+  `formatMessage(text, me, emojis, {embedImages:false})` disables the image embed
+  for **search rows** only (the whole row is click-to-jump; an inline image would
+  fight that — they fall back to plain links). Composer: pasting a single URL onto a
+  non-empty selection wraps it `[selection](url)`.
 
 When in doubt on UI, favor clarity over polish — aesthetics are explicitly
 secondary to "it works" for this draft. Keep changes small and tested.

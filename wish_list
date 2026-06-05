@@ -104,6 +104,19 @@
   (focus only re-grabbed if it was focused, so a background re-render never steals
   it). Switching channels abandons the edit; a save failure keeps the editor open
   so the draft isn't lost.
+- Markdown links + inline images — v1.0.25. format.js now extracts links from each
+  escaped run BEFORE the markdown pass (mirroring the emoji split): inlineMarkup
+  does bold/italic/strike/mentions on the gaps only, so a URL is never fed through
+  the italic rule — fixing the long-standing "underscores mangle URLs" bug. One
+  LINK_RE matches, in priority order, [text](url) (https?:// only — [x](javascript:…)
+  stays literal) or a bare http(s) URL; a bare URL whose path ends in an image
+  extension (png/jpe?g/gif/webp/avif/bmp/svg, optional ?query/#frag) renders inline
+  as <a class=msg-image-link><img class=msg-image …></a> instead of its text. The
+  escape-first invariant is intact: URLs go into href/src already escaped, so a quote
+  can't break the attribute (unit-tested). New formatMessage opts {embedImages} —
+  search rows pass embedImages:false (an embedded image would fight the whole-row
+  click-to-jump; they fall back to plain links). Composer bonus: pasting a single
+  URL onto a non-empty selection wraps it as [selection](url).
 
 ## Backlog (sorted by effort)
 
@@ -113,10 +126,6 @@
 ## Meta / future ideas (not yet scoped)
 
 - Once in a while, a logged-in user's state flickers. Let's put something in so that the displayed state only changes if it persists, oh, a full second? If that can be done easily.
-
-- Messages should render linked images inline. Messages consisting of just a link to an image should hide the URL and only render that image. (I don't have interest in running a CDN at this time, but this will allow memes and gifs.)
-
-- Links should render [text](url). Bonus points: pasting a URL onto selected text automatically formats it this way. (Oh, and btw, underscores should never mangle URLs.)
 
 Piece de resistance:
 - A Claude agent running on this box, wired into the chat, so work requests can

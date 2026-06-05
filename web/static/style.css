@@ -213,6 +213,8 @@ button.primary:hover { filter: brightness(1.08); }
 .msg.deleted-run .msg-body.deleted { font-size: 0.8rem; }
 .msg-body .edited { color: var(--text-faint); font-size: 0.72rem; }
 .msg-body a { color: var(--accent); }
+.msg-body a.msg-image-link { display: inline-block; }
+.msg-body img.msg-image { display: block; max-width: min(360px, 100%); max-height: 280px; width: auto; height: auto; margin: 0.3rem 0; border-radius: var(--radius); background: var(--bg-3); object-fit: contain; }
 .msg-body code { background: var(--bg-3); padding: 0.05rem 0.3rem; border-radius: 4px; font-family: var(--mono); font-size: 0.85em; }
 .msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; }
 .msg-body pre.code-block code { background: none; padding: 0; }
