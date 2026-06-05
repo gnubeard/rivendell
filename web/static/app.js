@@ -1135,7 +1135,10 @@ function wireControls() {
   $("#admin-btn").onclick = openAdmin;
   $("#admin-close").onclick = () => ($("#admin-modal").hidden = true);
 
-  $("#about-btn").onclick = () => ($("#about-modal").hidden = false);
+  $("#about-btn").onclick = () => {
+    closeDrawers(); // on mobile, get the sidebar drawer out from behind the modal
+    $("#about-modal").hidden = false;
+  };
   $("#about-close").onclick = () => ($("#about-modal").hidden = true);
 
   $("#invite-btn").onclick = openInviteModal;
