@@ -2332,6 +2332,11 @@ function wireSwipe() {
     startY = e.touches[0].clientY;
     decided = false;
     tracking = false;
+    // Don't hijack horizontal scrolls that start inside an overflowing code block.
+    const codeBlock = e.target.closest("pre.code-block");
+    if (codeBlock && codeBlock.scrollWidth > codeBlock.clientWidth) {
+      decided = true; // classified: not a drawer swipe
+    }
   }, { passive: true });
 
   appEl.addEventListener("touchmove", (e) => {

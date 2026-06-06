@@ -234,6 +234,7 @@ button.primary:hover { filter: brightness(1.08); }
 .yt-embed { margin: 0.4rem 0 0.1rem; max-width: 560px; }
 .yt-embed iframe { width: 100%; aspect-ratio: 16 / 9; border: none; border-radius: var(--radius); display: block; }
 .msg-actions { position: absolute; top: 0.15rem; right: 0; display: flex; gap: 0.6rem; padding: 0 0.2rem 0 1.4rem; background: linear-gradient(to right, transparent, var(--bg-2) 30%); visibility: hidden; pointer-events: none; }
+.msg:hover { background: rgba(255, 255, 255, 0.04); border-radius: 6px; }
 .msg:hover .msg-actions { visibility: visible; animation: msg-actions-activate 0s 300ms forwards; }
 @keyframes msg-actions-activate { to { pointer-events: auto; } }
 /* Inline message editor (replaces the body while editing your own message). */
