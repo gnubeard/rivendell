@@ -33,6 +33,26 @@ STATE_DIR="${RIVENDELL_STATE_DIR:-/tmp}"
 STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 MAX_RESPONSE=3800  # chars; leaves headroom under Rivendell's default 4096-byte limit
 
+# Standing instructions prepended to every request before it reaches Claude.
+# These ride on the message itself so they apply regardless of what the project
+# memory does or doesn't retain — the test-database URL in particular has been
+# chronically forgotten. Keep this in sync with the conventions in CLAUDE.md.
+BRIDGE_PREAMBLE='Project standing instructions (injected by claude-bridge — always apply, do not skip):
+
+1. Running tests: the Go integration tests are gated on TEST_DATABASE_URL and
+   SILENTLY SKIP without it. You MUST run the suite as:
+       make test TEST_DATABASE_URL='\''postgres://chat:chat_dev_pw@localhost:55432/chat_test?sslmode=disable'\''
+   Never report tests as run/passing/green unless you ran them with that URL set.
+
+2. Committing: when the work is complete and the full suite above is green, commit
+   to the develop branch (a develop commit auto-deploys to the test env). Bump the
+   patch Version constant in internal/config/config.go in that same commit, unless
+   the change is helper-script/docs-only and does not affect the built binary.
+   Do not sweep in unrelated uncommitted working-tree changes you did not author.
+
+----- user request follows -----
+'
+
 # ---------------------------------------------------------------------------
 # Dependency check
 
@@ -143,7 +163,7 @@ while true; do
 
         # Run Claude in the repo directory. Capture both stdout and stderr.
         CLAUDE_EXIT=0
-        CLAUDE_OUT=$(cd "$REPO_DIR" && claude --print "$CONTENT" 2>&1) || CLAUDE_EXIT=$?
+        CLAUDE_OUT=$(cd "$REPO_DIR" && claude --print "$BRIDGE_PREAMBLE$CONTENT" 2>&1) || CLAUDE_EXIT=$?
 
         TRIMMED=$(trim_output "$CLAUDE_OUT")
         if [ "$CLAUDE_EXIT" -eq 0 ]; then
