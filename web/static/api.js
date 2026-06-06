@@ -92,8 +92,10 @@ export const api = {
   addChannelMember: (id, userId) => req("POST", `/api/channels/${id}/members`, { user_id: userId }),
   removeChannelMember: (id, userId) => req("DELETE", `/api/channels/${id}/members/${userId}`),
 
-  // direct messages (create-or-find the two-member private channel)
+  // direct messages (create-or-find the two-member private channel); closeDM
+  // hides it from the caller's sidebar (server-authoritative, per-user).
   createDM: (userId) => req("POST", "/api/dms", { user_id: userId }),
+  closeDM: (channelId) => req("DELETE", `/api/dms/${channelId}`),
 
   // messages
   messages: (channelId, opts = {}) => {

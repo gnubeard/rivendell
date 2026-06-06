@@ -90,42 +90,17 @@ let editingMessageId = null;  // id of the message being edited inline, or null
 let editDraft = "";           // current text of the inline editor, preserved on re-render
 let editFocusPending = false; // focus the editor on the next render (it just opened)
 
-// Closed DMs: a per-browser set of DM channel ids the user has hidden from the
-// sidebar. The channel and its history are untouched server-side — closing only
-// hides the row. Reopening (clicking the person's name) or a fresh incoming
-// message un-hides it. Persisted to localStorage so it survives refreshes.
-const closedDMs = loadClosedDMs();
+// Which DMs are open is server-authoritative (the dm_open table): the channel
+// list endpoint only returns DMs the user has open, so state.channels holds just
+// those. Closing a DM (closeDM) hides it server-side for this user across every
+// device; starting one (startDM) or a fresh incoming message reopens it. This
+// replaced a per-browser localStorage set that reopened every DM on a new device.
 
 // Voice call state. ringState is set while a ring is in progress (either an
 // outgoing ring we sent, or an incoming ring we're showing the banner for).
 let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUserId }
 // voiceCallState is the live state from voice.js (updated via callback).
 let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false };
-
-function loadClosedDMs() {
-  try {
-    return new Set(JSON.parse(localStorage.getItem("rivendell.closedDMs") || "[]"));
-  } catch (e) {
-    return new Set();
-  }
-}
-
-function saveClosedDMs() {
-  try {
-    localStorage.setItem("rivendell.closedDMs", JSON.stringify([...closedDMs]));
-  } catch (e) {
-    /* best-effort: persistence is non-fatal */
-  }
-}
-
-// reopenDM un-hides a previously closed DM (idempotent). Returns true if it was
-// actually closed, so callers can decide whether a re-render is needed.
-function reopenDM(id) {
-  if (!closedDMs.has(id)) return false;
-  closedDMs.delete(id);
-  saveClosedDMs();
-  return true;
-}
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
@@ -355,11 +330,9 @@ async function enterApp() {
   }
   // Use the channel's own id (a number) — localStorage hands back a string,
   // which would fail the `===` comparisons used throughout rendering/realtime.
-  // A closed DM is never restored as the active channel.
-  const restore =
-    saved && state.channels[saved] && !closedDMs.has(state.channels[saved].id)
-      ? state.channels[saved].id
-      : null;
+  // A closed DM isn't in state.channels (the server omits it), so it can't be
+  // restored as the active channel.
+  const restore = saved && state.channels[saved] ? state.channels[saved].id : null;
   const firstChannel = restore || regularChannelOrder()[0] || state.channelOrder[0];
   if (firstChannel) {
     state = S.setActiveChannel(state, firstChannel);
@@ -542,8 +515,8 @@ function startRealtime() {
         } else if (isNewFromOther && !muted) {
           // A new message in a channel we're not looking at: flag it unread,
           // and separately flag @-mentions so they badge distinctly. A message
-          // landing in a closed DM resurfaces it so you don't miss it.
-          reopenDM(cid);
+          // landing in a closed DM resurfaces it server-side, which arrives as a
+          // channel.new just before this event — so the row is already back.
           state = S.bumpUnread(state, cid);
           if (mentioned) state = S.bumpMention(state, cid);
           renderChannels();
@@ -686,7 +659,9 @@ function renderChannels() {
 function renderDMs() {
   const list = $("#dm-list");
   list.innerHTML = "";
-  const dms = state.channelOrder.filter((id) => state.channels[id].is_dm && !closedDMs.has(id));
+  // state.channels only holds DMs the server reports as open for us, so a plain
+  // is_dm filter is the open set — no client-side hidden bookkeeping needed.
+  const dms = state.channelOrder.filter((id) => state.channels[id].is_dm);
   $("#dm-head").hidden = dms.length === 0;
   for (const id of dms) {
     const ch = state.channels[id];
@@ -857,28 +832,38 @@ async function leaveActiveChannel() {
   }
 }
 
-// closeDM hides a DM from the sidebar (per-browser; the channel and its history
-// stay intact server-side). If it's the channel currently open, fall back to the
-// first regular channel so we don't leave the reader staring at a closed DM.
-function closeDM(id) {
-  closedDMs.add(id);
-  saveClosedDMs();
-  if (id === state.activeChannelId) {
-    const next = regularChannelOrder()[0] || state.channelOrder.find((cid) => !closedDMs.has(cid));
+// closeDM hides a DM from the sidebar. The close is server-authoritative and
+// per-user (DELETE /api/dms/{id}), so it sticks across this user's devices; the
+// channel, its membership, and its history stay intact, and the other
+// participant is unaffected. We drop it from local state so the row disappears
+// immediately, and if it was the open channel fall back to a regular one so the
+// reader isn't left staring at a closed DM.
+async function closeDM(id) {
+  try {
+    await api.closeDM(id);
+  } catch (ex) {
+    alert(ex.message);
+    return;
+  }
+  const wasActive = id === state.activeChannelId;
+  state = S.removeChannel(state, id);
+  if (wasActive) {
+    const next = regularChannelOrder()[0] || state.channelOrder[0] || null;
     if (next != null) {
-      selectChannel(next);
-      return; // selectChannel re-renders the DM list for us
+      selectChannel(next); // re-renders the DM list for us
+      return;
     }
   }
+  renderChannels();
   renderDMs();
 }
 
 // startDM create-or-finds the DM channel with a user and opens it. Doubles as the
-// "resurrect a closed DM" path — clicking a name un-hides a previously closed DM.
+// "resurrect a closed DM" path — opening reopens it server-side (createDM marks
+// it open), so it reappears here and on the user's other devices.
 async function startDM(userId) {
   try {
     const ch = await api.createDM(userId);
-    reopenDM(ch.id);
     state = S.upsertChannel(state, ch);
     await selectChannel(ch.id);
   } catch (ex) {

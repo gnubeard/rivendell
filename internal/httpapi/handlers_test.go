@@ -475,6 +475,91 @@ func TestDMCreateFindAndScoping(t *testing.T) {
 	}
 }
 
+// TestDMOpenStateServerAuthoritative covers the server-side "open DM" state: a
+// closed DM drops out of that user's channel list (but not the other party's),
+// the channel and its history survive, and a new message reopens it.
+func TestDMOpenStateServerAuthoritative(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	seedAdmin(t, ts, st)
+	aliceC, alice := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, bob := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	// listHasDM reports whether the given client's channel list includes id.
+	listHasDM := func(c *http.Client, id int64) bool {
+		_, body := doJSON(t, c, "GET", ts.URL+"/api/channels", nil)
+		var chans []store.Channel
+		json.Unmarshal(body, &chans)
+		for _, ch := range chans {
+			if ch.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Alice opens a DM with Bob; it's open for both.
+	_, body := doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": bob.ID})
+	var dm store.Channel
+	json.Unmarshal(body, &dm)
+	if !listHasDM(aliceC, dm.ID) || !listHasDM(bobC, dm.ID) {
+		t.Fatalf("a freshly opened DM should be visible to both participants")
+	}
+
+	// Bob closes it: gone from Bob's list, still in Alice's (per-user state).
+	resp, body := doJSON(t, bobC, "DELETE", ts.URL+"/api/dms/"+itoa(dm.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("close DM: %d %s", resp.StatusCode, body)
+	}
+	if listHasDM(bobC, dm.ID) {
+		t.Fatalf("a closed DM must not appear in the closer's channel list")
+	}
+	if !listHasDM(aliceC, dm.ID) {
+		t.Fatalf("closing is per-user: the other participant's list is unaffected")
+	}
+
+	// The channel and its history are untouched — Bob can still read it directly.
+	resp, _ = doJSON(t, bobC, "GET", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("closing a DM must not revoke access, got %d", resp.StatusCode)
+	}
+
+	// A new message from Alice reopens the DM for Bob.
+	resp, body = doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages",
+		map[string]string{"content": "you there?"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("alice post to DM: %d %s", resp.StatusCode, body)
+	}
+	if !listHasDM(bobC, dm.ID) {
+		t.Fatalf("a new message must reopen the DM for the recipient")
+	}
+
+	// Only a participant may close a DM: a non-participant (the admin) is denied.
+	adminC, _ := seedMember(t, ts, st, "carol", "Carol", store.RoleModerator)
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/dms/"+itoa(dm.ID), nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-participant closing a DM should be 403, got %d", resp.StatusCode)
+	}
+
+	// Closing only applies to DMs: a public channel id is a 404.
+	_, body = doJSON(t, aliceC, "GET", ts.URL+"/api/channels", nil)
+	var chans []store.Channel
+	json.Unmarshal(body, &chans)
+	var pub int64
+	for _, ch := range chans {
+		if !ch.IsDM {
+			pub = ch.ID
+			break
+		}
+	}
+	if pub != 0 {
+		resp, _ = doJSON(t, aliceC, "DELETE", ts.URL+"/api/dms/"+itoa(pub), nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("closing a non-DM channel should be 404, got %d", resp.StatusCode)
+		}
+	}
+	_ = alice
+}
+
 func TestPrivateChannelInvite(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	adminC, _ := seedAdmin(t, ts, st)

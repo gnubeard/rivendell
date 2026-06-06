@@ -471,6 +471,14 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not list channels")
 		return
 	}
+	// Which DMs this user has open is server-authoritative (the dm_open table),
+	// so a new device shows only the DMs they've actually kept open, not every
+	// DM they've ever started.
+	openDMs, err := s.st.OpenDMChannelIDs(r.Context(), u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list channels")
+		return
+	}
 	// Filter private channels the user can't see. Fresh non-nil slice so an
 	// empty result serializes as [] (JSON null breaks the client's iteration).
 	visible := make([]store.Channel, 0, len(channels))
@@ -482,10 +490,10 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		member, err := s.st.IsChannelMember(r.Context(), ch.ID, u.ID)
 		isMember := err == nil && member
 		// DMs are visible only to their two participants — a moderator/admin
-		// must NOT see other people's DMs. Regular private channels keep the
-		// moderator+ bypass.
+		// must NOT see other people's DMs — and only when the participant has
+		// the DM open in their sidebar.
 		if ch.IsDM {
-			if isMember {
+			if isMember && openDMs[ch.ID] {
 				visible = append(visible, ch)
 			}
 			continue
@@ -619,12 +627,51 @@ func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not open DM")
 		return
 	}
-	// Only announce a freshly-created DM, and only to its two members (the
-	// audience scoping); the caller gets the channel in the HTTP response.
 	if created {
+		// A brand-new DM opens for both participants (mirroring the channel.new
+		// broadcast that surfaces it on each side immediately).
+		if _, err := s.st.OpenDMForAllMembers(r.Context(), ch.ID); err != nil {
+			writeErr(w, http.StatusInternalServerError, "could not open DM")
+			return
+		}
+		// Only announce a freshly-created DM, and only to its two members (the
+		// audience scoping); the caller gets the channel in the HTTP response.
 		s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
+	} else if err := s.st.OpenDM(r.Context(), u.ID, ch.ID); err != nil {
+		// Re-opening an existing DM (e.g. clicking a name to resurrect a closed
+		// one) opens it for the caller only; the other side reopens on a message.
+		writeErr(w, http.StatusInternalServerError, "could not open DM")
+		return
 	}
 	writeJSON(w, http.StatusOK, ch)
+}
+
+// handleCloseDM hides a DM from the caller's sidebar. It's server-authoritative
+// and per-user: the channel, its membership, and its history are untouched (the
+// other participant is unaffected), and the DM reopens for the caller on the
+// next message. Only a participant may close their own DM.
+func (s *Server) handleCloseDM(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil || !ch.IsDM {
+		writeErr(w, http.StatusNotFound, "DM not found")
+		return
+	}
+	member, err := s.st.IsChannelMember(r.Context(), ch.ID, u.ID)
+	if err != nil || !member {
+		writeErr(w, http.StatusForbidden, "not a participant in this DM")
+		return
+	}
+	if err := s.st.CloseDM(r.Context(), u.ID, ch.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not close DM")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
 }
 
 // handleListChannelMembers lists the members of a channel the caller can access.
@@ -1001,6 +1048,17 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not send message")
 		return
+	}
+	// A message in a DM reopens it for every participant who had closed it
+	// (server-authoritative open state). If anyone was reopened, re-announce the
+	// channel first so a client that no longer has it in its list gains the
+	// channel object before the message.new it precedes.
+	if ch.IsDM {
+		if reopened, err := s.st.OpenDMForAllMembers(r.Context(), ch.ID); err != nil {
+			log.Printf("reopen DM on message: %v", err)
+		} else if reopened > 0 {
+			s.broadcast("channel.new", ch, s.audienceForChannel(r.Context(), ch))
+		}
 	}
 	// Record durable pings (DM recipients / @-mentions) before broadcasting, so a
 	// client that reacts to message.new by re-fetching unread sees them.

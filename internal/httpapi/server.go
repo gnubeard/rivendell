@@ -94,7 +94,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/channels/{id}/members/{userId}", s.auth(s.handleRemoveChannelMember))
 
 	// Direct messages (a DM is a two-member private channel; any user may open one).
+	// Open state is server-authoritative: POST opens/finds, DELETE hides it for
+	// the caller (per-user; the channel and its history are untouched).
 	mux.HandleFunc("POST /api/dms", s.auth(s.handleCreateDM))
+	mux.HandleFunc("DELETE /api/dms/{id}", s.auth(s.handleCloseDM))
 
 	// Messages.
 	mux.HandleFunc("GET /api/search", s.auth(s.handleSearch))

@@ -484,6 +484,60 @@ func (s *Store) GetOrCreateDM(ctx context.Context, a, b int64) (Channel, bool, e
 	return c, true, nil
 }
 
+// OpenDM marks a DM channel open in a user's sidebar (idempotent). The presence
+// of the row is the server-authoritative "this DM is open for this user" state;
+// listing filters DMs to the ones a user has open.
+func (s *Store) OpenDM(ctx context.Context, userID, channelID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO dm_open (user_id, channel_id) VALUES ($1, $2)
+		 ON CONFLICT DO NOTHING`, userID, channelID)
+	return err
+}
+
+// OpenDMForAllMembers marks a DM open for every member of the channel (used on
+// creation, and when a message is posted so a participant who had closed it sees
+// it resurface). Returns the number of rows newly inserted — i.e. how many
+// members had it closed and just had it reopened — so the caller can decide
+// whether anyone needs the channel re-announced.
+func (s *Store) OpenDMForAllMembers(ctx context.Context, channelID int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO dm_open (user_id, channel_id)
+		 SELECT user_id, $1 FROM channel_members WHERE channel_id = $1
+		 ON CONFLICT DO NOTHING`, channelID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// CloseDM hides a DM from a single user's sidebar (server-authoritative and
+// per-user). The channel, its membership, and its history are untouched — only
+// this user's open flag clears, and only on a new message does it reopen.
+func (s *Store) CloseDM(ctx context.Context, userID, channelID int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM dm_open WHERE user_id = $1 AND channel_id = $2`, userID, channelID)
+	return err
+}
+
+// OpenDMChannelIDs returns the set of DM channel ids currently open for a user.
+func (s *Store) OpenDMChannelIDs(ctx context.Context, userID int64) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT channel_id FROM dm_open WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) getChannelByName(ctx context.Context, name string) (Channel, error) {
 	return scanChannel(s.db.QueryRowContext(ctx,
 		`SELECT `+channelCols+` FROM channels WHERE name = $1 AND archived_at IS NULL`, name))
