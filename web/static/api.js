@@ -132,4 +132,10 @@ export const api = {
   archivedChannels: () => req("GET", "/api/admin/channels/archived"),
   restoreChannel: (id) => req("POST", `/api/admin/channels/${id}/restore`),
   purgeChannel: (id) => req("DELETE", `/api/admin/channels/${id}`),
+
+  // bot tokens
+  listBotTokens: () => req("GET", "/api/admin/bot-tokens"),
+  createBotToken: (name, userId) =>
+    req("POST", "/api/admin/bot-tokens", userId != null ? { name, user_id: userId } : { name }),
+  deleteBotToken: (id) => req("DELETE", `/api/admin/bot-tokens/${id}`),
 };

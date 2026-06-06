@@ -2359,6 +2359,7 @@ async function openAdmin() {
   await refreshAdminUsers();
   await refreshAdminEmojis();
   await refreshDeletedChannels();
+  await refreshAdminBotTokens();
 
   $("#admin-emoji-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -2375,6 +2376,26 @@ async function openAdmin() {
       $("#admin-emoji-shortcode").value = "";
       $("#admin-emoji-file").value = "";
       await refreshAdminEmojis();
+    } catch (ex) {
+      out.textContent = ex.message;
+    }
+  };
+
+  $("#admin-token-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const out = $("#admin-token-out");
+    out.textContent = "";
+    const name = $("#admin-token-name").value.trim();
+    try {
+      const result = await api.createBotToken(name);
+      out.innerHTML = "";
+      out.append(
+        el("div", { class: "notice" }, "Token created. Copy it now — it won't be shown again:"),
+        el("input", { class: "linkbox", readonly: "readonly", value: result.token,
+          onclick: (e) => e.target.select() }),
+      );
+      $("#admin-token-name").value = "";
+      await refreshAdminBotTokens();
     } catch (ex) {
       out.textContent = ex.message;
     }
@@ -2518,6 +2539,46 @@ async function refreshDeletedChannels() {
       )
     );
   }
+}
+
+async function refreshAdminBotTokens() {
+  const box = $("#admin-token-list");
+  let tokens;
+  try {
+    tokens = await api.listBotTokens();
+  } catch (ex) {
+    box.innerHTML = "";
+    box.append(el("span", { class: "notice" }, ex.message));
+    return;
+  }
+  box.innerHTML = "";
+  if (!tokens.length) {
+    box.append(el("span", { class: "notice" }, "No bot tokens yet."));
+    return;
+  }
+  const table = el("table", { class: "admin-table" });
+  const thead = el("thead");
+  thead.append(el("tr", {},
+    el("th", {}, "name"), el("th", {}, "user"), el("th", {}, "created"), el("th", {}),
+  ));
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const t of tokens) {
+    const user = state.users[t.user_id];
+    const userLabel = user ? user.username : `#${t.user_id}`;
+    const revokeBtn = el("button", { class: "link danger", onclick: async () => {
+      if (!confirm(`Revoke token "${t.name}"? Any script using it will immediately lose access.`)) return;
+      try { await api.deleteBotToken(t.id); await refreshAdminBotTokens(); } catch (ex) { alert(ex.message); }
+    }}, "revoke");
+    tbody.append(el("tr", {},
+      el("td", {}, t.name),
+      el("td", {}, userLabel),
+      el("td", {}, formatTime(t.created_at)),
+      el("td", {}, revokeBtn),
+    ));
+  }
+  table.append(tbody);
+  box.append(table);
 }
 
 // --- helpers -------------------------------------------------------------
