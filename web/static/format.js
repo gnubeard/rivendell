@@ -83,8 +83,9 @@ function imageEmbed(url) {
 // way inlineWithEmoji splits out emoji: the markdown pass (inlineMarkup) only runs
 // on the gaps between links, so it can never mangle a URL. A bare URL pointing at
 // an image renders the image inline (unless embedImages is false, e.g. in search
-// rows, where it falls back to a plain link).
-function inline(escaped, meLower, embedImages) {
+// rows, where it falls back to a plain link). A bare URL matching hideUrl is
+// suppressed entirely — its preview card renders it instead.
+function inline(escaped, meLower, embedImages, hideUrl) {
   let out = "";
   let last = 0;
   let m;
@@ -96,7 +97,11 @@ function inline(escaped, meLower, embedImages) {
       out += linkAnchor(m[2], inlineMarkup(m[1], meLower));
     } else {
       const url = m[3];
-      out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url) : linkAnchor(url, url);
+      if (hideUrl && url === hideUrl) {
+        // suppressed: preview card or YouTube embed renders this URL
+      } else {
+        out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url) : linkAnchor(url, url);
+      }
     }
     last = m.index + m[0].length;
   }
@@ -186,6 +191,20 @@ export function extractYouTubeVideoID(text) {
   return null;
 }
 
+// extractHideURL returns the first bare URL that would generate a preview card or
+// YouTube embed, so the caller can suppress its inline text rendering.
+export function extractHideURL(text) {
+  if (!text) return null;
+  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  let m;
+  while ((m = re.exec(String(text))) !== null) {
+    if (m[3] !== undefined && (YOUTUBE_ID_RE.test(m[3]) || PREVIEW_HOST_RE.test(m[3]))) {
+      return m[3];
+    }
+  }
+  return null;
+}
+
 // EMOJI_RE matches a :shortcode: token. Shortcodes are [a-z0-9_]{2,32} (same
 // charset as usernames), so a matched name can never carry an HTML metacharacter
 // — the <img> we build from it is safe by construction.
@@ -203,13 +222,13 @@ function emojiImg(name) {
   return `<img class="emoji" src="/api/emojis/${name}/image" alt=":${name}:" title=":${name}:" loading="lazy">`;
 }
 
-// formatMessage opts: { embedImages } — when false, bare image URLs render as
-// plain links instead of inline <img> (used in the whole-row-clickable search
-// results, where an embedded image would fight the row's click-to-jump). Defaults
-// to embedding.
+// formatMessage opts: { embedImages, hideUrl } — embedImages: when false, bare
+// image URLs render as plain links instead of inline <img> (search rows). hideUrl:
+// a URL to suppress from inline rendering when its preview card is shown instead.
 export function formatMessage(text, me, emojis, opts) {
   if (text == null) return "";
   const embedImages = !opts || opts.embedImages !== false;
+  const hideUrl = opts && opts.hideUrl ? escapeHtml(String(opts.hideUrl)) : null;
   const meLower = me ? String(me).toLowerCase() : null;
   const escaped = escapeHtml(String(text));
 
@@ -229,9 +248,9 @@ export function formatMessage(text, me, emojis, opts) {
       const rendered = lines.map((line) => {
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
-          return `<blockquote>${inlineWithCode(body, meLower, emojis, embedImages)}</blockquote>`;
+          return `<blockquote>${inlineWithCode(body, meLower, emojis, embedImages, hideUrl)}</blockquote>`;
         }
-        return inlineWithCode(line, meLower, emojis, embedImages);
+        return inlineWithCode(line, meLower, emojis, embedImages, hideUrl);
       });
       html += rendered.join("<br>");
     }
@@ -240,14 +259,14 @@ export function formatMessage(text, me, emojis, opts) {
 }
 
 // Handle `inline code` spans, leaving their contents free of inline markdown.
-function inlineWithCode(escapedLine, meLower, emojis, embedImages) {
+function inlineWithCode(escapedLine, meLower, emojis, embedImages, hideUrl) {
   const segs = escapedLine.split(/`/);
   let out = "";
   for (let i = 0; i < segs.length; i++) {
     if (i % 2 === 1) {
       out += `<code>${segs[i]}</code>`;
     } else {
-      out += inlineWithEmoji(segs[i], meLower, emojis, embedImages);
+      out += inlineWithEmoji(segs[i], meLower, emojis, embedImages, hideUrl);
     }
   }
   return out;
@@ -259,16 +278,16 @@ function inlineWithCode(escapedLine, meLower, emojis, embedImages) {
 // over (and mangle) a generated <img> tag, even when a shortcode contains the
 // underscores that the italic rule keys on. Unknown shortcodes are left in place
 // as literal text for inline() to render.
-function inlineWithEmoji(seg, meLower, emojis, embedImages) {
-  if (!emojis) return inline(seg, meLower, embedImages);
+function inlineWithEmoji(seg, meLower, emojis, embedImages, hideUrl) {
+  if (!emojis) return inline(seg, meLower, embedImages, hideUrl);
   let out = "";
   let last = 0;
   let m;
   EMOJI_RE.lastIndex = 0;
   while ((m = EMOJI_RE.exec(seg)) !== null) {
     if (!hasEmoji(emojis, m[1])) continue;
-    out += inline(seg.slice(last, m.index), meLower, embedImages) + emojiImg(m[1]);
+    out += inline(seg.slice(last, m.index), meLower, embedImages, hideUrl) + emojiImg(m[1]);
     last = m.index + m[0].length;
   }
-  return out + inline(seg.slice(last), meLower, embedImages);
+  return out + inline(seg.slice(last), meLower, embedImages, hideUrl);
 }

@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID, extractHideURL } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -1308,10 +1308,11 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     lastTime = t;
 
     const editing = m.id === editingMessageId;
+    const preview = editing ? null : buildLinkPreview(m.content);
+    const hideUrl = preview ? extractHideURL(m.content) : null;
     const body = editing
       ? editorFor(m)
-      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
-    const preview = editing ? null : buildLinkPreview(m.content);
+      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
     const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
 
     const isOwn = m.user_id === state.me.id;
