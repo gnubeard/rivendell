@@ -243,16 +243,26 @@ export function formatMessage(text, me, emojis, opts) {
       code = code.replace(/^\n/, "").replace(/\n$/, "");
       html += `<pre class="code-block"><code>${code}</code></pre>`;
     } else {
-      // Outside a fence: handle inline code, blockquotes, line breaks.
+      // Outside a fence: handle inline code, blockquotes, headers, line breaks.
       const lines = parts[i].split("\n");
       const rendered = lines.map((line) => {
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
           return `<blockquote>${inlineWithCode(body, meLower, emojis, embedImages, hideUrl)}</blockquote>`;
         }
+        const hm = line.match(/^(#{1,3})\s+(.*)/);
+        if (hm) {
+          const tag = ["h3", "h4", "h5"][hm[1].length - 1];
+          return `<${tag}>${inlineWithCode(hm[2], meLower, emojis, embedImages, hideUrl)}</${tag}>`;
+        }
         return inlineWithCode(line, meLower, emojis, embedImages, hideUrl);
       });
-      html += rendered.join("<br>");
+      // Block elements don't need <br> separators — their block formatting provides the newline.
+      const isBlock = (s) => /^<(?:blockquote|h[1-6])/.test(s);
+      html += rendered.reduce((acc, item, idx) => {
+        if (idx === 0) return item;
+        return acc + (isBlock(rendered[idx - 1]) || isBlock(item) ? "" : "<br>") + item;
+      }, "");
     }
   }
   return html;

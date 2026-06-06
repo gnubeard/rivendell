@@ -220,7 +220,10 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; }
 .msg-body pre.code-block code { background: none; padding: 0; }
 .msg-body blockquote { border-left: 3px solid var(--border); margin: 0.2rem 0; padding-left: 0.7rem; color: var(--text-dim); }
-.msg-body blockquote + br { line-height: 0.4; }
+.msg-body h3, .msg-body h4, .msg-body h5 { margin: 0.15rem 0; font-weight: 700; line-height: 1.4; }
+.msg-body h3 { font-size: 1.15em; }
+.msg-body h4 { font-size: 1.05em; }
+.msg-body h5 { font-size: 0.95em; }
 /* Link preview cards (bsky.app / twitter.com / x.com). */
 .link-preview { display: flex; gap: 0.65rem; align-items: flex-start; margin: 0.35rem 0 0.1rem; padding: 0.55rem 0.65rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); cursor: pointer; max-width: 460px; overflow: hidden; text-decoration: none; }
 .link-preview:hover { background: var(--bg-3); }

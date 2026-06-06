@@ -129,6 +129,24 @@ test("blockquote", () => {
   assert.ok(out.includes("<blockquote>quoted</blockquote>"));
 });
 
+test("blockquote adjacent to text has no extra <br> separators", () => {
+  const out = formatMessage("before\n> quote\nafter");
+  assert.ok(!out.includes("<br><blockquote>"), "no <br> before blockquote");
+  assert.ok(!out.includes("</blockquote><br>"), "no <br> after blockquote");
+  assert.ok(out.includes("before<blockquote>quote</blockquote>after"));
+});
+
+test("markdown headers h1-h3", () => {
+  assert.ok(formatMessage("# Title").includes("<h3>Title</h3>"));
+  assert.ok(formatMessage("## Sub").includes("<h4>Sub</h4>"));
+  assert.ok(formatMessage("### Fine").includes("<h5>Fine</h5>"));
+});
+
+test("# without space is not a header", () => {
+  const out = formatMessage("#notaheader");
+  assert.ok(!out.includes("<h"));
+});
+
 test("a link inside escaped text keeps entities intact", () => {
   const out = formatMessage("https://x.com/?a=1&b=2");
   // & was escaped to &amp; before linking; the href should contain it.
