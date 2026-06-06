@@ -2,11 +2,11 @@
    font fetches (one less dependency, and nothing leaks to a CDN). */
 
 :root {
-  --bg: #16181d;
-  --bg-2: #1d2026;
-  --bg-3: #23272f;
-  --bg-hover: #2a2f38;
-  --border: #2e333d;
+  --bg: #ff69b4;
+  --bg-2: #ff85c2;
+  --bg-3: #ff9fcf;
+  --bg-hover: #ffb3d9;
+  --border: #e0509a;
   --text: #d8dce3;
   --text-dim: #8b929e;
   --text-faint: #626975;
