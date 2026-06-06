@@ -14,6 +14,7 @@ let localStream = null;
 let peerConns = new Map();    // remoteUserId -> RTCPeerConnection
 let audioEls = new Map();     // remoteUserId -> <audio> element
 let activeChannelId = null;
+let participants = [];         // latest voice.state roster for the active channel
 let myUserId = null;
 let muted = false;
 let deafened = false;
@@ -65,6 +66,7 @@ export async function joinVoiceChannel(channelId) {
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
 
   activeChannelId = channelId;
+  participants = []; // reset; the server's voice.state will populate the roster
   sendFn({ type: "voice.join", channel_id: channelId });
   notifyState();
 }
@@ -73,6 +75,7 @@ export async function leaveVoiceChannel() {
   if (activeChannelId === null) return;
   const chId = activeChannelId;
   activeChannelId = null;
+  participants = [];
   sendFn({ type: "voice.leave", channel_id: chId });
   closeAllPeers();
   stopLocalStream();
@@ -120,8 +123,12 @@ export async function handleVoiceSignal(evt) {
 
 async function onVoiceState(payload) {
   if (payload.channel_id !== activeChannelId) return;
-  const participants = payload.participants || [];
+  participants = payload.participants || [];
   const remoteIds = new Set(participants.filter(p => p.user_id !== myUserId).map(p => p.user_id));
+
+  // Surface the updated roster so app.js can paint who's connected and chime on
+  // join/leave. Done before the (async) peer setup so the UI reacts promptly.
+  notifyState();
 
   // Create connections to new participants.
   for (const p of participants) {
@@ -237,7 +244,13 @@ function stopLocalStream() {
 }
 
 function notifyState() {
-  if (onStateChange) onStateChange({ inCall: activeChannelId !== null, channelId: activeChannelId, muted, deafened });
+  if (onStateChange) onStateChange({
+    inCall: activeChannelId !== null,
+    channelId: activeChannelId,
+    muted,
+    deafened,
+    participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted })),
+  });
 }
 
 // --- ring sound -----------------------------------------------------------

@@ -412,6 +412,13 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 .call-ctl.danger:hover { background: rgba(231,76,60,0.12); }
 .call-ctl.active { color: var(--text); opacity: 0.55; }
 
+/* On-call cue in the member list: a 🔊 badge plus a faint green wash on the row
+   so it reads as "in the call" at a glance. */
+.member.on-call { background: rgba(80,180,80,0.10); }
+.member-call { margin-left: auto; font-size: 0.9rem; line-height: 1; flex: none; }
+/* Header on-call cue for DMs (no roster there): the other party is connected. */
+.header-call { margin-left: 0.35rem; font-size: 0.9rem; line-height: 1; }
+
 @media (max-width: 720px) {
   /* The conversation takes the whole screen; the sidebar (channels/DMs/profile)
      and members panel become slide-in drawers from the left and right. */

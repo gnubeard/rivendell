@@ -100,7 +100,11 @@ let editFocusPending = false; // focus the editor on the next render (it just op
 // outgoing ring we sent, or an incoming ring we're showing the banner for).
 let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUserId }
 // voiceCallState is the live state from voice.js (updated via callback).
-let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false };
+let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, participants: [] };
+// callParticipantIds is the set of user ids currently connected to our active
+// call (self included), derived from voiceCallState. Used to paint the on-call
+// cue in the member list and to detect joins/leaves for the greet/farewell tones.
+let callParticipantIds = new Set();
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
@@ -194,6 +198,32 @@ function boop() {
   osc.start(t);
   osc.stop(t + 0.23);
 }
+
+// playTones plays a short sequence of sine notes ({f: Hz, t: start offset, d:
+// duration}) on the gesture-primed shared context. Like boop(), it never creates
+// the context itself — silent until a user gesture has primed audio.
+function playTones(seq) {
+  if (!audioCtx) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const t0 = audioCtx.currentTime;
+  for (const n of seq) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = n.f;
+    const s = t0 + n.t;
+    gain.gain.setValueAtTime(0.0001, s);
+    gain.gain.exponentialRampToValueAtTime(0.14, s + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, s + n.d);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(s);
+    osc.stop(s + n.d + 0.02);
+  }
+}
+// A rising two-note chirp when someone joins the call, falling when they leave —
+// the direction makes the two instantly distinguishable without looking.
+function greetTone() { playTones([{ f: 523, t: 0, d: 0.12 }, { f: 784, t: 0.1, d: 0.18 }]); }
+function farewellTone() { playTones([{ f: 784, t: 0, d: 0.12 }, { f: 523, t: 0.1, d: 0.18 }]); }
 
 // --- bootstrapping -------------------------------------------------------
 
@@ -361,11 +391,7 @@ async function enterApp() {
   }
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
-  initVoice(state.me.id, (msg) => socket && socket.send(msg), (vs) => {
-    voiceCallState = vs;
-    renderCallStrip();
-    renderChannelHeader(state.channels[state.activeChannelId]);
-  });
+  initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange);
   fetchIceServers(); // best-effort; falls back to public STUN on error
   wireVoiceControls();
   // Wire interactive controls BEFORE realtime, so a transport problem can never
@@ -698,6 +724,10 @@ function renderMembers() {
   // Moderators+ can remove others from a real private channel (not DMs/public).
   const activeCh = state.channels[state.activeChannelId];
   const canRemove = isMod && !!(activeCh && activeCh.is_private && !activeCh.is_dm);
+  // On-call cue: only meaningful when the channel we're viewing is the call's own
+  // channel (the roster we hold is for that channel). null = show no cue.
+  const callIds = voiceCallState.inCall && voiceCallState.channelId === state.activeChannelId
+    ? callParticipantIds : null;
   users.sort((a, b) => {
     if (!!b.online !== !!a.online) return b.online ? 1 : -1;
     return a.display_name.localeCompare(b.display_name);
@@ -715,9 +745,13 @@ function renderMembers() {
       ? el("button", { class: "ch-ctl danger", title: `Remove ${u.display_name}`,
           onclick: (e) => { e.stopPropagation(); removeMember(activeCh.id, u.id, u.display_name); } }, "✕")
       : null;
+    const onCall = !!(callIds && callIds.has(u.id));
+    const callCue = onCall
+      ? el("span", { class: "member-call", title: isSelf ? "You're on the call" : "On the call" }, "🔊")
+      : null;
     list.append(
       el("li", {
-        class: isSelf ? "member" : "member clickable",
+        class: (isSelf ? "member" : "member clickable") + (onCall ? " on-call" : ""),
         title: titleParts.join(" · "),
         onclick: isSelf ? null : () => startDM(u.id),
       },
@@ -725,6 +759,7 @@ function renderMembers() {
         el("div", { class: "member-text" },
           el("span", { class: "member-name" }, u.display_name),
           el("span", { class: "member-status", title: u.status_text || null }, statusLine)),
+        callCue,
         remove
       )
     );
@@ -960,6 +995,7 @@ function isModPlus() {
 function renderChannelHeader(ch) {
   const topicEl = $("#channel-topic");
   const dmDot = $("#channel-dm-dot");
+  const dmCall = $("#channel-dm-call");
   const callBtn = $("#call-btn");
   if (ch && ch.is_dm) {
     $("#channel-title").textContent = "@ " + dmDisplayName(ch);
@@ -970,6 +1006,12 @@ function renderChannelHeader(ch) {
     const other = otherId && state.users[otherId];
     dmDot.className = `dot ${other ? presenceClass(other) : "offline"}`;
     dmDot.hidden = false;
+    // On-call cue: the member roster (which carries the 🔊 cue elsewhere) is
+    // hidden in DM view, so surface "the other person is connected to this call"
+    // here in the header — the analog of the DM presence dot for call state.
+    const otherOnCall = !!(voiceCallState.inCall && voiceCallState.channelId === ch.id
+      && otherId && callParticipantIds.has(otherId));
+    dmCall.hidden = !otherOnCall;
     // Show/update the call button for DM channels.
     if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
       callBtn.textContent = "📵";
@@ -985,6 +1027,7 @@ function renderChannelHeader(ch) {
     return;
   }
   dmDot.hidden = true;
+  dmCall.hidden = true;
   callBtn.hidden = true;
   $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
   const canEdit = !!(ch && !ch.is_dm && isModPlus());
@@ -2973,6 +3016,26 @@ function renderRingBanner() {
     $("#ring-decline-btn").textContent = "Cancel";
   }
   banner.hidden = false;
+}
+
+// onVoiceStateChange folds a fresh state push from voice.js into the UI: it
+// chimes a greet/farewell tone for each remote peer that joined/left since the
+// last push, refreshes the on-call cue set, and repaints the call strip, header,
+// and member roster.
+function onVoiceStateChange(vs) {
+  const prevRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
+  voiceCallState = vs;
+  callParticipantIds = new Set((vs.participants || []).map((p) => p.user_id));
+  // Only chime while we're actually in the call — leaving (inCall false) clears
+  // the roster and must not fire a farewell for everyone who was connected.
+  if (vs.inCall) {
+    const nowRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
+    for (const id of nowRemote) if (!prevRemote.has(id)) greetTone();
+    for (const id of prevRemote) if (!nowRemote.has(id)) farewellTone();
+  }
+  renderCallStrip();
+  renderChannelHeader(state.channels[state.activeChannelId]);
+  renderMembers();
 }
 
 function renderCallStrip() {
