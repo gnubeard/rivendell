@@ -34,6 +34,8 @@ const avatarVersion = {};
 // these get a "message deleted" tombstone; messages that arrive already-deleted
 // from history render as nothing, so a fresh load isn't littered with tombstones.
 const liveDeleted = new Set();
+// Composer draft text saved per channel so switching channels doesn't discard work.
+const channelDrafts = new Map(); // channelId -> string
 
 function loadNotifPref() {
   try {
@@ -691,7 +693,7 @@ function renderMembers() {
   });
   for (const u of users) {
     const isSelf = u.id === state.me.id;
-    const presence = u.status === "dnd" ? "do not disturb" : (u.online ? u.status : "offline");
+    const presence = !u.online ? "offline" : u.status === "dnd" ? "do not disturb" : u.idle ? "idle" : u.status;
     // Show the user's custom status text when they've set one; otherwise fall
     // back to the presence word. The title always carries the presence state.
     const statusLine = u.status_text ? u.status_text : presence;
@@ -867,6 +869,13 @@ async function refreshActiveMembers() {
 }
 
 async function selectChannel(id) {
+  // Save the composer draft for the channel we're leaving.
+  const leaving = state.activeChannelId;
+  if (leaving && leaving !== id) {
+    const draft = $("#composer-input").value;
+    if (draft.trim()) channelDrafts.set(leaving, draft);
+    else channelDrafts.delete(leaving);
+  }
   // Leaving a channel abandons any inline edit in progress.
   editingMessageId = null;
   editDraft = "";
@@ -884,6 +893,11 @@ async function selectChannel(id) {
   renderNotificationTotal();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
+  // Restore any saved draft for this channel and resize the composer to fit.
+  const composerInput = $("#composer-input");
+  composerInput.value = channelDrafts.get(id) || "";
+  composerInput.style.height = "auto";
+  composerInput.style.height = composerInput.scrollHeight + "px";
   // Persist the read cursor server-side using the newest loaded message.
   markActiveChannelRead();
 }
@@ -923,13 +937,19 @@ function isModPlus() {
 // the span advertises that and shows a prompt to add one when the topic is empty.
 function renderChannelHeader(ch) {
   const topicEl = $("#channel-topic");
+  const dmDot = $("#channel-dm-dot");
   if (ch && ch.is_dm) {
     $("#channel-title").textContent = "@ " + dmDisplayName(ch);
     topicEl.textContent = "";
     topicEl.classList.remove("editable", "placeholder");
     topicEl.removeAttribute("title");
+    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+    const other = otherId && state.users[otherId];
+    dmDot.className = `dot ${other ? presenceClass(other) : "offline"}`;
+    dmDot.hidden = false;
     return;
   }
+  dmDot.hidden = true;
   $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
   const canEdit = !!(ch && !ch.is_dm && isModPlus());
   topicEl.classList.toggle("editable", canEdit);
@@ -1386,6 +1406,7 @@ function wireComposer() {
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
   };
+  autoGrow(); // size the input correctly for any value the browser may have restored
 
   function filterMentions(partial) {
     const q = partial.toLowerCase();
@@ -2534,7 +2555,7 @@ function renderNotifControl() {
 // killing the occasional flicker. Our own user is exempt — deliberate status
 // changes should show immediately (status is server→broadcast with no optimistic
 // local update, so debouncing self would lag a deliberate pick by a second).
-const PRESENCE_DEBOUNCE_MS = 1000;
+const PRESENCE_DEBOUNCE_MS = 1500;
 const pendingPresence = new Map(); // userId -> timeout handle
 
 function applyPresence(evt) {
@@ -2542,6 +2563,10 @@ function applyPresence(evt) {
   renderMembers();
   renderMe();
   renderDMs();
+  // Repaint the DM header dot if we're in a DM (DMs never have a topic-edit input,
+  // so this call is always safe — no risk of blowing an in-progress topic edit).
+  const ch = state.channels[state.activeChannelId];
+  if (ch && ch.is_dm) renderChannelHeader(ch);
 }
 
 function schedulePresenceUpdate(evt) {
