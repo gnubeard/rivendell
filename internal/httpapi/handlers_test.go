@@ -37,7 +37,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, sessions, users RESTART IDENTITY CASCADE`)
+	_, err = st.DB().Exec(`TRUNCATE emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -1724,5 +1724,93 @@ func TestCustomEmojis(t *testing.T) {
 	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/emojis/party", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("re-delete should 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestBotTokenAuth(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminClient, admin := seedAdmin(t, ts, st)
+
+	// Member cannot create bot tokens.
+	ctx := context.Background()
+	member, _ := st.CreateUser(ctx, "member1", "Member", store.RoleMember)
+	memberPw, _ := auth.HashPassword("pw123")
+	_ = st.SetPassword(ctx, member.ID, memberPw)
+	memberClient := newClient(t)
+	doJSON(t, memberClient, "POST", ts.URL+"/api/auth/login", map[string]string{"username": "member1", "password": "pw123"})
+	resp, _ := doJSON(t, memberClient, "POST", ts.URL+"/api/admin/bot-tokens", map[string]any{"name": "x"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member create bot token: want 403, got %d", resp.StatusCode)
+	}
+
+	// Admin creates a token for themselves.
+	resp, body := doJSON(t, adminClient, "POST", ts.URL+"/api/admin/bot-tokens",
+		map[string]any{"name": "claude-bridge"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create bot token: %d %s", resp.StatusCode, body)
+	}
+	var created struct {
+		ID     int64  `json:"id"`
+		UserID int64  `json:"user_id"`
+		Name   string `json:"name"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if created.Token == "" {
+		t.Fatal("token field missing from creation response")
+	}
+	if created.UserID != admin.ID {
+		t.Fatalf("user_id: want %d, got %d", admin.ID, created.UserID)
+	}
+
+	// Bearer token authenticates as the owning user.
+	req, _ := http.NewRequest("GET", ts.URL+"/api/me", nil)
+	req.Header.Set("Authorization", "Bearer "+created.Token)
+	meresp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meresp.Body.Close()
+	if meresp.StatusCode != http.StatusOK {
+		t.Fatalf("bearer /api/me: want 200, got %d", meresp.StatusCode)
+	}
+	var me store.User
+	json.NewDecoder(meresp.Body).Decode(&me)
+	if me.ID != admin.ID {
+		t.Fatalf("bearer identity: want user %d, got %d", admin.ID, me.ID)
+	}
+
+	// List shows the new token (no raw value).
+	resp, body = doJSON(t, adminClient, "GET", ts.URL+"/api/admin/bot-tokens", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list bot tokens: %d %s", resp.StatusCode, body)
+	}
+	var list []struct {
+		ID    int64  `json:"id"`
+		Token string `json:"token"`
+	}
+	json.Unmarshal(body, &list)
+	if len(list) != 1 || list[0].ID != created.ID {
+		t.Fatalf("list: want 1 token id %d, got %v", created.ID, list)
+	}
+	if list[0].Token != "" {
+		t.Fatal("list response must not include the raw token")
+	}
+
+	// Revoke the token.
+	resp, _ = doJSON(t, adminClient, "DELETE", ts.URL+"/api/admin/bot-tokens/"+strconv.FormatInt(created.ID, 10), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete bot token: want 200, got %d", resp.StatusCode)
+	}
+
+	// Revoked token is rejected.
+	req2, _ := http.NewRequest("GET", ts.URL+"/api/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+created.Token)
+	rev, _ := http.DefaultClient.Do(req2)
+	rev.Body.Close()
+	if rev.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked token: want 401, got %d", rev.StatusCode)
 	}
 }

@@ -1583,6 +1583,79 @@ func (s *Server) handlePurgeChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "purged"})
 }
 
+// --- Bot tokens (admin) --------------------------------------------------
+
+func (s *Server) handleListBotTokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := s.st.ListBotTokens(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list bot tokens")
+		return
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+// handleCreateBotToken mints a new permanent Bearer token. The raw token is
+// returned only in this response — it is never stored and cannot be retrieved
+// again. Pass user_id to create a token for a specific user; omit to use the
+// requesting admin's own identity.
+func (s *Server) handleCreateBotToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name   string `json:"name"`
+		UserID *int64 `json:"user_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	uid := userFrom(r.Context()).ID
+	if req.UserID != nil {
+		uid = *req.UserID
+	}
+	if _, err := s.st.GetUserByID(r.Context(), uid); err != nil {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	token, err := auth.NewToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not generate token")
+		return
+	}
+	bt, err := s.st.CreateBotToken(r.Context(), uid, auth.HashToken(token), req.Name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not create token")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         bt.ID,
+		"user_id":    bt.UserID,
+		"name":       bt.Name,
+		"created_at": bt.CreatedAt,
+		"token":      token,
+	})
+}
+
+func (s *Server) handleDeleteBotToken(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid token id")
+		return
+	}
+	if err := s.st.DeleteBotToken(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "token not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not delete token")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
 // --- websocket -----------------------------------------------------------
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {

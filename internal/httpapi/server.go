@@ -118,6 +118,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/channels/{id}/restore", s.requireRole(store.RoleAdmin, s.handleRestoreChannel))
 	mux.HandleFunc("DELETE /api/admin/channels/{id}", s.requireRole(store.RoleAdmin, s.handlePurgeChannel))
 
+	// Bot tokens (permanent Bearer credentials for automated/bot access).
+	mux.HandleFunc("GET /api/admin/bot-tokens", s.requireRole(store.RoleAdmin, s.handleListBotTokens))
+	mux.HandleFunc("POST /api/admin/bot-tokens", s.requireRole(store.RoleAdmin, s.handleCreateBotToken))
+	mux.HandleFunc("DELETE /api/admin/bot-tokens/{id}", s.requireRole(store.RoleAdmin, s.handleDeleteBotToken))
+
 	// Realtime.
 	mux.HandleFunc("GET /api/ws", s.handleWS)
 
@@ -219,15 +224,21 @@ func roleRank(r store.Role) int {
 }
 
 func (s *Server) currentUser(r *http.Request) (store.User, bool) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil || c.Value == "" {
-		return store.User{}, false
+	// Session cookie (browser / normal login).
+	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+		if u, err := s.st.UserForSession(r.Context(), auth.HashToken(c.Value)); err == nil {
+			return u, true
+		}
 	}
-	u, err := s.st.UserForSession(r.Context(), auth.HashToken(c.Value))
-	if err != nil {
-		return store.User{}, false
+	// Bearer token (bot / API access; no cookie, no redirect).
+	if hdr := r.Header.Get("Authorization"); strings.HasPrefix(hdr, "Bearer ") {
+		if token := strings.TrimPrefix(hdr, "Bearer "); token != "" {
+			if u, err := s.st.UserForBotToken(r.Context(), auth.HashToken(token)); err == nil {
+				return u, true
+			}
+		}
 	}
-	return u, true
+	return store.User{}, false
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {

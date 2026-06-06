@@ -285,6 +285,62 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
+// --- Bot tokens ----------------------------------------------------------
+
+func (s *Store) CreateBotToken(ctx context.Context, userID int64, tokenHash, name string) (BotToken, error) {
+	var t BotToken
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO bot_tokens (user_id, token_hash, name)
+		 VALUES ($1, $2, $3)
+		 RETURNING id, user_id, name, created_at`,
+		userID, tokenHash, name).Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt)
+	return t, err
+}
+
+// UserForBotToken looks up the active user that owns a bot token. Returns
+// ErrNotFound if the token doesn't exist or the associated user is inactive.
+func (s *Store) UserForBotToken(ctx context.Context, tokenHash string) (User, error) {
+	var uid int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT user_id FROM bot_tokens WHERE token_hash = $1`, tokenHash).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	if err != nil {
+		return User{}, err
+	}
+	u, err := s.GetUserByID(ctx, uid)
+	if err != nil {
+		return User{}, err
+	}
+	if !u.IsActive {
+		return User{}, ErrNotFound
+	}
+	return u, nil
+}
+
+func (s *Store) ListBotTokens(ctx context.Context) ([]BotToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, name, created_at FROM bot_tokens ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BotToken{}
+	for rows.Next() {
+		var t BotToken
+		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteBotToken(ctx context.Context, id int64) error {
+	return s.exec(ctx, `DELETE FROM bot_tokens WHERE id = $1`, id)
+}
+
 // --- Magic links ---------------------------------------------------------
 
 func (s *Store) CreateMagicLink(ctx context.Context, userID int64, tokenHash, purpose string, createdBy int64, expires time.Time) error {

@@ -184,3 +184,14 @@ type Reaction struct {
 	Emoji   string  `json:"emoji"`
 	UserIDs []int64 `json:"user_ids"`
 }
+
+// BotToken is a permanent API credential for automated/bot access (no expiry,
+// revoked explicitly by an admin). The raw token is never stored; only its
+// SHA-256 hash lives in the database. Presented as a Bearer token in the
+// Authorization header.
+type BotToken struct {
+	ID        int64     `json:"id"`
+	UserID    int64     `json:"user_id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}

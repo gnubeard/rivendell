@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# claude-bridge — watches a private Rivendell channel and forwards each message
+# to Claude Code, posting the result back as an edit of the "working…" placeholder.
+#
+# Required env:
+#   RIVENDELL_URL        Base URL of your Rivendell instance  (e.g. http://localhost:8080)
+#   RIVENDELL_BOT_TOKEN  Bearer token from POST /api/admin/bot-tokens
+#
+# Optional env:
+#   RIVENDELL_CLAUDE_CHANNEL  Channel name to watch (default: claude)
+#   RIVENDELL_REPO_DIR        Repo directory Claude runs in (default: parent of this script)
+#   RIVENDELL_POLL_INTERVAL   Seconds between polls (default: 3)
+#   RIVENDELL_STATE_DIR       Where to persist the last-seen message id (default: /tmp)
+#
+# Setup checklist:
+#   1. Create a bot user via the admin panel (e.g. username "claude-bot").
+#   2. POST /api/admin/bot-tokens {"name":"claude-bridge","user_id":<bot-user-id>}
+#      Save the returned "token" — it won't be shown again.
+#   3. Create a private channel named "claude" and add the bot user as a member.
+#      Also add whichever human users you want to be able to send requests.
+#   4. Export RIVENDELL_URL and RIVENDELL_BOT_TOKEN, then run this script.
+#      A systemd unit or a persistent tmux session both work fine.
+
+set -euo pipefail
+
+RIVENDELL_URL="${RIVENDELL_URL:-http://localhost:8080}"
+RIVENDELL_BOT_TOKEN="${RIVENDELL_BOT_TOKEN:?RIVENDELL_BOT_TOKEN not set}"
+CHANNEL_NAME="${RIVENDELL_CLAUDE_CHANNEL:-claude}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="${RIVENDELL_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+POLL_INTERVAL="${RIVENDELL_POLL_INTERVAL:-3}"
+STATE_DIR="${RIVENDELL_STATE_DIR:-/tmp}"
+STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
+MAX_RESPONSE=3800  # chars; leaves headroom under Rivendell's default 4096-byte limit
+
+# ---------------------------------------------------------------------------
+# Dependency check
+
+for cmd in curl jq claude; do
+    command -v "$cmd" >/dev/null 2>&1 || { echo "error: $cmd is required" >&2; exit 1; }
+done
+
+# ---------------------------------------------------------------------------
+# Helpers
+
+api() {
+    local method="$1" path="$2"; shift 2
+    curl -sf -X "$method" \
+        -H "Authorization: Bearer $RIVENDELL_BOT_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$RIVENDELL_URL/api$path" "$@"
+}
+
+post_msg() {
+    api POST "/channels/$1/messages" --data "$(jq -n --arg c "$2" '{content:$c}')"
+}
+
+edit_msg() {
+    api PATCH "/messages/$1" --data "$(jq -n --arg c "$2" '{content:$c}')"
+}
+
+trim_output() {
+    local text="$1"
+    if [ "${#text}" -gt "$MAX_RESPONSE" ]; then
+        printf '%s\n\n…(%d chars total, truncated)' "${text:0:$MAX_RESPONSE}" "${#text}"
+    else
+        printf '%s' "$text"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Startup
+
+echo "rivendell-claude-bridge starting"
+echo "  url:      $RIVENDELL_URL"
+echo "  channel:  #$CHANNEL_NAME"
+echo "  repo:     $REPO_DIR"
+
+ME=$(api GET /me)
+BOT_ID=$(jq -r '.id'           <<<"$ME")
+BOT_NAME=$(jq -r '.display_name' <<<"$ME")
+echo "  bot:      $BOT_NAME (id $BOT_ID)"
+
+# Find the channel the bot is a member of.
+CHANNEL_ID=$(api GET /channels \
+    | jq -r --arg n "$CHANNEL_NAME" '.[] | select(.name == $n) | .id')
+if [ -z "$CHANNEL_ID" ]; then
+    cat >&2 <<EOF
+error: channel #$CHANNEL_NAME not found.
+  Create a private channel named "$CHANNEL_NAME" and add the bot user as a member,
+  then restart this bridge.
+EOF
+    exit 1
+fi
+echo "  channel id: $CHANNEL_ID"
+
+# Seed the last-seen cursor so we don't replay history on first start.
+if [ ! -f "$STATE_FILE" ]; then
+    SEED_ID=$(api GET "/channels/$CHANNEL_ID/messages?limit=1" \
+        | jq -r 'if length > 0 then .[0].id else 0 end')
+    printf '%s' "$SEED_ID" > "$STATE_FILE"
+    echo "  seeded at message id $SEED_ID"
+fi
+
+echo "polling every ${POLL_INTERVAL}s — ready"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Main loop
+
+TMPFILE=$(mktemp)
+cleanup() { rm -f "$TMPFILE"; echo "bridge stopped"; exit 0; }
+trap cleanup INT TERM
+
+while true; do
+    sleep "$POLL_INTERVAL"
+
+    LAST_ID=$(cat "$STATE_FILE")
+
+    # Fetch up to 20 recent messages, keep only those newer than our cursor,
+    # not from the bot itself, and not soft-deleted. Reverse to oldest-first.
+    api GET "/channels/$CHANNEL_ID/messages?limit=20" 2>/dev/null \
+        | jq -c \
+            --argjson last "$LAST_ID" \
+            --argjson bot  "$BOT_ID" \
+            '[.[] | select(.id > $last and .user_id != $bot and .deleted_at == null)]
+             | reverse | .[]' \
+        > "$TMPFILE" 2>/dev/null || continue
+
+    while IFS= read -r msg && [ -n "$msg" ]; do
+        MSG_ID=$(  jq -r '.id'      <<<"$msg")
+        CONTENT=$( jq -r '.content' <<<"$msg")
+        USER_ID=$( jq -r '.user_id' <<<"$msg")
+
+        # Advance the cursor before running Claude; a crash won't replay this.
+        printf '%s' "$MSG_ID" > "$STATE_FILE"
+
+        printf '[msg %s user %s] %s\n' "$MSG_ID" "$USER_ID" "${CONTENT:0:100}"
+
+        # Post a visible placeholder so the user sees activity immediately.
+        WORK_JSON=$(post_msg "$CHANNEL_ID" "⚙️ Working…" 2>/dev/null) || WORK_JSON=""
+        WORK_ID=$(jq -r '.id // empty' <<<"$WORK_JSON")
+
+        # Run Claude in the repo directory. Capture both stdout and stderr.
+        CLAUDE_EXIT=0
+        CLAUDE_OUT=$(cd "$REPO_DIR" && claude --print "$CONTENT" 2>&1) || CLAUDE_EXIT=$?
+
+        TRIMMED=$(trim_output "$CLAUDE_OUT")
+        if [ "$CLAUDE_EXIT" -eq 0 ]; then
+            REPLY="✅ Done.
+
+$TRIMMED"
+        else
+            REPLY="❌ Error (exit $CLAUDE_EXIT).
+
+$TRIMMED"
+        fi
+
+        # Edit the placeholder in-place. Fall back to a new post if the edit fails.
+        if [ -n "$WORK_ID" ]; then
+            edit_msg "$WORK_ID" "$REPLY" 2>/dev/null \
+                || post_msg "$CHANNEL_ID" "$REPLY" >/dev/null || true
+        else
+            post_msg "$CHANNEL_ID" "$REPLY" >/dev/null || true
+        fi
+
+    done < "$TMPFILE"
+done
