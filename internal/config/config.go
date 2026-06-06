@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.1.1"
+const Version = "1.1.2"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -27,7 +27,7 @@ type Config struct {
 	BootstrapAdmin  string        // username created on first boot if no admins exist
 	InstanceName    string        // display name of this instance (e.g. "rivendell")
 	StunURL         string        // STUN server URL for WebRTC NAT traversal
-	TurnURL         string        // TURN relay URL (empty = STUN only)
+	TurnURL         string        // TURN relay URL(s), comma-separated (empty = STUN only)
 	TurnSecret      string        // shared HMAC secret for time-limited TURN credentials
 }
 

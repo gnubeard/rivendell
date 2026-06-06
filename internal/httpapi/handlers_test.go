@@ -3,11 +3,15 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -613,6 +617,60 @@ func TestStatusDurableAcrossReconnect(t *testing.T) {
 	}
 	if got.Status != "away" {
 		t.Fatalf("status was clobbered by presence change: got %q, want away", got.Status)
+	}
+}
+
+// TestRTCCredentials guards the two things coturn is unforgiving about: the MAC
+// must be HMAC-SHA1 (coturn computes SHA1; SHA256 → every credential rejected),
+// and RIVENDELL_TURN_URL is a comma-separated list surfaced as a JSON array so a
+// turn: and a turns: endpoint can share the one credential.
+func TestRTCCredentials(t *testing.T) {
+	_, st, cfg := newTestServer(t)
+	cfg.StunURL = "stun:stun.example.com:3478"
+	cfg.TurnURL = "turn:turn.example.com:3478, turns:turn.example.com:5349?transport=tcp"
+	cfg.TurnSecret = "shared-secret"
+	srv := New(cfg, st)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	adminC, _ := seedAdmin(t, ts, st)
+	resp, body := doJSON(t, adminC, "GET", ts.URL+"/api/rtc/credentials", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("credentials: %d %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Stun       string   `json:"stun"`
+		Turn       []string `json:"turn"`
+		Username   string   `json:"username"`
+		Credential string   `json:"credential"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+
+	if got.Stun != cfg.StunURL {
+		t.Fatalf("stun = %q, want %q", got.Stun, cfg.StunURL)
+	}
+	// Comma-split, trimmed, both endpoints present and in order.
+	wantTurn := []string{"turn:turn.example.com:3478", "turns:turn.example.com:5349?transport=tcp"}
+	if !reflect.DeepEqual(got.Turn, wantTurn) {
+		t.Fatalf("turn = %#v, want %#v", got.Turn, wantTurn)
+	}
+
+	// The credential must equal base64(HMAC-SHA1(secret, username)).
+	mac := hmac.New(sha1.New, []byte(cfg.TurnSecret))
+	mac.Write([]byte(got.Username))
+	wantCred := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	if got.Credential != wantCred {
+		t.Fatalf("credential is not HMAC-SHA1 of the username — SHA256 regression?")
+	}
+	// Independent guard: a SHA1 digest is 20 bytes; SHA256 would be 32.
+	raw, err := base64.StdEncoding.DecodeString(got.Credential)
+	if err != nil {
+		t.Fatalf("credential not valid base64: %v", err)
+	}
+	if len(raw) != sha1.Size {
+		t.Fatalf("credential digest = %d bytes, want %d (SHA1)", len(raw), sha1.Size)
 	}
 }
 

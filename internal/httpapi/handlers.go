@@ -3,7 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -325,9 +325,12 @@ func (s *Server) handleGetVoiceParticipants(w http.ResponseWriter, r *http.Reque
 
 // handleGetRTCCredentials returns a short-lived STUN/TURN credential pair for
 // use in RTCPeerConnection iceServers config. The TURN credential uses coturn's
-// HMAC time-limited model: username = "<expiry>:<user_id>", credential =
-// base64(HMAC-SHA256(secret, username)). If TURN is not configured, only the
-// STUN URL is returned.
+// time-limited "REST" model: username = "<expiry>:<user_id>", credential =
+// base64(HMAC-SHA1(secret, username)). coturn computes the MAC with SHA1, so
+// this must be SHA1 (not SHA256) or every credential is rejected.
+// RIVENDELL_TURN_URL may list several URLs (comma-separated, e.g. a turn: and a
+// turns: endpoint) — they all share the one credential. If TURN is not
+// configured, only the STUN URL is returned.
 func (s *Server) handleGetRTCCredentials(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	resp := map[string]any{
@@ -336,9 +339,15 @@ func (s *Server) handleGetRTCCredentials(w http.ResponseWriter, r *http.Request)
 	if s.cfg.TurnURL != "" && s.cfg.TurnSecret != "" {
 		expires := time.Now().Add(time.Hour).Unix()
 		username := fmt.Sprintf("%d:%d", expires, u.ID)
-		mac := hmac.New(sha256.New, []byte(s.cfg.TurnSecret))
+		mac := hmac.New(sha1.New, []byte(s.cfg.TurnSecret))
 		mac.Write([]byte(username))
-		resp["turn"] = s.cfg.TurnURL
+		turn := []string{}
+		for _, raw := range strings.Split(s.cfg.TurnURL, ",") {
+			if v := strings.TrimSpace(raw); v != "" {
+				turn = append(turn, v)
+			}
+		}
+		resp["turn"] = turn
 		resp["username"] = username
 		resp["credential"] = base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	}
