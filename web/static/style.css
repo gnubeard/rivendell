@@ -360,6 +360,9 @@ body.dm-active #members-toggle { display: none; }
 /* The pinned-messages list is cramped at the narrow width; give it more room on
    wider screens (.modal-card is width:100%, so phones are unaffected). */
 #pins-modal .modal-card { max-width: 560px; }
+/* Search results (message snippets) need room to read on desktop; the narrow
+   width truncates every row. .modal-card is width:100%, so phones are unaffected. */
+#search-modal .modal-card { max-width: 640px; }
 .modal-form .optional { color: var(--text-faint); }
 .modal-form .checkbox-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0 0.9rem; cursor: pointer; color: var(--text); }
 .modal-form .checkbox-row input { width: auto; margin: 0; }
