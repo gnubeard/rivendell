@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -30,6 +30,9 @@ const lastMarkedRead = {};
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
 const avatarVersion = {};
+// Link preview cache: url -> { title, description, image } | "loading" | "failed".
+// Populated lazily as messages scroll into view; persists for the session.
+const linkPreviewCache = new Map();
 // Message ids deleted *during this session* (seen live via message.delete). Only
 // these get a "message deleted" tombstone; messages that arrive already-deleted
 // from history render as nothing, so a fresh load isn't littered with tombstones.
@@ -1308,6 +1311,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const body = editing
       ? editorFor(m)
       : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+    const preview = editing ? null : buildLinkPreview(m.content);
     const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
 
     const isOwn = m.user_id === state.me.id;
@@ -1336,7 +1340,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }, formatTime(m.created_at));
 
     if (grouped) {
-      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, reactions, rowActions)));
+      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, preview, reactions, rowActions)));
     } else {
       const avatar = author && author.has_avatar
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
@@ -1351,6 +1355,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
               pinMark
             ),
             body,
+            preview,
             reactions,
             rowActions
           )
@@ -1725,6 +1730,48 @@ function cancelEdit() {
   editDraft = "";
   editFocusPending = false;
   renderMessages();
+}
+
+// --- link previews -------------------------------------------------------
+
+// fetchLinkPreview fetches preview metadata for a bsky/twitter URL and triggers
+// a re-render when done. Idempotent — a second call for a URL already in the
+// cache is a no-op.
+async function fetchLinkPreview(url) {
+  if (linkPreviewCache.has(url)) return;
+  linkPreviewCache.set(url, "loading");
+  try {
+    const data = await api.linkPreview(url);
+    linkPreviewCache.set(url, data);
+  } catch {
+    linkPreviewCache.set(url, "failed");
+  }
+  renderMessages();
+}
+
+// buildLinkPreview returns a preview card DOM node for the first bare bsky/twitter
+// URL in content, or null if there is none or the preview isn't ready yet.
+function buildLinkPreview(content) {
+  const url = extractPreviewableURL(content);
+  if (!url) return null;
+  const cached = linkPreviewCache.get(url);
+  if (!cached) { fetchLinkPreview(url); return null; }
+  if (cached === "loading" || cached === "failed") return null;
+  if (!cached.title && !cached.description && !cached.image) return null;
+  return renderLinkPreviewCard(url, cached);
+}
+
+function renderLinkPreviewCard(url, p) {
+  const card = el("div", { class: "link-preview" });
+  if (p.image) {
+    card.append(el("img", { class: "link-preview-img", src: p.image, alt: "", loading: "lazy" }));
+  }
+  const text = el("div", { class: "link-preview-text" });
+  if (p.title) text.append(el("div", { class: "link-preview-title" }, p.title));
+  if (p.description) text.append(el("div", { class: "link-preview-desc" }, p.description));
+  card.append(text);
+  card.addEventListener("click", () => window.open(url, "_blank", "noopener,noreferrer"));
+  return card;
 }
 
 // commitEdit saves the inline edit. An empty or unchanged draft just cancels (use

@@ -147,6 +147,26 @@ export function parsePermalink(hash) {
   return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
 }
 
+// PREVIEW_HOST_RE tests whether a URL belongs to one of the two special-cased
+// previewable hosts. Only bare (non-markdown-linked) URLs are previewed.
+const PREVIEW_HOST_RE = /^https:\/\/(?:bsky\.app|twitter\.com|x\.com)\//;
+
+// extractPreviewableURL returns the first bare bsky.app / twitter.com / x.com
+// URL in text, or null. "Bare" means the URL was typed standalone, not written
+// as [text](url) — those have author-chosen text and don't need a preview card.
+// Uses the same LINK_RE split logic as inline() so the two stay consistent.
+export function extractPreviewableURL(text) {
+  if (!text) return null;
+  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  let m;
+  while ((m = re.exec(String(text))) !== null) {
+    if (m[3] !== undefined && PREVIEW_HOST_RE.test(m[3])) {
+      return m[3];
+    }
+  }
+  return null;
+}
+
 // EMOJI_RE matches a :shortcode: token. Shortcodes are [a-z0-9_]{2,32} (same
 // charset as usernames), so a matched name can never carry an HTML metacharacter
 // — the <img> we build from it is safe by construction.

@@ -108,6 +108,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/channels/{id}/mute", s.auth(s.handleMuteChannel))
 	mux.HandleFunc("DELETE /api/channels/{id}/mute", s.auth(s.handleUnmuteChannel))
 
+	// Link preview proxy (bsky.app and twitter.com/x.com only).
+	mux.HandleFunc("GET /api/link-preview", s.auth(s.handleLinkPreview))
+
 	// Admin.
 	mux.HandleFunc("GET /api/admin/stats", s.requireRole(store.RoleAdmin, s.handleAdminStats))
 	mux.HandleFunc("POST /api/admin/users", s.requireRole(store.RoleAdmin, s.handleCreateUser))

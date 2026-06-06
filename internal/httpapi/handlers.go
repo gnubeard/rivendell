@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1654,6 +1656,144 @@ func (s *Server) handleDeleteBotToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// --- link preview --------------------------------------------------------
+
+type linkPreview struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Image       string `json:"image"`
+}
+
+var allowedPreviewHosts = map[string]bool{
+	"bsky.app":    true,
+	"twitter.com": true,
+	"x.com":       true,
+}
+
+// previewClient is a dedicated http.Client for link preview fetches with a
+// conservative timeout so a slow external host can't stall a handler.
+var previewClient = &http.Client{
+	Timeout: 8 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	},
+}
+
+func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
+	rawURL := r.URL.Query().Get("url")
+	if rawURL == "" {
+		writeErr(w, http.StatusBadRequest, "url parameter required")
+		return
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" {
+		writeErr(w, http.StatusBadRequest, "invalid url")
+		return
+	}
+	if !allowedPreviewHosts[strings.ToLower(u.Hostname())] {
+		writeErr(w, http.StatusBadRequest, "unsupported host")
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), "GET", rawURL, nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, linkPreview{})
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Rivendell link-preview/1.0)")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+	resp, err := previewClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusOK, linkPreview{})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		writeJSON(w, http.StatusOK, linkPreview{})
+		return
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	writeJSON(w, http.StatusOK, parseOGTags(body))
+}
+
+// parseOGTags extracts Open Graph / Twitter card meta values from HTML.
+func parseOGTags(rawHTML []byte) linkPreview {
+	doc := string(rawHTML)
+	docLow := strings.ToLower(doc)
+	return linkPreview{
+		Title:       firstMeta(doc, docLow, "og:title", "twitter:title"),
+		Description: firstMeta(doc, docLow, "og:description", "twitter:description"),
+		Image:       firstMeta(doc, docLow, "og:image", "twitter:image"),
+	}
+}
+
+func firstMeta(doc, docLow string, keys ...string) string {
+	for _, k := range keys {
+		if v := metaContent(doc, docLow, k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// metaContent returns the HTML-unescaped content attribute of the first <meta>
+// tag whose property or name equals key (case-insensitive). Both attribute
+// orderings and both quote styles are handled.
+func metaContent(doc, docLow, key string) string {
+	pos := 0
+	for {
+		idx := strings.Index(docLow[pos:], "<meta")
+		if idx < 0 {
+			return ""
+		}
+		start := pos + idx
+		end := strings.IndexByte(docLow[start:], '>')
+		if end < 0 {
+			return ""
+		}
+		end = start + end + 1
+		pos = end
+
+		tagLow := docLow[start:end]
+		if !(strings.Contains(tagLow, `property="`+key+`"`) ||
+			strings.Contains(tagLow, `property='`+key+`'`) ||
+			strings.Contains(tagLow, `name="`+key+`"`) ||
+			strings.Contains(tagLow, `name='`+key+`'`)) {
+			continue
+		}
+		raw := doc[start:end]
+		if v := ogAttrVal(raw, "content"); v != "" {
+			return html.UnescapeString(v)
+		}
+	}
+}
+
+// ogAttrVal extracts the value of a named attribute from a raw HTML tag string,
+// handling both double- and single-quoted values.
+func ogAttrVal(tag, attr string) string {
+	low := strings.ToLower(tag)
+	search := attr + `="`
+	if idx := strings.Index(low, search); idx >= 0 {
+		idx += len(search)
+		if end := strings.IndexByte(tag[idx:], '"'); end >= 0 {
+			return tag[idx : idx+end]
+		}
+	}
+	search = attr + `='`
+	if idx := strings.Index(low, search); idx >= 0 {
+		idx += len(search)
+		if end := strings.IndexByte(tag[idx:], '\''); end >= 0 {
+			return tag[idx : idx+end]
+		}
+	}
+	return ""
 }
 
 // --- websocket -----------------------------------------------------------

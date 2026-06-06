@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL } from "../static/format.js";
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');
@@ -250,6 +250,57 @@ test("parsePermalink round-trips permalinkHash", () => {
 
 test("parsePermalink parses a valid hash", () => {
   assert.deepEqual(parsePermalink("#c42/m1009"), { channelId: 42, messageId: 1009 });
+});
+
+test("extractPreviewableURL finds a bare bsky.app URL", () => {
+  assert.equal(
+    extractPreviewableURL("check https://bsky.app/profile/foo.bsky.social/post/abc"),
+    "https://bsky.app/profile/foo.bsky.social/post/abc"
+  );
+});
+
+test("extractPreviewableURL finds a bare twitter.com URL", () => {
+  assert.equal(
+    extractPreviewableURL("https://twitter.com/user/status/123456789"),
+    "https://twitter.com/user/status/123456789"
+  );
+});
+
+test("extractPreviewableURL finds a bare x.com URL", () => {
+  assert.equal(
+    extractPreviewableURL("cool post https://x.com/user/status/987"),
+    "https://x.com/user/status/987"
+  );
+});
+
+test("extractPreviewableURL skips markdown-linked bsky/twitter URLs", () => {
+  assert.equal(extractPreviewableURL("[tweet](https://twitter.com/user/status/123)"), null);
+  assert.equal(extractPreviewableURL("[post](https://bsky.app/profile/foo/post/abc)"), null);
+  assert.equal(extractPreviewableURL("[x](https://x.com/foo/status/1)"), null);
+});
+
+test("extractPreviewableURL ignores non-previewable hosts", () => {
+  assert.equal(extractPreviewableURL("https://example.com/page"), null);
+  assert.equal(extractPreviewableURL("https://github.com/foo/bar"), null);
+});
+
+test("extractPreviewableURL returns null for empty or null input", () => {
+  assert.equal(extractPreviewableURL(""), null);
+  assert.equal(extractPreviewableURL(null), null);
+});
+
+test("extractPreviewableURL returns first matching URL when multiple present", () => {
+  assert.equal(
+    extractPreviewableURL("see https://bsky.app/a and https://twitter.com/b"),
+    "https://bsky.app/a"
+  );
+});
+
+test("extractPreviewableURL skips non-previewable URLs before returning a matching one", () => {
+  assert.equal(
+    extractPreviewableURL("https://example.com and https://bsky.app/x"),
+    "https://bsky.app/x"
+  );
 });
 
 test("parsePermalink rejects the old /m/ slash form and junk", () => {
