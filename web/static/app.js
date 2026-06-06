@@ -1766,9 +1766,17 @@ function findMessage(messageId) {
   return arr.find((m) => m.id === messageId) || null;
 }
 
+// SHORTCODE_RE matches the custom-emoji shortcode namespace: [a-z0-9_]{2,32}.
+// Used to distinguish orphaned shortcodes (in reactions but no longer in the
+// registry) from literal Unicode graphemes, which don't match this pattern.
+const SHORTCODE_RE = /^[a-z0-9_]{2,32}$/;
+
 // reactionsRow renders the pill row under a message, or null if it has none. Each
 // pill shows the emoji (custom shortcode → image, else the literal Unicode glyph)
 // and its count, is highlighted when I'm among the reactors, and toggles on click.
+// When the backing custom emoji has been deleted the pill shows a 🪦 tombstone:
+// mine reactors may still click to remove (the server now allows it); non-mine
+// pills are disabled since adding a deleted emoji would be rejected anyway.
 function reactionsRow(m) {
   if (!m.reactions || !m.reactions.length) return null;
   const row = el("div", { class: "reactions" });
@@ -1776,15 +1784,24 @@ function reactionsRow(m) {
     const ids = g.user_ids || [];
     const mine = ids.includes(state.me.id);
     const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
+    // An orphaned reaction: value looks like a shortcode but is no longer in the
+    // emoji registry (the custom emoji was deleted after the reaction was placed).
+    const isOrphan = !state.emojis[g.emoji] && SHORTCODE_RE.test(g.emoji);
     const glyph = state.emojis[g.emoji]
       ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:` })
-      : el("span", { class: "r-emoji" }, g.emoji);
+      : isOrphan
+        ? el("span", { class: "r-emoji" }, "🪦")
+        : el("span", { class: "r-emoji" }, g.emoji);
+    const titleText = isOrphan
+      ? `${names} · :${g.emoji}: (emoji deleted${mine ? " — click to remove" : ""})`
+      : names;
     row.append(el("button", {
-      class: "reaction" + (mine ? " mine" : ""),
-      title: names,
+      class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
+      title: titleText,
+      disabled: isOrphan && !mine,
       // Pass the rendered "mine" so the toggle is correct even when the message
       // isn't in the active window (the pins modal renders pins it fetched itself).
-      onclick: () => toggleReaction(m.id, g.emoji, mine),
+      onclick: isOrphan && !mine ? null : () => toggleReaction(m.id, g.emoji, mine),
     }, glyph, el("span", { class: "r-count" }, String(ids.length))));
   }
   return row;

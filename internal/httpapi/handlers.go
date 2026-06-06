@@ -1214,7 +1214,11 @@ func (s *Server) setReaction(w http.ResponseWriter, r *http.Request, add bool) {
 		writeErr(w, http.StatusForbidden, "no access to this channel")
 		return
 	}
-	if !s.validReactionEmoji(r.Context(), req.Emoji) {
+	// Validate the emoji only on add. A removal must be allowed even when the
+	// custom emoji was deleted after the reaction was placed — the DB row itself is
+	// proof the value was valid when added, and blocking removal would strand
+	// orphaned reactions permanently.
+	if add && !s.validReactionEmoji(r.Context(), req.Emoji) {
 		writeErr(w, http.StatusBadRequest, "invalid reaction emoji")
 		return
 	}

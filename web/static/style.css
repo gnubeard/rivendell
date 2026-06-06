@@ -246,6 +246,9 @@ button.primary:hover { filter: brightness(1.08); }
 .reaction .r-emoji { font-size: 1rem; line-height: 1; }
 .reaction img.emoji { height: 1.1rem; max-width: 1.6rem; vertical-align: middle; }
 .reaction .r-count { font-variant-numeric: tabular-nums; }
+.reaction.orphan { opacity: 0.55; border-style: dashed; }
+.reaction.orphan[disabled] { cursor: default; }
+.reaction.orphan:not([disabled]):hover { background: var(--bg-hover); }
 
 .typing-indicator { padding: 0.2rem 1.2rem 0.1rem; font-size: 0.8rem; color: var(--text-dim); font-style: italic; min-height: 1.4em; }
 .composer { position: relative; padding: 0.7rem 1.2rem 1rem; border-top: 1px solid var(--border); }

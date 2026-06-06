@@ -173,6 +173,52 @@ func TestReactionOnDeletedMessageRejected(t *testing.T) {
 	}
 }
 
+func TestRemoveOrphanedReactionAfterEmojiDeleted(t *testing.T) {
+	// Regression: deleting a custom emoji must not prevent users from removing
+	// their reaction that used that emoji. Previously validReactionEmoji was called
+	// on removal too, causing a 400 that stranded the reaction permanently.
+	ts, st, _ := newTestServer(t)
+	adminC, admin := seedAdmin(t, ts, st)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+	msg := postMessage(t, adminC, ts, ch.ID, "hello")
+	rpath := ts.URL + "/api/messages/" + itoa(msg.ID) + "/reactions"
+
+	// Create emoji, react with it.
+	if _, err := st.CreateEmoji(context.Background(), "wave", "image/png", []byte("img"), admin.ID); err != nil {
+		t.Fatalf("create emoji: %v", err)
+	}
+	resp, b := doJSON(t, adminC, "PUT", rpath, map[string]string{"emoji": "wave"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("add reaction: %d %s", resp.StatusCode, b)
+	}
+
+	// Delete the emoji — the reaction stays in the DB (no cascade).
+	resp, _ = doJSON(t, adminC, "DELETE", ts.URL+"/api/emojis/wave", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete emoji: %d", resp.StatusCode)
+	}
+
+	// Removing the orphaned reaction must succeed.
+	resp, b = doJSON(t, adminC, "DELETE", rpath, map[string]string{"emoji": "wave"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remove orphaned reaction should 200, got %d %s", resp.StatusCode, b)
+	}
+	var rr reactionResp
+	json.Unmarshal(b, &rr)
+	if g := reactGroup(rr.Reactions, "wave"); len(g.UserIDs) != 0 {
+		t.Fatalf("reaction should be gone after removal, got %+v", rr.Reactions)
+	}
+
+	// Adding a new reaction with the deleted shortcode must still 400.
+	resp, _ = doJSON(t, adminC, "PUT", rpath, map[string]string{"emoji": "wave"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("add with deleted emoji should 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestReactionRequiresChannelAccess(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	adminC, _ := seedAdmin(t, ts, st)
