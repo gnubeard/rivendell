@@ -125,7 +125,10 @@ const el = (tag, attrs = {}, ...kids) => {
     if (k === "class") node.className = v;
     else if (k === "html") node.innerHTML = v;
     else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
-    else if (v != null) node.setAttribute(k, v);
+    // Skip null/undefined AND boolean false: setAttribute("disabled", false)
+    // still yields disabled="false", which disables the element (any presence of
+    // the attribute does). Boolean false must mean "omit the attribute".
+    else if (v != null && v !== false) node.setAttribute(k, v);
   }
   for (const kid of kids) {
     if (kid == null) continue;
