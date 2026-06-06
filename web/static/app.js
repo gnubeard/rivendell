@@ -2424,7 +2424,7 @@ function wireIdleDetection() {
     idleTimer = setTimeout(goIdle, IDLE_MS);
   }
 
-  for (const ev of ["mousemove", "keydown", "pointerdown", "touchstart", "scroll", "click"]) {
+  for (const ev of ["mousemove", "keydown", "pointerdown", "touchstart", "wheel", "click"]) {
     window.addEventListener(ev, onActivity, { passive: true, capture: true });
   }
   document.addEventListener("visibilitychange", () => {
@@ -3044,11 +3044,9 @@ async function onVoiceEvent(evt) {
   if (evt.type === "voice.end") {
     // The other party in a DM hung up (or dropped): the call ends for both.
     // Tear down our side without echoing a voice.leave (the server already
-    // removed us). endCallLocally clears inCall, so onVoiceStateChange won't
-    // chime the per-peer farewell — play it here for "they hung up" feedback.
-    // onVoiceStateChange (via notifyState) then repaints strip/header/roster.
+    // removed us). endCallLocally calls notifyState → onVoiceStateChange, which
+    // detects the inCall→false transition and plays the farewell tone.
     if (isInCall() && voiceChannelId() === p.channel_id) {
-      farewellTone();
       endCallLocally();
     }
     return;
@@ -3090,15 +3088,20 @@ function renderRingBanner() {
 
 // onVoiceStateChange folds a fresh state push from voice.js into the UI: it
 // chimes a greet/farewell tone for each remote peer that joined/left since the
-// last push, refreshes the on-call cue set, and repaints the call strip, header,
-// and member roster.
+// last push (and for ourselves joining/leaving), refreshes the on-call cue set,
+// and repaints the call strip, header, and member roster.
 function onVoiceStateChange(vs) {
+  const prevInCall = voiceCallState.inCall;
   const prevRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
   voiceCallState = vs;
   callParticipantIds = new Set((vs.participants || []).map((p) => p.user_id));
-  // Only chime while we're actually in the call — leaving (inCall false) clears
-  // the roster and must not fire a farewell for everyone who was connected.
-  if (vs.inCall) {
+  if (!prevInCall && vs.inCall) {
+    greetTone();
+  } else if (prevInCall && !vs.inCall) {
+    farewellTone();
+  } else if (vs.inCall) {
+    // Already in call: chime for remote peers joining/leaving. Guard keeps us
+    // from firing a farewell for every peer when we ourselves leave.
     const nowRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
     for (const id of nowRemote) if (!prevRemote.has(id)) greetTone();
     for (const id of prevRemote) if (!nowRemote.has(id)) farewellTone();
