@@ -2535,6 +2535,25 @@ async function refreshAdminUsers() {
         prompt("One-time link (copy it):", link.url);
       } catch (ex) { alert(ex.message); }
     }}, "reset link");
+
+    const avatarInput = el("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/gif",
+      style: "display:none",
+      onchange: async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try { await api.adminUploadAvatar(u.id, file); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
+      },
+    });
+    const avatarBtn = el("button", { class: "link", onclick: () => avatarInput.click() }, "avatar");
+    const avatarCell = el("td", {}, avatarBtn);
+    if (u.has_avatar) {
+      const clearBtn = el("button", { class: "link danger", onclick: async () => {
+        try { await api.adminClearAvatar(u.id); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
+      }}, "✕");
+      avatarCell.append(document.createTextNode(" "), clearBtn);
+    }
+    avatarCell.append(avatarInput);
+
     tbody.append(
       el("tr", {},
         el("td", {}, u.username),
@@ -2542,7 +2561,8 @@ async function refreshAdminUsers() {
         el("td", {}, roleSel),
         el("td", {}, u.has_password ? "yes" : "no"),
         el("td", {}, u.is_active ? "active" : "disabled"),
-        el("td", {}, linkBtn, document.createTextNode(" "), activeBtn)
+        el("td", {}, linkBtn, document.createTextNode(" "), activeBtn),
+        avatarCell,
       )
     );
   }

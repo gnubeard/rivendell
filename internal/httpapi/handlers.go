@@ -1522,6 +1522,61 @@ func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// handleAdminSetAvatar lets an admin set the avatar for any user.
+func (s *Server) handleAdminSetAvatar(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if _, err := s.st.GetUserByID(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	ct := r.Header.Get("Content-Type")
+	if ct != "image/png" && ct != "image/jpeg" && ct != "image/webp" && ct != "image/gif" {
+		writeErr(w, http.StatusUnsupportedMediaType, "avatar must be png, jpeg, webp, or gif")
+		return
+	}
+	body := http.MaxBytesReader(w, r.Body, int64(s.cfg.MaxAvatarBytes))
+	data, err := io.ReadAll(body)
+	if err != nil {
+		writeErr(w, http.StatusRequestEntityTooLarge, "avatar too large")
+		return
+	}
+	if len(data) == 0 {
+		writeErr(w, http.StatusBadRequest, "empty avatar")
+		return
+	}
+	if err := s.st.SetAvatar(r.Context(), id, ct, data); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not save avatar")
+		return
+	}
+	updated, _ := s.st.GetUserByID(r.Context(), id)
+	s.broadcast("user.update", updated, nil)
+	writeJSON(w, http.StatusOK, map[string]bool{"has_avatar": true})
+}
+
+// handleAdminClearAvatar removes the avatar for any user.
+func (s *Server) handleAdminClearAvatar(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if _, err := s.st.GetUserByID(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err := s.st.ClearAvatar(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not clear avatar")
+		return
+	}
+	updated, _ := s.st.GetUserByID(r.Context(), id)
+	s.broadcast("user.update", updated, nil)
+	writeJSON(w, http.StatusOK, map[string]bool{"has_avatar": false})
+}
+
 // handleAdminStats returns at-a-glance server metrics for the admin panel.
 func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.st.GetStats(r.Context())

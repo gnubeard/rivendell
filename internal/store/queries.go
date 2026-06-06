@@ -107,6 +107,10 @@ func (s *Store) SetAvatar(ctx context.Context, id int64, mime string, data []byt
 		id, data, mime)
 }
 
+func (s *Store) ClearAvatar(ctx context.Context, id int64) error {
+	return s.exec(ctx, `UPDATE users SET avatar = NULL, avatar_mime = NULL, updated_at = now() WHERE id = $1`, id)
+}
+
 func (s *Store) GetAvatar(ctx context.Context, id int64) (mime string, data []byte, err error) {
 	var m sql.NullString
 	err = s.db.QueryRowContext(ctx, `SELECT avatar_mime, avatar FROM users WHERE id = $1`, id).Scan(&m, &data)

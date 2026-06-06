@@ -117,6 +117,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/users/{id}/magic-link", s.requireRole(store.RoleAdmin, s.handleCreateMagicLink))
 	mux.HandleFunc("PUT /api/admin/users/{id}/role", s.requireRole(store.RoleAdmin, s.handleSetRole))
 	mux.HandleFunc("PUT /api/admin/users/{id}/active", s.requireRole(store.RoleAdmin, s.handleSetActive))
+	mux.HandleFunc("POST /api/admin/users/{id}/avatar", s.requireRole(store.RoleAdmin, s.handleAdminSetAvatar))
+	mux.HandleFunc("DELETE /api/admin/users/{id}/avatar", s.requireRole(store.RoleAdmin, s.handleAdminClearAvatar))
 	mux.HandleFunc("GET /api/admin/channels/archived", s.requireRole(store.RoleAdmin, s.handleListArchivedChannels))
 	mux.HandleFunc("POST /api/admin/channels/{id}/restore", s.requireRole(store.RoleAdmin, s.handleRestoreChannel))
 	mux.HandleFunc("DELETE /api/admin/channels/{id}", s.requireRole(store.RoleAdmin, s.handlePurgeChannel))

@@ -54,6 +54,17 @@ export const api = {
   // users
   users: () => req("GET", "/api/users"),
   avatarURL: (userId) => `/api/users/${userId}/avatar`,
+  adminUploadAvatar: async (userId, file) => {
+    const res = await fetch(`/api/admin/users/${userId}/avatar`, {
+      method: "POST",
+      headers: { "Content-Type": file.type },
+      body: file,
+      credentials: "same-origin",
+    });
+    if (!res.ok) throw new Error("avatar upload failed");
+    return res.json();
+  },
+  adminClearAvatar: (userId) => req("DELETE", `/api/admin/users/${userId}/avatar`),
 
   // custom emojis
   emojis: () => req("GET", "/api/emojis"),
