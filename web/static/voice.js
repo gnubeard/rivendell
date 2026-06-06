@@ -20,6 +20,15 @@ let muted = false;
 let deafened = false;
 let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened}) -> void
+// Self join/leave tones are fired from these lifecycle hooks rather than from
+// onStateChange, so they play OUTSIDE the mic-capture window: the greet before
+// getUserMedia, the farewell after the capture is fully torn down. While a
+// capture with echoCancellation is live the browser's AEC ducks everything else
+// on the output device, which crushed the farewell to silence and made the
+// greet decay across rapid leave/join cycles. (Remote-peer tones, which fire
+// during a steady call where the duck is constant, stay in onStateChange.)
+let onSelfJoinTone = null;    // () -> void — fired before mic acquisition
+let onSelfLeaveTone = null;   // () -> void — fired after teardown completes
 
 // Ring-sound state. The incoming-call ringtone (callee) and the call-pending
 // tone (caller waiting for pickup) are independent so they never share an
@@ -31,10 +40,12 @@ let ringTick = 0;             // counts ringtone repeats, to occasionally accent
 let pendingInterval = null;
 let pendingAudioCtx = null;
 
-export function initVoice(myId, socketSend, stateChangeCb) {
+export function initVoice(myId, socketSend, stateChangeCb, selfJoinTone, selfLeaveTone) {
   myUserId = myId;
   sendFn = socketSend;
   onStateChange = stateChangeCb;
+  onSelfJoinTone = selfJoinTone || null;
+  onSelfLeaveTone = selfLeaveTone || null;
 }
 
 // fetchIceServers calls /api/rtc/credentials and caches the iceServers config.
@@ -57,6 +68,10 @@ export async function fetchIceServers() {
 export async function joinVoiceChannel(channelId) {
   if (activeChannelId === channelId) return;
   if (activeChannelId !== null) await leaveVoiceChannel();
+
+  // Greet BEFORE acquiring the mic — once getUserMedia opens the capture, the
+  // AEC ducks the output device and the tone would decay across cycles.
+  if (onSelfJoinTone) onSelfJoinTone();
 
   localStream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -83,15 +98,15 @@ export async function leaveVoiceChannel() {
   activeChannelId = null;
   participants = [];
   sendFn({ type: "voice.leave", channel_id: chId });
-  // notifyState() before teardown so the self-farewell tone (fired from
-  // onVoiceStateChange) plays while the audio output session is still alive.
-  // Stopping the mic and closing the peers tears down the audio session, which
-  // can leave the shared AudioContext suspended for a beat — long enough to
-  // swallow a tone scheduled right after. (Remote peers still hear a leaver's
-  // farewell because their own session is live; only the leaver was affected.)
   notifyState();
   closeAllPeers();
   stopLocalStream();
+  // Farewell AFTER teardown: the capture is now released, so the AEC duck is
+  // gone and the tone plays at full volume. playTones() unconditionally
+  // resume()s the context first, covering the beat where teardown may have left
+  // it transiently suspended. (Remote peers hear their own farewell via
+  // onVoiceStateChange — their capture stays live, duck constant.)
+  if (onSelfLeaveTone) onSelfLeaveTone();
 }
 
 // endCallLocally tears down our side of a call without telling the server we
@@ -102,11 +117,12 @@ export function endCallLocally() {
   if (activeChannelId === null) return;
   activeChannelId = null;
   participants = [];
-  // See leaveVoiceChannel: notify (and thus chime) before tearing down the
-  // audio session so a self-farewell tone isn't swallowed by the teardown.
   notifyState();
   closeAllPeers();
   stopLocalStream();
+  // See leaveVoiceChannel: farewell after teardown so it isn't ducked by the
+  // (now-released) capture and isn't swallowed by a transiently-suspended ctx.
+  if (onSelfLeaveTone) onSelfLeaveTone();
 }
 
 export function setVoiceMuted(m) {

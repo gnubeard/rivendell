@@ -181,12 +181,18 @@ function tabUnfocused() {
   return document.hidden || !document.hasFocus();
 }
 
+// A small lookahead so the gain envelope's attack is always scheduled in the
+// future. resume() can take a few ms to settle; without the cushion the ramp's
+// start lands in the past and the browser clips the attack — which read as a
+// quieter, decaying tone across rapid suspend/resume cycles.
+const TONE_LOOKAHEAD = 0.06;
+
 function boop() {
   // Only use a context that a prior user gesture already created — never create
   // one here, or the browser logs "AudioContext was prevented from starting".
   if (!audioCtx) return;
   const run = () => {
-    const t = audioCtx.currentTime;
+    const t = audioCtx.currentTime + TONE_LOOKAHEAD;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = "sine";
@@ -202,10 +208,11 @@ function boop() {
     osc.start(t);
     osc.stop(t + 0.23);
   };
-  // Browsers auto-suspend the context when the tab is idle/backgrounded. resume()
-  // is async — schedule oscillators only after it resolves so currentTime is live
-  // and start times aren't silently pushed into the past.
-  if (audioCtx.state === "suspended") { audioCtx.resume().then(run).catch(() => {}); } else { run(); }
+  // Always resume()-then-run, not just when state is already "suspended": a
+  // call teardown (mic + peers closing) can suspend the context a beat AFTER we
+  // check, so an unconditional resume covers that race. resume() on a running
+  // context resolves immediately and is harmless.
+  audioCtx.resume().then(run).catch(() => {});
 }
 
 // playTones plays a short sequence of sine notes ({f: Hz, t: start offset, d:
@@ -214,7 +221,7 @@ function boop() {
 function playTones(seq) {
   if (!audioCtx) return;
   const run = () => {
-    const t0 = audioCtx.currentTime;
+    const t0 = audioCtx.currentTime + TONE_LOOKAHEAD;
     for (const n of seq) {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -229,7 +236,8 @@ function playTones(seq) {
       osc.stop(s + n.d + 0.02);
     }
   };
-  if (audioCtx.state === "suspended") { audioCtx.resume().then(run).catch(() => {}); } else { run(); }
+  // See boop(): unconditional resume covers the post-teardown suspend race.
+  audioCtx.resume().then(run).catch(() => {});
 }
 // A rising two-note chirp when someone joins the call, falling when they leave —
 // the direction makes the two instantly distinguishable without looking.
@@ -411,7 +419,7 @@ async function enterApp() {
   }
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
-  initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange);
+  initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
   fetchIceServers(); // best-effort; falls back to public STUN on error
   wireVoiceControls();
   // Wire interactive controls BEFORE realtime, so a transport problem can never
@@ -3051,8 +3059,8 @@ async function onVoiceEvent(evt) {
   if (evt.type === "voice.end") {
     // The other party in a DM hung up (or dropped): the call ends for both.
     // Tear down our side without echoing a voice.leave (the server already
-    // removed us). endCallLocally calls notifyState → onVoiceStateChange, which
-    // detects the inCall→false transition and plays the farewell tone.
+    // removed us). endCallLocally tears down then fires the farewell tone via
+    // the voice.js self-leave hook (after the capture is released).
     if (isInCall() && voiceChannelId() === p.channel_id) {
       endCallLocally();
     }
@@ -3095,20 +3103,19 @@ function renderRingBanner() {
 
 // onVoiceStateChange folds a fresh state push from voice.js into the UI: it
 // chimes a greet/farewell tone for each remote peer that joined/left since the
-// last push (and for ourselves joining/leaving), refreshes the on-call cue set,
-// and repaints the call strip, header, and member roster.
+// last push, refreshes the on-call cue set, and repaints the call strip, header,
+// and member roster. Our OWN join/leave tones are NOT fired here — they're
+// driven by voice.js lifecycle hooks (greetTone before getUserMedia,
+// farewellTone after teardown) so they play outside the mic-capture window and
+// aren't ducked/decayed by the AEC. See initVoice / joinVoiceChannel.
 function onVoiceStateChange(vs) {
   const prevInCall = voiceCallState.inCall;
   const prevRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
   voiceCallState = vs;
   callParticipantIds = new Set((vs.participants || []).map((p) => p.user_id));
-  if (!prevInCall && vs.inCall) {
-    greetTone();
-  } else if (prevInCall && !vs.inCall) {
-    farewellTone();
-  } else if (vs.inCall) {
-    // Already in call: chime for remote peers joining/leaving. Guard keeps us
-    // from firing a farewell for every peer when we ourselves leave.
+  if (prevInCall && vs.inCall) {
+    // Already in call: chime for remote peers joining/leaving. (Self join/leave
+    // tones are handled by the voice.js lifecycle hooks, not here.)
     const nowRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
     for (const id of nowRemote) if (!prevRemote.has(id)) greetTone();
     for (const id of prevRemote) if (!nowRemote.has(id)) farewellTone();
