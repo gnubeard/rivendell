@@ -88,6 +88,12 @@
           <option value="offline">invisible</option>
         </select>
       </div>
+      <div id="call-strip" class="call-strip" hidden>
+        <span id="call-strip-label" class="call-strip-label"></span>
+        <button id="call-mute-btn" class="call-ctl" title="Mute">🎙</button>
+        <button id="call-deafen-btn" class="call-ctl" title="Deafen">🔊</button>
+        <button id="call-leave-btn" class="call-ctl danger" title="Leave call">✕</button>
+      </div>
       <div class="sidebar-actions">
         <label class="link" title="Upload avatar">avatar<input id="avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
         <button id="admin-btn" class="link" hidden>admin</button>
@@ -102,10 +108,16 @@
           <span id="channel-title" class="channel-title"></span><span id="channel-dm-dot" class="dot" hidden></span>
           <span id="channel-topic" class="channel-topic"></span>
         </div>
+        <button id="call-btn" class="icon-btn" title="Call" aria-label="Start voice call" hidden>📞</button>
         <button id="search-btn" class="icon-btn" title="Search messages" aria-label="Search messages">🔍</button>
         <button id="pins-btn" class="icon-btn" title="Pinned messages" aria-label="Pinned messages">📌</button>
         <button id="members-toggle" class="icon-btn" title="Members" aria-label="Members">👥</button>
       </header>
+      <div id="ring-banner" class="ring-banner" hidden>
+        <span id="ring-banner-text"></span>
+        <button id="ring-accept-btn" class="primary small">Accept</button>
+        <button id="ring-decline-btn" class="link danger">Decline</button>
+      </div>
       <div id="history-banner" class="history-banner" hidden>
         Viewing history —
         <button id="history-latest-btn" class="link">Jump to latest</button>

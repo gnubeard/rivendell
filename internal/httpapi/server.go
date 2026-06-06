@@ -23,6 +23,13 @@ import (
 	"rivendell/internal/ws"
 )
 
+// activeRing tracks a pending DM ring so the server can time it out.
+type activeRing struct {
+	callerID int64
+	calleeID int64
+	timer    *time.Timer
+}
+
 const sessionCookie = "rivendell_session"
 
 type typingKey struct{ channelID, userID int64 }
@@ -33,6 +40,8 @@ type Server struct {
 	hub          *ws.Hub
 	typingMu     sync.Mutex
 	typingTimers map[typingKey]*time.Timer
+	ringMu       sync.Mutex
+	rings        map[int64]*activeRing // DM channelID → pending ring
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
@@ -40,6 +49,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 		cfg:          cfg,
 		st:           st,
 		typingTimers: make(map[typingKey]*time.Timer),
+		rings:        make(map[int64]*activeRing),
 	}
 	s.hub = ws.NewHub(s.onPresenceChange, s.onWSMessage)
 	return s
@@ -127,6 +137,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/bot-tokens", s.requireRole(store.RoleAdmin, s.handleListBotTokens))
 	mux.HandleFunc("POST /api/admin/bot-tokens", s.requireRole(store.RoleAdmin, s.handleCreateBotToken))
 	mux.HandleFunc("DELETE /api/admin/bot-tokens/{id}", s.requireRole(store.RoleAdmin, s.handleDeleteBotToken))
+
+	// Voice / WebRTC.
+	mux.HandleFunc("GET /api/channels/{id}/voice", s.auth(s.handleGetVoiceParticipants))
+	mux.HandleFunc("GET /api/rtc/credentials", s.auth(s.handleGetRTCCredentials))
 
 	// Realtime.
 	mux.HandleFunc("GET /api/ws", s.handleWS)
@@ -336,28 +350,53 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 		"status":  u.Status,
 		"idle":    s.hub.IsIdle(userID),
 	}, nil)
+	if !online {
+		s.cleanupVoiceForUser(ctx, userID)
+	}
+}
+
+// cleanupVoiceForUser removes the user from any voice channel they were in and
+// broadcasts updated voice.state for each affected channel.
+func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
+	affected := s.hub.VoiceLeaveAll(userID)
+	for chID, participants := range affected {
+		ch, err := s.st.GetChannel(ctx, chID)
+		if err != nil {
+			continue
+		}
+		aud := s.audienceForChannel(ctx, ch)
+		s.broadcast("voice.state", map[string]any{
+			"channel_id":   chID,
+			"participants": participants,
+		}, aud)
+	}
 }
 
 // onWSMessage is called by the hub for each inbound client frame. Handles
-// "typing" and "idle" frames; anything else is silently ignored. Idle is kept
-// on the WS (not a REST call) precisely so it's scoped to this one connection —
-// the hub then treats a user as idle only when all of their connections are.
+// "typing", "idle", and "voice.*" frames; anything else is silently ignored.
+// Idle is kept on the WS (not a REST call) so it's scoped to this connection.
 func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 	var msg struct {
-		Type      string `json:"type"`
-		ChannelID int64  `json:"channel_id"`
-		Idle      bool   `json:"idle"`
+		Type        string `json:"type"`
+		ChannelID   int64  `json:"channel_id"`
+		DMChannelID int64  `json:"dm_channel_id"`
+		ToUserID    int64  `json:"to_user_id"`
+		Idle        bool   `json:"idle"`
+		Muted       bool   `json:"muted"`
+		Accept      bool   `json:"accept"`
 	}
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return
 	}
 	userID := c.UserID()
 	if msg.Type == "idle" {
-		// Re-broadcast presence only when the user's effective idle state flips
-		// (an active session keeps the user non-idle even if this one idles).
 		if s.hub.SetClientIdle(c, msg.Idle) {
 			s.onPresenceChange(userID, true)
 		}
+		return
+	}
+	if strings.HasPrefix(msg.Type, "voice.") {
+		s.handleVoiceWSMessage(c, data, msg.Type, msg.ChannelID, msg.DMChannelID, msg.ToUserID, msg.Muted, msg.Accept)
 		return
 	}
 	if msg.Type != "typing" || msg.ChannelID == 0 {
@@ -394,6 +433,186 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 		}, audience)
 	})
 	s.typingMu.Unlock()
+}
+
+// handleVoiceWSMessage routes voice.* frames from clients. Point-to-point
+// frames (offer/answer/ice/ring/ring_response) are relayed with from_user_id
+// injected; state-change frames (join/leave/mute) update in-memory voice state
+// and fan out voice.state to the channel audience.
+func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, channelID, dmChannelID, toUserID int64, muted, accept bool) {
+	userID := c.UserID()
+	ctx := context.Background()
+
+	// relayToUser re-encodes the client frame as a server event envelope, injects
+	// from_user_id, and delivers it to a specific user.
+	relayToUser := func(targetID int64) {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return
+		}
+		delete(payload, "type")
+		fromBytes, _ := json.Marshal(userID)
+		payload["from_user_id"] = fromBytes
+		out, err := json.Marshal(event{Type: msgType, Payload: payload})
+		if err != nil {
+			return
+		}
+		s.hub.SendToUser(targetID, out)
+	}
+
+	// canAccess checks whether a user may participate in the channel.
+	canAccess := func(ch store.Channel, uid int64) bool {
+		if !ch.IsPrivate {
+			return true
+		}
+		member, err := s.st.IsChannelMember(ctx, ch.ID, uid)
+		isMember := err == nil && member
+		if ch.IsDM {
+			return isMember
+		}
+		u, err := s.st.GetUserByID(ctx, uid)
+		if err != nil {
+			return isMember
+		}
+		return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
+	}
+
+	switch msgType {
+	case "voice.join":
+		if channelID == 0 {
+			return
+		}
+		ch, err := s.st.GetChannel(ctx, channelID)
+		if err != nil || !canAccess(ch, userID) {
+			return
+		}
+		// Auto-leave any other voice channels first.
+		for chID, pts := range s.hub.VoiceLeaveAll(userID) {
+			if chID == channelID {
+				continue
+			}
+			oldCh, err := s.st.GetChannel(ctx, chID)
+			if err != nil {
+				continue
+			}
+			aud := s.audienceForChannel(ctx, oldCh)
+			s.broadcast("voice.state", map[string]any{"channel_id": chID, "participants": pts}, aud)
+		}
+		participants := s.hub.VoiceJoin(channelID, userID)
+		aud := s.audienceForChannel(ctx, ch)
+		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+
+	case "voice.leave":
+		if channelID == 0 {
+			return
+		}
+		ch, err := s.st.GetChannel(ctx, channelID)
+		if err != nil {
+			return
+		}
+		participants := s.hub.VoiceLeave(channelID, userID)
+		aud := s.audienceForChannel(ctx, ch)
+		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+
+	case "voice.offer", "voice.answer", "voice.ice":
+		if channelID == 0 || toUserID == 0 {
+			return
+		}
+		ch, err := s.st.GetChannel(ctx, channelID)
+		if err != nil || !canAccess(ch, userID) || !canAccess(ch, toUserID) {
+			return
+		}
+		relayToUser(toUserID)
+
+	case "voice.mute":
+		if channelID == 0 {
+			return
+		}
+		ch, err := s.st.GetChannel(ctx, channelID)
+		if err != nil || !canAccess(ch, userID) {
+			return
+		}
+		participants := s.hub.VoiceSetMute(channelID, userID, muted)
+		aud := s.audienceForChannel(ctx, ch)
+		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+
+	case "voice.ring":
+		if dmChannelID == 0 {
+			return
+		}
+		ch, err := s.st.GetChannel(ctx, dmChannelID)
+		if err != nil || !ch.IsDM {
+			return
+		}
+		ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
+		if err != nil || len(ids) != 2 {
+			return
+		}
+		var calleeID int64
+		callerOK := false
+		for _, id := range ids {
+			if id == userID {
+				callerOK = true
+			} else {
+				calleeID = id
+			}
+		}
+		if !callerOK || calleeID == 0 {
+			return
+		}
+		// Cancel any existing ring for this DM and start a new one.
+		s.ringMu.Lock()
+		if r, ok := s.rings[dmChannelID]; ok {
+			r.timer.Stop()
+		}
+		ring := &activeRing{callerID: userID, calleeID: calleeID}
+		chIDCopy := dmChannelID
+		ring.timer = time.AfterFunc(30*time.Second, func() {
+			s.ringMu.Lock()
+			if r, ok := s.rings[chIDCopy]; ok && r == ring {
+				delete(s.rings, chIDCopy)
+			}
+			s.ringMu.Unlock()
+			tout, _ := json.Marshal(event{Type: "voice.ring_timeout", Payload: map[string]int64{"dm_channel_id": chIDCopy}})
+			s.hub.SendToUser(userID, tout)
+			s.hub.SendToUser(calleeID, tout)
+		})
+		s.rings[dmChannelID] = ring
+		s.ringMu.Unlock()
+		relayToUser(calleeID)
+
+	case "voice.ring_response":
+		if dmChannelID == 0 {
+			return
+		}
+		ch, err := s.st.GetChannel(ctx, dmChannelID)
+		if err != nil || !ch.IsDM {
+			return
+		}
+		ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
+		if err != nil || len(ids) != 2 {
+			return
+		}
+		var otherID int64
+		selfOK := false
+		for _, id := range ids {
+			if id == userID {
+				selfOK = true
+			} else {
+				otherID = id
+			}
+		}
+		if !selfOK || otherID == 0 {
+			return
+		}
+		s.ringMu.Lock()
+		if r, ok := s.rings[dmChannelID]; ok {
+			r.timer.Stop()
+			delete(s.rings, dmChannelID)
+		}
+		s.ringMu.Unlock()
+		relayToUser(otherID)
+	}
 }
 
 // --- static files --------------------------------------------------------

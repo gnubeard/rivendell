@@ -144,6 +144,10 @@ export const api = {
   restoreChannel: (id) => req("POST", `/api/admin/channels/${id}/restore`),
   purgeChannel: (id) => req("DELETE", `/api/admin/channels/${id}`),
 
+  // voice / WebRTC
+  voiceParticipants: (channelId) => req("GET", `/api/channels/${channelId}/voice`),
+  rtcCredentials: () => req("GET", "/api/rtc/credentials"),
+
   // link preview proxy (bsky.app and twitter.com/x.com only)
   linkPreview: (url) => req("GET", `/api/link-preview?url=${encodeURIComponent(url)}`),
 

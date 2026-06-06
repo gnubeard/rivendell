@@ -2,8 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"io"
 	"log"
@@ -295,6 +299,50 @@ func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
 		"name":    s.cfg.InstanceName,
 		"version": config.Version,
 	})
+}
+
+// --- voice / WebRTC -------------------------------------------------------
+
+// handleGetVoiceParticipants lists who is currently in a voice channel.
+func (s *Server) handleGetVoiceParticipants(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "access denied")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.hub.VoiceParticipants(id))
+}
+
+// handleGetRTCCredentials returns a short-lived STUN/TURN credential pair for
+// use in RTCPeerConnection iceServers config. The TURN credential uses coturn's
+// HMAC time-limited model: username = "<expiry>:<user_id>", credential =
+// base64(HMAC-SHA256(secret, username)). If TURN is not configured, only the
+// STUN URL is returned.
+func (s *Server) handleGetRTCCredentials(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	resp := map[string]any{
+		"stun": s.cfg.StunURL,
+	}
+	if s.cfg.TurnURL != "" && s.cfg.TurnSecret != "" {
+		expires := time.Now().Add(time.Hour).Unix()
+		username := fmt.Sprintf("%d:%d", expires, u.ID)
+		mac := hmac.New(sha256.New, []byte(s.cfg.TurnSecret))
+		mac.Write([]byte(username))
+		resp["turn"] = s.cfg.TurnURL
+		resp["username"] = username
+		resp["credential"] = base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {

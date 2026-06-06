@@ -381,6 +381,37 @@ body.dm-active #members-toggle { display: none; }
 .search-row .msg-time { margin-right: 0; margin-left: auto; }
 #search-more { display: block; margin: 0.5rem auto 0; }
 
+/* --- voice calling ----------------------------------------------------- */
+
+.ring-banner {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface-2, rgba(127,127,127,0.12));
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.ring-banner #ring-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
+
+.call-strip {
+  display: flex; align-items: center; gap: 0.3rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--surface-2, rgba(80,180,80,0.12));
+  border-top: 1px solid var(--border);
+}
+.call-strip-label { flex: 1; min-width: 0; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.call-ctl {
+  background: none; border: none; border-radius: var(--radius);
+  padding: 0.2rem 0.35rem; cursor: pointer; font-size: 1rem; color: var(--text-dim);
+  transition: background 0.1s;
+}
+.call-ctl:hover { background: var(--surface-3, rgba(127,127,127,0.15)); color: var(--text); }
+.call-ctl.danger { color: var(--red, #e74c3c); }
+.call-ctl.danger:hover { background: rgba(231,76,60,0.12); }
+.call-ctl.active { color: var(--text); opacity: 0.55; }
+
 @media (max-width: 720px) {
   /* The conversation takes the whole screen; the sidebar (channels/DMs/profile)
      and members panel become slide-in drawers from the left and right. */

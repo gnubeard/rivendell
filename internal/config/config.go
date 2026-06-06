@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.0.44"
+const Version = "1.1.0"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -26,6 +26,9 @@ type Config struct {
 	MaxAvatarBytes  int           // reject avatar uploads larger than this
 	BootstrapAdmin  string        // username created on first boot if no admins exist
 	InstanceName    string        // display name of this instance (e.g. "rivendell")
+	StunURL         string        // STUN server URL for WebRTC NAT traversal
+	TurnURL         string        // TURN relay URL (empty = STUN only)
+	TurnSecret      string        // shared HMAC secret for time-limited TURN credentials
 }
 
 func Load() (Config, error) {
@@ -41,6 +44,9 @@ func Load() (Config, error) {
 		MaxAvatarBytes:  envInt("RIVENDELL_MAX_AVATAR_BYTES", 512*1024),
 		BootstrapAdmin:  env("RIVENDELL_BOOTSTRAP_ADMIN", "admin"),
 		InstanceName:    env("RIVENDELL_INSTANCE_NAME", "rivendell"),
+		StunURL:         env("RIVENDELL_STUN_URL", "stun:stun.l.google.com:19302"),
+		TurnURL:         env("RIVENDELL_TURN_URL", ""),
+		TurnSecret:      env("RIVENDELL_TURN_SECRET", ""),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("config: RIVENDELL_DATABASE_URL is required")

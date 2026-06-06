@@ -12,6 +12,21 @@ import {
   currentPermission,
   notificationsSupported,
 } from "./notify.js";
+import {
+  initVoice,
+  fetchIceServers,
+  joinVoiceChannel,
+  leaveVoiceChannel,
+  setVoiceMuted,
+  setVoiceDeafened,
+  isVoiceMuted,
+  isVoiceDeafened,
+  isInCall,
+  voiceChannelId,
+  handleVoiceSignal,
+  startRingSound,
+  stopRingSound,
+} from "./voice.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -80,6 +95,12 @@ let editFocusPending = false; // focus the editor on the next render (it just op
 // hides the row. Reopening (clicking the person's name) or a fresh incoming
 // message un-hides it. Persisted to localStorage so it survives refreshes.
 const closedDMs = loadClosedDMs();
+
+// Voice call state. ringState is set while a ring is in progress (either an
+// outgoing ring we sent, or an incoming ring we're showing the banner for).
+let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUserId }
+// voiceCallState is the live state from voice.js (updated via callback).
+let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false };
 
 function loadClosedDMs() {
   try {
@@ -365,6 +386,15 @@ async function enterApp() {
     await loadChannel(state.activeChannelId);
     markActiveChannelRead();
   }
+  // Voice: init module with our user id and the socket send function. Ice servers
+  // are fetched in the background — they'll be ready well before any call starts.
+  initVoice(state.me.id, (msg) => socket && socket.send(msg), (vs) => {
+    voiceCallState = vs;
+    renderCallStrip();
+    renderChannelHeader(state.channels[state.activeChannelId]);
+  });
+  fetchIceServers(); // best-effort; falls back to public STUN on error
+  wireVoiceControls();
   // Wire interactive controls BEFORE realtime, so a transport problem can never
   // leave the composer/admin/avatar handlers unattached.
   wireComposer();
@@ -475,6 +505,9 @@ function startRealtime() {
           renderMessages();
           refreshPinsIfOpen();
         }
+      }
+      if (evt.type.startsWith("voice.")) {
+        onVoiceEvent(evt);
       }
       if (evt.type.startsWith("message")) {
         // A delete seen live earns a tombstone (unlike already-deleted history).
@@ -942,6 +975,7 @@ function isModPlus() {
 function renderChannelHeader(ch) {
   const topicEl = $("#channel-topic");
   const dmDot = $("#channel-dm-dot");
+  const callBtn = $("#call-btn");
   if (ch && ch.is_dm) {
     $("#channel-title").textContent = "@ " + dmDisplayName(ch);
     topicEl.textContent = "";
@@ -951,9 +985,22 @@ function renderChannelHeader(ch) {
     const other = otherId && state.users[otherId];
     dmDot.className = `dot ${other ? presenceClass(other) : "offline"}`;
     dmDot.hidden = false;
+    // Show/update the call button for DM channels.
+    if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
+      callBtn.textContent = "📵";
+      callBtn.title = "Cancel call";
+    } else if (isInCall() && voiceCallState.channelId === ch.id) {
+      callBtn.textContent = "📵";
+      callBtn.title = "Leave call";
+    } else {
+      callBtn.textContent = "📞";
+      callBtn.title = "Start voice call";
+    }
+    callBtn.hidden = false;
     return;
   }
   dmDot.hidden = true;
+  callBtn.hidden = true;
   $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
   const canEdit = !!(ch && !ch.is_dm && isModPlus());
   topicEl.classList.toggle("editable", canEdit);
@@ -2807,6 +2854,160 @@ function avatarSrc(userId) {
 
 function initials(name) {
   return (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+}
+
+// --- voice calling -------------------------------------------------------
+
+function wireVoiceControls() {
+  // Call strip (active call controls at the bottom of the sidebar).
+  $("#call-mute-btn").onclick = () => {
+    setVoiceMuted(!isVoiceMuted());
+    renderCallStrip();
+  };
+  $("#call-deafen-btn").onclick = () => {
+    setVoiceDeafened(!isVoiceDeafened());
+    renderCallStrip();
+  };
+  $("#call-leave-btn").onclick = () => leaveVoiceChannel();
+
+  // Ring banner (incoming call).
+  $("#ring-accept-btn").onclick = async () => {
+    if (!ringState) return;
+    const chId = ringState.channelId;
+    stopRingSound();
+    // Send acceptance before joining so the caller gets the signal promptly.
+    socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: true });
+    ringState = null;
+    renderRingBanner();
+    try {
+      await joinVoiceChannel(chId);
+    } catch (e) {
+      alert("Could not access microphone: " + (e && e.message));
+    }
+  };
+  $("#ring-decline-btn").onclick = () => {
+    if (!ringState) return;
+    const chId = ringState.channelId;
+    stopRingSound();
+    socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
+    ringState = null;
+    renderRingBanner();
+  };
+
+  // Call button in the channel header (DMs only).
+  $("#call-btn").onclick = async () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    if (ringState) {
+      // Cancel the outgoing ring.
+      const chId = ringState.channelId;
+      stopRingSound();
+      socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
+      ringState = null;
+      renderRingBanner();
+      renderChannelHeader(ch);
+      return;
+    }
+    if (isInCall()) {
+      await leaveVoiceChannel();
+      return;
+    }
+    socket && socket.send({ type: "voice.ring", dm_channel_id: ch.id });
+    ringState = { channelId: ch.id, direction: "outgoing", fromUserId: state.me.id };
+    renderChannelHeader(ch);
+    renderRingBanner();
+  };
+}
+
+// onVoiceEvent handles incoming voice.* events from the server.
+async function onVoiceEvent(evt) {
+  const p = evt.payload || {};
+
+  if (evt.type === "voice.ring") {
+    // Incoming ring from another user.
+    if (ringState) return; // already in a ring — ignore (shouldn't happen in practice)
+    ringState = { channelId: p.dm_channel_id, direction: "incoming", fromUserId: p.from_user_id };
+    renderRingBanner();
+    startRingSound(audioCtx);
+    return;
+  }
+
+  if (evt.type === "voice.ring_response") {
+    // Response to a ring we sent, or the other side cancelling their ring.
+    if (!ringState) return;
+    stopRingSound();
+    const accepted = p.accept;
+    const chId = ringState.channelId;
+    ringState = null;
+    renderRingBanner();
+    renderChannelHeader(state.channels[state.activeChannelId]);
+    if (accepted) {
+      try {
+        await joinVoiceChannel(chId);
+      } catch (e) {
+        alert("Could not access microphone: " + (e && e.message));
+      }
+    }
+    return;
+  }
+
+  if (evt.type === "voice.ring_timeout") {
+    if (ringState && ringState.channelId === p.dm_channel_id) {
+      stopRingSound();
+      ringState = null;
+      renderRingBanner();
+      renderChannelHeader(state.channels[state.activeChannelId]);
+    }
+    return;
+  }
+
+  // voice.state / offer / answer / ice — pass to voice.js machinery.
+  await handleVoiceSignal(evt);
+}
+
+function renderRingBanner() {
+  const banner = $("#ring-banner");
+  if (!ringState) {
+    banner.hidden = true;
+    return;
+  }
+  const { direction, fromUserId, channelId } = ringState;
+  const bannerText = $("#ring-banner-text");
+  if (direction === "incoming") {
+    const caller = state.users[fromUserId];
+    const name = caller ? caller.display_name : "Someone";
+    bannerText.textContent = name + " is calling…";
+    $("#ring-accept-btn").hidden = false;
+    $("#ring-decline-btn").textContent = "Decline";
+  } else {
+    // outgoing ring
+    const ch = state.channels[channelId];
+    const otherName = ch ? dmDisplayName(ch) : "…";
+    bannerText.textContent = "Calling " + otherName + "…";
+    $("#ring-accept-btn").hidden = true;
+    $("#ring-decline-btn").textContent = "Cancel";
+  }
+  banner.hidden = false;
+}
+
+function renderCallStrip() {
+  const strip = $("#call-strip");
+  if (!voiceCallState.inCall) {
+    strip.hidden = true;
+    return;
+  }
+  const ch = voiceCallState.channelId !== null ? state.channels[voiceCallState.channelId] : null;
+  const label = ch ? (ch.is_dm ? "📞 " + dmDisplayName(ch) : "🔊 #" + ch.name) : "In call";
+  $("#call-strip-label").textContent = label;
+  const muteBtn = $("#call-mute-btn");
+  muteBtn.textContent = voiceCallState.muted ? "🔇" : "🎙";
+  muteBtn.title = voiceCallState.muted ? "Unmute" : "Mute";
+  muteBtn.classList.toggle("active", voiceCallState.muted);
+  const deafBtn = $("#call-deafen-btn");
+  deafBtn.textContent = voiceCallState.deafened ? "🔈" : "🔊";
+  deafBtn.title = voiceCallState.deafened ? "Undeafen" : "Deafen";
+  deafBtn.classList.toggle("active", voiceCallState.deafened);
+  strip.hidden = false;
 }
 
 function formatTime(iso) {
