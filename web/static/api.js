@@ -147,6 +147,7 @@ export const api = {
   purgeChannel: (id) => req("DELETE", `/api/admin/channels/${id}`),
 
   // voice / WebRTC
+  voiceState: () => req("GET", "/api/voice/state"),
   voiceParticipants: (channelId) => req("GET", `/api/channels/${channelId}/voice`),
   rtcCredentials: () => req("GET", "/api/rtc/credentials"),
 

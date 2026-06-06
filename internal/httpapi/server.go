@@ -142,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/bot-tokens/{id}", s.requireRole(store.RoleAdmin, s.handleDeleteBotToken))
 
 	// Voice / WebRTC.
+	mux.HandleFunc("GET /api/voice/state", s.auth(s.handleGetVoiceState))
 	mux.HandleFunc("GET /api/channels/{id}/voice", s.auth(s.handleGetVoiceParticipants))
 	mux.HandleFunc("GET /api/rtc/credentials", s.auth(s.handleGetRTCCredentials))
 

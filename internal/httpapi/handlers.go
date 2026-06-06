@@ -303,6 +303,32 @@ func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
 
 // --- voice / WebRTC -------------------------------------------------------
 
+// handleGetVoiceState returns all accessible voice channels with their current
+// participants. Called on client boot to seed the sidebar voice rosters.
+func (s *Server) handleGetVoiceState(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	all := s.hub.VoiceAllChannels()
+	type entry struct {
+		ChannelID    int64                 `json:"channel_id"`
+		Participants []ws.VoiceParticipant `json:"participants"`
+	}
+	out := []entry{}
+	for chID, pts := range all {
+		if len(pts) == 0 {
+			continue
+		}
+		ch, err := s.st.GetChannel(r.Context(), chID)
+		if err != nil {
+			continue
+		}
+		if !s.canAccessChannel(r, ch, u) {
+			continue
+		}
+		out = append(out, entry{ChannelID: chID, Participants: pts})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleGetVoiceParticipants lists who is currently in a voice channel.
 func (s *Server) handleGetVoiceParticipants(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())

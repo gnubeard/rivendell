@@ -131,7 +131,8 @@ button.primary:hover { filter: brightness(1.08); }
 .sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .channels-head { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1rem 0.4rem; }
 .channel-list { list-style: none; margin: 0; padding: 0 0.5rem; }
-.channel { display: flex; align-items: center; gap: 0.4rem; padding: 0.32rem 0.5rem; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; }
+.channel { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.32rem 0.5rem; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; }
+.ch-voice { width: 100%; padding-left: 1.2rem; margin-top: -0.15rem; font-size: 0.75rem; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .channel:hover { background: var(--bg-hover); }
 .channel.active { background: var(--bg-3); color: var(--text); }
 .ch-hash { color: var(--text-faint); flex-shrink: 0; }

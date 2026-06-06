@@ -104,6 +104,9 @@ let editFocusPending = false; // focus the editor on the next render (it just op
 let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUserId }
 // voiceCallState is the live state from voice.js (updated via callback).
 let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, participants: [] };
+// voiceRosters tracks voice participants per channel (sidebar display).
+// channelId → [{user_id, joined_at, muted}]
+let voiceRosters = {};
 // callParticipantIds is the set of user ids currently connected to our active
 // call (self included), derived from voiceCallState. Used to paint the on-call
 // cue in the member list and to detect joins/leaves for the greet/farewell tones.
@@ -352,6 +355,15 @@ async function enterApp() {
     state = S.setMutedChannels(state, summary.muted);
   } catch (e) {
     /* non-fatal: counts will populate as realtime events arrive */
+  }
+  // Seed voice rosters so the sidebar shows who's already in voice on load.
+  try {
+    const vs = await api.voiceState();
+    for (const { channel_id, participants } of vs) {
+      voiceRosters[channel_id] = participants;
+    }
+  } catch (e) {
+    /* non-fatal: sidebar voice cues populate from realtime events */
   }
   // Restore the channel the user last had open (if it's still accessible);
   // otherwise prefer a real channel over a DM on first load.
@@ -674,12 +686,17 @@ function renderChannels() {
     const unread = state.unread[id] || 0;
     const mentioned = state.mentions[id] || 0;
     const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
+    const roster = voiceRosters[id] || [];
+    const voiceRow = roster.length ? el("span", { class: "ch-voice" },
+      "🔊 " + roster.map(p => (state.users[p.user_id] || {}).display_name || "?").join(", ")
+    ) : null;
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: "ch-hash" }, ch.is_private ? "🔒" : "#"),
         el("span", { class: "ch-name" }, ch.name),
         unread ? el("span", { class: mentioned ? "unread-badge mention" : "unread-badge" }, mentioned ? `@${unread}` : String(unread)) : null,
-        controls
+        controls,
+        voiceRow
       )
     );
   }
@@ -1031,7 +1048,18 @@ function renderChannelHeader(ch) {
   }
   dmDot.hidden = true;
   dmCall.hidden = true;
-  callBtn.hidden = true;
+  if (ch && !ch.is_dm) {
+    if (isInCall() && voiceCallState.channelId === ch.id) {
+      callBtn.textContent = "🔴";
+      callBtn.title = "Leave voice";
+    } else {
+      callBtn.textContent = "🔊";
+      callBtn.title = "Join voice";
+    }
+    callBtn.hidden = false;
+  } else {
+    callBtn.hidden = true;
+  }
   $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
   const canEdit = !!(ch && !ch.is_dm && isModPlus());
   topicEl.classList.toggle("editable", canEdit);
@@ -2930,10 +2958,23 @@ function wireVoiceControls() {
     renderRingBanner();
   };
 
-  // Call button in the channel header (DMs only).
+  // Call button in the channel header (DMs and regular channels).
   $("#call-btn").onclick = async () => {
     const ch = state.channels[state.activeChannelId];
-    if (!ch || !ch.is_dm) return;
+    if (!ch) return;
+    if (!ch.is_dm) {
+      // Regular voice channel: toggle join/leave.
+      if (isInCall() && voiceCallState.channelId === ch.id) {
+        await leaveVoiceChannel();
+      } else {
+        try {
+          await joinVoiceChannel(ch.id);
+        } catch (e) {
+          alert("Could not access microphone: " + (e && e.message));
+        }
+      }
+      return;
+    }
     if (ringState) {
       // Cancel the outgoing ring.
       const chId = ringState.channelId;
@@ -3013,6 +3054,11 @@ async function onVoiceEvent(evt) {
     return;
   }
 
+  // voice.state — update sidebar rosters for any channel, then pass to voice.js.
+  if (evt.type === "voice.state") {
+    voiceRosters[evt.payload.channel_id] = evt.payload.participants || [];
+    renderChannels();
+  }
   // voice.state / offer / answer / ice — pass to voice.js machinery.
   await handleVoiceSignal(evt);
 }

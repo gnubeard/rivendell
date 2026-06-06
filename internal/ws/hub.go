@@ -340,6 +340,18 @@ func (h *Hub) VoiceLeaveAll(userID int64) map[int64][]VoiceParticipant {
 	return affected
 }
 
+// VoiceAllChannels returns a snapshot of every channel that currently has at
+// least one voice participant. Callers must filter by access before exposing.
+func (h *Hub) VoiceAllChannels() map[int64][]VoiceParticipant {
+	h.voiceMu.RLock()
+	defer h.voiceMu.RUnlock()
+	out := make(map[int64][]VoiceParticipant, len(h.voiceChannels))
+	for chID, m := range h.voiceChannels {
+		out[chID] = voiceList(m)
+	}
+	return out
+}
+
 // voiceList converts a participant map to a slice sorted by join time.
 // Caller must hold voiceMu (any mode).
 func voiceList(m map[int64]*VoiceParticipant) []VoiceParticipant {
