@@ -845,6 +845,7 @@ async function startDM(userId) {
     reopenDM(ch.id);
     state = S.upsertChannel(state, ch);
     await selectChannel(ch.id);
+    $("#composer-input").focus();
   } catch (ex) {
     alert(ex.message);
   }
