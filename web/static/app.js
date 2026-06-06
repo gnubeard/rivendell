@@ -2361,6 +2361,15 @@ async function openAdmin() {
   await refreshDeletedChannels();
   await refreshAdminBotTokens();
 
+  // Populate the user picker for the bot-token form from the already-loaded roster.
+  const tokenUserSel = $("#admin-token-user");
+  tokenUserSel.innerHTML = "";
+  Object.values(state.users)
+    .sort((a, b) => a.display_name.localeCompare(b.display_name))
+    .forEach((u) => tokenUserSel.append(
+      el("option", { value: u.id }, `${u.display_name} (${u.username})`),
+    ));
+
   $("#admin-emoji-form").onsubmit = async (e) => {
     e.preventDefault();
     const out = $("#admin-emoji-out");
@@ -2386,8 +2395,9 @@ async function openAdmin() {
     const out = $("#admin-token-out");
     out.textContent = "";
     const name = $("#admin-token-name").value.trim();
+    const userId = parseInt($("#admin-token-user").value, 10);
     try {
-      const result = await api.createBotToken(name);
+      const result = await api.createBotToken(name, userId);
       out.innerHTML = "";
       out.append(
         el("div", { class: "notice" }, "Token created. Copy it now — it won't be shown again:"),

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(git *)",
+      "Bash(make *)",
+      "Bash(go *)",
+      "Bash(gofmt *)",
+      "Bash(node *)"
+    ]
+  }
+}
