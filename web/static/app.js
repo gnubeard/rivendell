@@ -901,7 +901,7 @@ async function selectChannel(id) {
   composerInput.value = channelDrafts.get(id) || "";
   composerInput.style.height = "auto";
   composerInput.style.height = composerInput.scrollHeight + "px";
-  composerInput.focus();
+  if (!window.matchMedia("(hover: none)").matches) composerInput.focus();
   // Persist the read cursor server-side using the newest loaded message.
   markActiveChannelRead();
 }
