@@ -76,6 +76,31 @@ func TestHubPresenceAndBroadcast(t *testing.T) {
 	<-done
 }
 
+// TestVoiceClear guards the primitive behind DM phone-call semantics: clearing
+// a voice channel returns everyone who was in it and leaves the channel empty,
+// so the caller can notify each former participant and nobody is stranded.
+func TestVoiceClear(t *testing.T) {
+	hub := NewHub(nil, nil)
+	hub.VoiceJoin(7, 1)
+	hub.VoiceJoin(7, 2)
+
+	ids := hub.VoiceClear(7)
+	if len(ids) != 2 {
+		t.Fatalf("VoiceClear returned %v, want 2 ids", ids)
+	}
+	got := map[int64]bool{ids[0]: true, ids[1]: true}
+	if !got[1] || !got[2] {
+		t.Fatalf("VoiceClear returned %v, want {1,2}", ids)
+	}
+	if p := hub.VoiceParticipants(7); len(p) != 0 {
+		t.Fatalf("channel not empty after VoiceClear: %v", p)
+	}
+	// Clearing an empty/unknown channel is a harmless no-op.
+	if ids := hub.VoiceClear(7); len(ids) != 0 {
+		t.Fatalf("VoiceClear of empty channel returned %v, want none", ids)
+	}
+}
+
 // writeClientFrame sends one text frame to the server side of a pipe. readFrame
 // accepts unmasked frames, so the test masking dance isn't needed here.
 func writeClientFrame(t *testing.T, conn net.Conn, payload []byte) {

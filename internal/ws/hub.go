@@ -296,6 +296,22 @@ func (h *Hub) VoiceSetMute(channelID, userID int64, muted bool) []VoiceParticipa
 	return voiceList(h.voiceChannels[channelID])
 }
 
+// VoiceClear removes everyone from a voice channel and returns the user IDs
+// that were participating, so the caller can notify them. Used for DM calls,
+// which are phone-call style: when one party hangs up (or drops), the call ends
+// for both rather than leaving the other stranded alone in the channel.
+func (h *Hub) VoiceClear(channelID int64) []int64 {
+	h.voiceMu.Lock()
+	defer h.voiceMu.Unlock()
+	m := h.voiceChannels[channelID]
+	ids := make([]int64, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	delete(h.voiceChannels, channelID)
+	return ids
+}
+
 // VoiceParticipants returns a snapshot of who is in a voice channel.
 func (h *Hub) VoiceParticipants(channelID int64) []VoiceParticipant {
 	h.voiceMu.RLock()

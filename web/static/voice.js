@@ -82,6 +82,19 @@ export async function leaveVoiceChannel() {
   notifyState();
 }
 
+// endCallLocally tears down our side of a call without telling the server we
+// left. It's the response to a server voice.end (the other party in a DM hung
+// up or dropped, ending the call for both) — we're already being removed
+// server-side, so re-sending voice.leave would be redundant.
+export function endCallLocally() {
+  if (activeChannelId === null) return;
+  activeChannelId = null;
+  participants = [];
+  closeAllPeers();
+  stopLocalStream();
+  notifyState();
+}
+
 export function setVoiceMuted(m) {
   muted = m;
   if (localStream) localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });

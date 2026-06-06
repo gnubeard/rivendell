@@ -17,6 +17,7 @@ import {
   fetchIceServers,
   joinVoiceChannel,
   leaveVoiceChannel,
+  endCallLocally,
   setVoiceMuted,
   setVoiceDeafened,
   isVoiceMuted,
@@ -2985,6 +2986,19 @@ async function onVoiceEvent(evt) {
       ringState = null;
       renderRingBanner();
       renderChannelHeader(state.channels[state.activeChannelId]);
+    }
+    return;
+  }
+
+  if (evt.type === "voice.end") {
+    // The other party in a DM hung up (or dropped): the call ends for both.
+    // Tear down our side without echoing a voice.leave (the server already
+    // removed us). endCallLocally clears inCall, so onVoiceStateChange won't
+    // chime the per-peer farewell — play it here for "they hung up" feedback.
+    // onVoiceStateChange (via notifyState) then repaints strip/header/roster.
+    if (isInCall() && voiceChannelId() === p.channel_id) {
+      farewellTone();
+      endCallLocally();
     }
     return;
   }

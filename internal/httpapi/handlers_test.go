@@ -705,6 +705,82 @@ func TestStatusDurableAcrossReconnect(t *testing.T) {
 	}
 }
 
+// TestDMCallEndsForBothParties guards the DM phone-call semantics: in a 2-party
+// DM, either party hanging up (voice.leave → endDMVoiceCall) or dropping
+// (disconnect → cleanupVoiceForUser) ends the call for both, so nobody is left
+// stranded alone in a one-person "call".
+func TestDMCallEndsForBothParties(t *testing.T) {
+	ts, st, cfg := newTestServer(t)
+	_ = ts
+	srv := New(cfg, st)
+	ctx := context.Background()
+
+	a, err := st.CreateUser(ctx, "aragorn", "Aragorn", store.RoleMember)
+	if err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	b, err := st.CreateUser(ctx, "boromir", "Boromir", store.RoleMember)
+	if err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	dm, _, err := st.GetOrCreateDM(ctx, a.ID, b.ID)
+	if err != nil {
+		t.Fatalf("create dm: %v", err)
+	}
+	ch, err := st.GetChannel(ctx, dm.ID)
+	if err != nil {
+		t.Fatalf("get dm channel: %v", err)
+	}
+
+	// One party hangs up — the whole DM call ends (B isn't left alone).
+	srv.Hub().VoiceJoin(dm.ID, a.ID)
+	srv.Hub().VoiceJoin(dm.ID, b.ID)
+	srv.endDMVoiceCall(ch, a.ID)
+	if p := srv.Hub().VoiceParticipants(dm.ID); len(p) != 0 {
+		t.Fatalf("DM call not ended when one party hung up: %v", p)
+	}
+
+	// Disconnect path: rejoin both, then B drops — same outcome.
+	srv.Hub().VoiceJoin(dm.ID, a.ID)
+	srv.Hub().VoiceJoin(dm.ID, b.ID)
+	srv.cleanupVoiceForUser(ctx, b.ID)
+	if p := srv.Hub().VoiceParticipants(dm.ID); len(p) != 0 {
+		t.Fatalf("DM call not ended when a party dropped: %v", p)
+	}
+}
+
+// TestVoiceChannelLeaveKeepsOthers is the counterpart: a regular (non-DM) voice
+// channel keeps its voice-channel semantics — one participant dropping must not
+// evict the rest. Only DMs get phone-call "ends for both" behavior.
+func TestVoiceChannelLeaveKeepsOthers(t *testing.T) {
+	ts, st, cfg := newTestServer(t)
+	_ = ts
+	srv := New(cfg, st)
+	ctx := context.Background()
+
+	a, err := st.CreateUser(ctx, "gimli", "Gimli", store.RoleMember)
+	if err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	b, err := st.CreateUser(ctx, "legolas", "Legolas", store.RoleMember)
+	if err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	ch, err := st.CreateChannel(ctx, "war-room", "", false, a.ID)
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	srv.Hub().VoiceJoin(ch.ID, a.ID)
+	srv.Hub().VoiceJoin(ch.ID, b.ID)
+	srv.cleanupVoiceForUser(ctx, a.ID)
+
+	p := srv.Hub().VoiceParticipants(ch.ID)
+	if len(p) != 1 || p[0].UserID != b.ID {
+		t.Fatalf("non-DM voice channel should keep the remaining participant; got %v", p)
+	}
+}
+
 // TestRTCCredentials guards the two things coturn is unforgiving about: the MAC
 // must be HMAC-SHA1 (coturn computes SHA1; SHA256 → every credential rejected),
 // and RIVENDELL_TURN_URL is a comma-separated list surfaced as a JSON array so a

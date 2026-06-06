@@ -359,7 +359,9 @@ func (s *Server) onPresenceChange(userID int64, online bool) {
 }
 
 // cleanupVoiceForUser removes the user from any voice channel they were in and
-// broadcasts updated voice.state for each affected channel.
+// broadcasts updated voice.state for each affected channel. DM calls are
+// phone-call style: if the dropped user leaves the other party alone in a DM
+// call, that call ends for them too (see endDMVoiceCall).
 func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 	affected := s.hub.VoiceLeaveAll(userID)
 	for chID, participants := range affected {
@@ -367,11 +369,34 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 		if err != nil {
 			continue
 		}
+		if ch.IsDM && len(participants) > 0 {
+			s.endDMVoiceCall(ch, userID)
+			continue
+		}
 		aud := s.audienceForChannel(ctx, ch)
 		s.broadcast("voice.state", map[string]any{
 			"channel_id":   chID,
 			"participants": participants,
 		}, aud)
+	}
+}
+
+// endDMVoiceCall evicts everyone from a DM voice channel and tells every former
+// participant other than leaverID to tear down their side (voice.end). DM calls
+// are 2-party and phone-call style: either party hanging up — or dropping — ends
+// the call for both, so nobody is left alone in a one-person "call". The leaver
+// has already torn down locally, so they're skipped.
+func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64) {
+	ids := s.hub.VoiceClear(ch.ID)
+	endMsg, err := json.Marshal(event{Type: "voice.end", Payload: map[string]int64{"channel_id": ch.ID}})
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		if id == leaverID {
+			continue
+		}
+		s.hub.SendToUser(id, endMsg)
 	}
 }
 
@@ -511,6 +536,11 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		}
 		ch, err := s.st.GetChannel(ctx, channelID)
 		if err != nil {
+			return
+		}
+		if ch.IsDM {
+			// Phone-call semantics: hanging up ends the DM call for both parties.
+			s.endDMVoiceCall(ch, userID)
 			return
 		}
 		participants := s.hub.VoiceLeave(channelID, userID)
