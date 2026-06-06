@@ -318,9 +318,9 @@ config is unchanged.
 - End-to-end green: two users in a DM can call each other
 
 ### Phase 3 — voice channels (multi-party mesh)
-- Extend `voice.js` to manage N peer connections
-- Voice channel sidebar UI (participant list, join/leave)
-- Speaking indicators (AnalyserNode)
+- ✅ Extend `voice.js` to manage N peer connections
+- ✅ Voice channel sidebar UI (participant list, join/leave)
+- ✅ Speaking indicators (AnalyserNode)
 - Participant volume sliders
 - Soft participant cap (warn at 8, block at 12)
 

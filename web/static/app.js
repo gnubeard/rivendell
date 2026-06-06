@@ -24,6 +24,7 @@ import {
   isVoiceDeafened,
   isInCall,
   voiceChannelId,
+  setSpeakingCallback,
   handleVoiceSignal,
   startRingSound,
   stopRingSound,
@@ -111,6 +112,9 @@ let voiceRosters = {};
 // call (self included), derived from voiceCallState. Used to paint the on-call
 // cue in the member list and to detect joins/leaves for the greet/farewell tones.
 let callParticipantIds = new Set();
+// speakingIds is the set of user ids currently detected as speaking (voice.js
+// AnalyserNode metering, via onSpeaking). Used to pulse a ring on roster rows.
+let speakingIds = new Set();
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
@@ -420,6 +424,7 @@ async function enterApp() {
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
   initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
+  setSpeakingCallback(onSpeaking);
   fetchIceServers(); // best-effort; falls back to public STUN on error
   wireVoiceControls();
   // Wire interactive controls BEFORE realtime, so a transport problem can never
@@ -782,9 +787,11 @@ function renderMembers() {
     const callCue = onCall
       ? el("span", { class: "member-call", title: isSelf ? "You're on the call" : "On the call" }, "🔊")
       : null;
+    const speaking = onCall && speakingIds.has(u.id);
     list.append(
       el("li", {
-        class: (isSelf ? "member" : "member clickable") + (onCall ? " on-call" : ""),
+        "data-user-id": String(u.id),
+        class: (isSelf ? "member" : "member clickable") + (onCall ? " on-call" : "") + (speaking ? " speaking" : ""),
         title: titleParts.join(" · "),
         onclick: isSelf ? null : () => startDM(u.id),
       },
@@ -3121,9 +3128,22 @@ function onVoiceStateChange(vs) {
     for (const id of nowRemote) if (!prevRemote.has(id)) greetTone();
     for (const id of prevRemote) if (!nowRemote.has(id)) farewellTone();
   }
+  if (!vs.inCall && speakingIds.size) speakingIds.clear(); // call ended: drop stale rings
   renderCallStrip();
   renderChannelHeader(state.channels[state.activeChannelId]);
   renderMembers();
+}
+
+// onSpeaking folds a speaking-state flip from voice.js into the roster: it
+// toggles a pulsing ring on that user's member row without re-rendering the
+// whole list (the flip fires every ~80ms of metering, far too often to repaint).
+function onSpeaking(userId, speaking) {
+  const had = speakingIds.has(userId);
+  if (speaking === had) return;
+  if (speaking) speakingIds.add(userId);
+  else speakingIds.delete(userId);
+  const li = document.querySelector(`#member-list li[data-user-id="${userId}"]`);
+  if (li) li.classList.toggle("speaking", speaking);
 }
 
 function renderCallStrip() {

@@ -20,6 +20,7 @@ let muted = false;
 let deafened = false;
 let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened}) -> void
+let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 // Self join/leave tones are fired from these lifecycle hooks rather than from
 // onStateChange, but — crucially — they play INSIDE the live-capture window, in
 // the same steady state where remote-peer tones already play loud and clear.
@@ -54,6 +55,26 @@ let ringAudioCtx = null;
 let ringTick = 0;             // counts ringtone repeats, to occasionally accent
 let pendingInterval = null;
 let pendingAudioCtx = null;
+
+// --- speaking detection (AnalyserNode RMS metering) -----------------------
+//
+// One shared AudioContext feeds an AnalyserNode per participant stream (local
+// mic + each remote). A single poll loop reads the time-domain samples, computes
+// RMS, and flips a per-user "speaking" flag with hysteresis: it turns ON quickly
+// (so a ring appears the moment you talk) and OFF lazily (so brief pauses between
+// words don't flicker the ring). State changes are pushed via onSpeaking; app.js
+// uses them to pulse a ring on that participant's roster row. This is pure
+// metering — it never touches the audio path, so it can't affect what's heard.
+let meterCtx = null;
+let meterTimer = null;
+const meters = new Map();     // userId -> { source, analyser, data, speaking, aboveSince, lastLoudAt }
+
+// Tuning. THRESHOLD is RMS over a -1..1 time-domain frame; ~0.01 sits above the
+// noise floor of a suppressed mic but below normal speech. Poll every 80ms.
+const SPEAK_THRESHOLD = 0.012;
+const SPEAK_POLL_MS = 80;
+const SPEAK_ON_MS = 100;      // sustained loudness before the ring lights up
+const SPEAK_OFF_MS = 500;     // sustained quiet before it goes dark
 
 export function initVoice(myId, socketSend, stateChangeCb, selfJoinTone, selfLeaveTone) {
   myUserId = myId;
@@ -97,6 +118,10 @@ export async function joinVoiceChannel(channelId) {
 
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
 
+  // Meter our own mic so our roster row pulses while we talk (a disabled/muted
+  // track reads as silence, so muting naturally clears our own speaking ring).
+  addMeter(myUserId, localStream);
+
   activeChannelId = channelId;
   participants = []; // reset; the server's voice.state will populate the roster
   sendFn({ type: "voice.join", channel_id: channelId });
@@ -122,6 +147,7 @@ export async function leaveVoiceChannel() {
   // (as we used to) dropped the tone into the capture-STOP device transition.
   if (onSelfLeaveTone) onSelfLeaveTone();
   await delay(SELF_TONE_FINISH_MS);
+  stopAllMeters();
   closeAllPeers();
   stopLocalStream();
 }
@@ -139,6 +165,7 @@ export async function endCallLocally() {
   // capture, then wait for it to finish before releasing the mic.
   if (onSelfLeaveTone) onSelfLeaveTone();
   await delay(SELF_TONE_FINISH_MS);
+  stopAllMeters();
   closeAllPeers();
   stopLocalStream();
 }
@@ -155,6 +182,9 @@ export function setVoiceDeafened(d) {
   audioEls.forEach(el => { el.muted = deafened; });
   notifyState();
 }
+
+// setSpeakingCallback registers cb(userId, speaking) for speaking-indicator UI.
+export function setSpeakingCallback(cb) { onSpeaking = cb; }
 
 export function isVoiceMuted() { return muted; }
 export function isVoiceDeafened() { return deafened; }
@@ -266,7 +296,10 @@ function createPC(remoteUserId) {
       document.body.appendChild(audio);
       audioEls.set(remoteUserId, audio);
     }
-    if (e.streams[0]) audio.srcObject = e.streams[0];
+    if (e.streams[0]) {
+      audio.srcObject = e.streams[0];
+      addMeter(remoteUserId, e.streams[0]); // pulse their row while they talk
+    }
   };
 
   pc.onconnectionstatechange = () => {
@@ -277,6 +310,7 @@ function createPC(remoteUserId) {
 }
 
 function closePeer(userId) {
+  removeMeter(userId);
   const pc = peerConns.get(userId);
   if (pc) {
     pc.onicecandidate = null;
@@ -312,6 +346,93 @@ function notifyState() {
     deafened,
     participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted })),
   });
+}
+
+// --- speaking detection ----------------------------------------------------
+
+// computeRMS returns the root-mean-square amplitude of a time-domain frame
+// (Float32 samples in -1..1). Pure — exported for unit testing.
+export function computeRMS(samples) {
+  if (!samples || samples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
+}
+
+// addMeter attaches an AnalyserNode to a participant's stream and starts the
+// shared poll loop. Idempotent per user (replacing any prior meter).
+function addMeter(userId, stream) {
+  if (!stream) return;
+  if (typeof AudioContext === "undefined" && typeof webkitAudioContext === "undefined") return;
+  removeMeter(userId);
+  try {
+    if (!meterCtx) {
+      const Ctx = typeof AudioContext !== "undefined" ? AudioContext : webkitAudioContext;
+      meterCtx = new Ctx();
+    }
+    const source = meterCtx.createMediaStreamSource(stream);
+    const analyser = meterCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser); // analyser is NOT connected to destination: metering only
+    meters.set(userId, {
+      source, analyser,
+      data: new Float32Array(analyser.fftSize),
+      speaking: false, aboveSince: 0, lastLoudAt: 0,
+    });
+    if (!meterTimer) meterTimer = setInterval(pollMeters, SPEAK_POLL_MS);
+  } catch {
+    // metering is best-effort; a failure here must never break the call
+  }
+}
+
+function removeMeter(userId) {
+  const m = meters.get(userId);
+  if (!m) return;
+  try { m.source.disconnect(); } catch {}
+  try { m.analyser.disconnect(); } catch {}
+  meters.delete(userId);
+  if (m.speaking) emitSpeaking(userId, false);
+  if (meters.size === 0) stopMeterLoop();
+}
+
+function stopMeterLoop() {
+  clearInterval(meterTimer);
+  meterTimer = null;
+  if (meterCtx) {
+    try { meterCtx.close(); } catch {}
+    meterCtx = null;
+  }
+}
+
+function stopAllMeters() {
+  for (const uid of [...meters.keys()]) removeMeter(uid);
+  stopMeterLoop();
+}
+
+// pollMeters reads each analyser once and applies the on/off hysteresis.
+function pollMeters() {
+  const now = Date.now();
+  for (const [userId, m] of meters) {
+    m.analyser.getFloatTimeDomainData(m.data);
+    const loud = computeRMS(m.data) > SPEAK_THRESHOLD;
+    if (loud) {
+      if (m.aboveSince === 0) m.aboveSince = now;
+      m.lastLoudAt = now;
+    } else {
+      m.aboveSince = 0;
+    }
+    let next = m.speaking;
+    if (!m.speaking && loud && now - m.aboveSince >= SPEAK_ON_MS) next = true;
+    else if (m.speaking && now - m.lastLoudAt >= SPEAK_OFF_MS) next = false;
+    if (next !== m.speaking) {
+      m.speaking = next;
+      emitSpeaking(userId, next);
+    }
+  }
+}
+
+function emitSpeaking(userId, speaking) {
+  if (onSpeaking) try { onSpeaking(userId, speaking); } catch {}
 }
 
 // --- ring sound -----------------------------------------------------------

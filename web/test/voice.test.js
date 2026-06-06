@@ -88,3 +88,41 @@ test("endCallLocally also farewells before tearing the mic down", async () => {
   await voice.endCallLocally();
   assert.deepEqual(timeline, ["farewell", "mic-stop"]);
 });
+
+// --- speaking detection: computeRMS (pure) ----------------------------------
+// The speaking ring fires when an AnalyserNode frame's RMS crosses a threshold.
+// The AnalyserNode itself is browser-only, but the RMS math is pure and is the
+// part most likely to regress (off-by-one in the mean, NaN on empty frames).
+
+test("computeRMS of an empty or missing frame is 0 (no NaN)", () => {
+  assert.equal(voice.computeRMS(new Float32Array(0)), 0);
+  assert.equal(voice.computeRMS([]), 0);
+  assert.equal(voice.computeRMS(null), 0);
+  assert.equal(voice.computeRMS(undefined), 0);
+});
+
+test("computeRMS of pure silence is 0", () => {
+  assert.equal(voice.computeRMS(new Float32Array(256)), 0);
+});
+
+test("computeRMS of a constant signal is its magnitude", () => {
+  const f = new Float32Array(100).fill(0.5);
+  assert.ok(Math.abs(voice.computeRMS(f) - 0.5) < 1e-9);
+});
+
+test("computeRMS of a full-scale square wave is 1", () => {
+  const f = Float32Array.from({ length: 100 }, (_, i) => (i % 2 ? 1 : -1));
+  assert.ok(Math.abs(voice.computeRMS(f) - 1) < 1e-9);
+});
+
+test("computeRMS of a sine wave is ~amplitude/sqrt(2)", () => {
+  const N = 2048, amp = 0.8;
+  const f = Float32Array.from({ length: N }, (_, i) => amp * Math.sin((2 * Math.PI * i) / N));
+  assert.ok(Math.abs(voice.computeRMS(f) - amp / Math.SQRT2) < 1e-3);
+});
+
+test("computeRMS rises with louder signals (threshold ordering holds)", () => {
+  const quiet = new Float32Array(256).fill(0.005);
+  const loud = new Float32Array(256).fill(0.05);
+  assert.ok(voice.computeRMS(quiet) < voice.computeRMS(loud));
+});

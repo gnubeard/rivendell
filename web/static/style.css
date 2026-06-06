@@ -418,6 +418,16 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
    so it reads as "in the call" at a glance. */
 .member.on-call { background: rgba(80,180,80,0.10); }
 .member-call { margin-left: auto; font-size: 0.9rem; line-height: 1; flex: none; }
+/* Speaking indicator: a green ring pulsing around the presence dot while voice
+   metering (voice.js AnalyserNode) reports this participant above the threshold. */
+.member.speaking .dot { box-shadow: 0 0 0 3px rgba(80,180,80,0.45); animation: speaking-pulse 1.1s ease-in-out infinite; }
+@keyframes speaking-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(80,180,80,0.35); }
+  50%      { box-shadow: 0 0 0 4px rgba(80,180,80,0.75); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .member.speaking .dot { animation: none; box-shadow: 0 0 0 3px rgba(80,180,80,0.6); }
+}
 /* Header on-call cue for DMs (no roster there): the other party is connected. */
 .header-call { margin-left: 0.35rem; font-size: 0.9rem; line-height: 1; }
 
