@@ -177,7 +177,7 @@ button.primary:hover { filter: brightness(1.08); }
 
 /* --- main column --- */
 .main { display: flex; flex-direction: column; min-width: 0; }
-.channel-header { padding: 0.8rem 1.2rem; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 0.6rem; }
+.channel-header { padding: 0.8rem 1.2rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 0.6rem; }
 .channel-header-main { flex: 1; min-width: 0; }
 /* The drawer toggles are mobile-only; hidden on desktop where the sidebar and
    members panel are permanent grid columns. */
