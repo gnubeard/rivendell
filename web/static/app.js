@@ -3059,8 +3059,8 @@ async function onVoiceEvent(evt) {
   if (evt.type === "voice.end") {
     // The other party in a DM hung up (or dropped): the call ends for both.
     // Tear down our side without echoing a voice.leave (the server already
-    // removed us). endCallLocally tears down then fires the farewell tone via
-    // the voice.js self-leave hook (after the capture is released).
+    // removed us). endCallLocally fires the farewell tone (in steady-state
+    // capture) then tears down — async, fire-and-forget here.
     if (isInCall() && voiceChannelId() === p.channel_id) {
       endCallLocally();
     }
@@ -3105,9 +3105,10 @@ function renderRingBanner() {
 // chimes a greet/farewell tone for each remote peer that joined/left since the
 // last push, refreshes the on-call cue set, and repaints the call strip, header,
 // and member roster. Our OWN join/leave tones are NOT fired here — they're
-// driven by voice.js lifecycle hooks (greetTone before getUserMedia,
-// farewellTone after teardown) so they play outside the mic-capture window and
-// aren't ducked/decayed by the AEC. See initVoice / joinVoiceChannel.
+// driven by voice.js lifecycle hooks (greetTone just after the mic is live and
+// settled, farewellTone just before teardown) so they land in the same
+// steady-state capture window where these remote-peer tones play loud, not in
+// the capture start/stop device transition. See initVoice / joinVoiceChannel.
 function onVoiceStateChange(vs) {
   const prevInCall = voiceCallState.inCall;
   const prevRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
