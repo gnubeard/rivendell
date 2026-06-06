@@ -1219,6 +1219,17 @@ function scrollToBottom(wrap) {
     wrap.scrollTop = wrap.scrollHeight;
     requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
   });
+  // Images and iframes (e.g. YouTube embeds) load asynchronously and expand
+  // the container after the rAF pass. Re-pin when each one finishes, but only
+  // if the reader is still near the bottom (don't yank them back if they've
+  // already scrolled up to read something).
+  wrap.querySelectorAll("img, iframe").forEach(media => {
+    if (media.tagName === "IMG" && media.complete) return;
+    media.addEventListener("load", () => {
+      if (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80)
+        wrap.scrollTop = wrap.scrollHeight;
+    }, { once: true });
+  });
 }
 
 function renderTypingIndicator() {
