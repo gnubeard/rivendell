@@ -83,9 +83,15 @@ export async function leaveVoiceChannel() {
   activeChannelId = null;
   participants = [];
   sendFn({ type: "voice.leave", channel_id: chId });
+  // notifyState() before teardown so the self-farewell tone (fired from
+  // onVoiceStateChange) plays while the audio output session is still alive.
+  // Stopping the mic and closing the peers tears down the audio session, which
+  // can leave the shared AudioContext suspended for a beat — long enough to
+  // swallow a tone scheduled right after. (Remote peers still hear a leaver's
+  // farewell because their own session is live; only the leaver was affected.)
+  notifyState();
   closeAllPeers();
   stopLocalStream();
-  notifyState();
 }
 
 // endCallLocally tears down our side of a call without telling the server we
@@ -96,9 +102,11 @@ export function endCallLocally() {
   if (activeChannelId === null) return;
   activeChannelId = null;
   participants = [];
+  // See leaveVoiceChannel: notify (and thus chime) before tearing down the
+  // audio session so a self-farewell tone isn't swallowed by the teardown.
+  notifyState();
   closeAllPeers();
   stopLocalStream();
-  notifyState();
 }
 
 export function setVoiceMuted(m) {
