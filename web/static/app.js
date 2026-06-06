@@ -845,7 +845,6 @@ async function startDM(userId) {
     reopenDM(ch.id);
     state = S.upsertChannel(state, ch);
     await selectChannel(ch.id);
-    $("#composer-input").focus();
   } catch (ex) {
     alert(ex.message);
   }
@@ -899,6 +898,7 @@ async function selectChannel(id) {
   composerInput.value = channelDrafts.get(id) || "";
   composerInput.style.height = "auto";
   composerInput.style.height = composerInput.scrollHeight + "px";
+  composerInput.focus();
   // Persist the read cursor server-side using the newest loaded message.
   markActiveChannelRead();
 }
