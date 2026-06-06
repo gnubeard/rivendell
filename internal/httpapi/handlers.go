@@ -1670,6 +1670,7 @@ var allowedPreviewHosts = map[string]bool{
 	"bsky.app":    true,
 	"twitter.com": true,
 	"x.com":       true,
+	"xcancel.com": true,
 }
 
 // previewClient is a dedicated http.Client for link preview fetches with a

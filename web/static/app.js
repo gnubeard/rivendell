@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -1749,9 +1749,13 @@ async function fetchLinkPreview(url) {
   renderMessages();
 }
 
-// buildLinkPreview returns a preview card DOM node for the first bare bsky/twitter
-// URL in content, or null if there is none or the preview isn't ready yet.
+// buildLinkPreview returns a preview card or YouTube embed DOM node for the
+// first bare previewable URL in content, or null if there is none / not ready.
 function buildLinkPreview(content) {
+  // YouTube embed is purely client-side — no async fetch needed.
+  const ytID = extractYouTubeVideoID(content);
+  if (ytID) return renderYouTubeEmbed(ytID);
+
   const url = extractPreviewableURL(content);
   if (!url) return null;
   const cached = linkPreviewCache.get(url);
@@ -1759,6 +1763,15 @@ function buildLinkPreview(content) {
   if (cached === "loading" || cached === "failed") return null;
   if (!cached.title && !cached.description && !cached.image) return null;
   return renderLinkPreviewCard(url, cached);
+}
+
+function renderYouTubeEmbed(videoID) {
+  const iframe = document.createElement("iframe");
+  iframe.src = `https://www.youtube-nocookie.com/embed/${videoID}`;
+  iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+  iframe.allowFullscreen = true;
+  iframe.loading = "lazy";
+  return el("div", { class: "yt-embed" }, iframe);
 }
 
 function renderLinkPreviewCard(url, p) {

@@ -147,13 +147,13 @@ export function parsePermalink(hash) {
   return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
 }
 
-// PREVIEW_HOST_RE tests whether a URL belongs to one of the two special-cased
+// PREVIEW_HOST_RE tests whether a URL belongs to one of the special-cased
 // previewable hosts. Only bare (non-markdown-linked) URLs are previewed.
-const PREVIEW_HOST_RE = /^https:\/\/(?:bsky\.app|twitter\.com|x\.com)\//;
+const PREVIEW_HOST_RE = /^https:\/\/(?:bsky\.app|twitter\.com|x\.com|xcancel\.com)\//;
 
-// extractPreviewableURL returns the first bare bsky.app / twitter.com / x.com
-// URL in text, or null. "Bare" means the URL was typed standalone, not written
-// as [text](url) — those have author-chosen text and don't need a preview card.
+// extractPreviewableURL returns the first bare bsky/twitter/x/xcancel URL in
+// text, or null. "Bare" means the URL was typed standalone, not written as
+// [text](url) — those have author-chosen text and don't need a preview card.
 // Uses the same LINK_RE split logic as inline() so the two stay consistent.
 export function extractPreviewableURL(text) {
   if (!text) return null;
@@ -162,6 +162,25 @@ export function extractPreviewableURL(text) {
   while ((m = re.exec(String(text))) !== null) {
     if (m[3] !== undefined && PREVIEW_HOST_RE.test(m[3])) {
       return m[3];
+    }
+  }
+  return null;
+}
+
+// YOUTUBE_ID_RE extracts the 11-char video ID from youtube.com/watch, youtu.be,
+// youtube.com/shorts, and youtube.com/embed URLs.
+const YOUTUBE_ID_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
+
+// extractYouTubeVideoID returns the video ID from the first bare YouTube URL in
+// text, or null. Markdown-linked URLs are skipped (author chose the text).
+export function extractYouTubeVideoID(text) {
+  if (!text) return null;
+  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  let m;
+  while ((m = re.exec(String(text))) !== null) {
+    if (m[3] !== undefined) {
+      const id = YOUTUBE_ID_RE.exec(m[3]);
+      if (id) return id[1];
     }
   }
   return null;
