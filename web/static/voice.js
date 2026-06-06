@@ -1,6 +1,7 @@
 // voice.js — WebRTC audio calling for Rivendell.
 //
-// Phase 2: DM calls (2-party). Phase 3 will extend to multi-party voice channels.
+// Phases 2–3: DM calls + multi-party voice channels (full P2P mesh).
+// Phase 4: reconnection on peer failure via ICE restart (see that section below).
 //
 // Peer connection role: the participant with the LOWER numeric user_id is the
 // offerer. This deterministic rule avoids signaling glare when both sides join
@@ -12,6 +13,7 @@
 let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 let localStream = null;
 let peerConns = new Map();    // remoteUserId -> RTCPeerConnection
+let peerMeta = new Map();     // remoteUserId -> { restarts, timer } (reconnection bookkeeping)
 let audioEls = new Map();     // remoteUserId -> <audio> element
 let activeChannelId = null;
 let participants = [];         // latest voice.state roster for the active channel
@@ -264,6 +266,127 @@ export async function handleVoiceSignal(evt) {
   }
 }
 
+// --- reconnection on peer failure (ICE restart) ----------------------------
+//
+// WebRTC connections drop: a phone flips Wi-Fi→cellular, a NAT mapping expires,
+// a router hiccups. The fix is an *ICE restart* — re-gather candidates and
+// re-negotiate transport on the SAME RTCPeerConnection, preserving the media
+// tracks and the established m-lines. It's far cheaper than tearing the peer
+// down and rebuilding (which would also have to re-run the offerer election and
+// re-attach audio elements/meters), and the remote barely notices.
+//
+// Policy (kept as two pure, unit-tested functions below):
+//   - The OFFERER (lower user_id, see onVoiceState) drives the restart, so only
+//     one side re-offers — no glare. createOffer({iceRestart:true}) on a stable
+//     connection produces fresh ICE credentials; the answerer's existing onOffer
+//     path renegotiates it transparently.
+//   - "disconnected" often self-heals (a transient blip), so the offerer waits a
+//     short grace before acting; "failed" is terminal for that ICE generation, so
+//     it restarts immediately.
+//   - The ANSWERER doesn't initiate; it waits for the offerer's new offer. As a
+//     safety net it drops a peer that stays failed far too long (e.g. the offerer
+//     is truly gone but the server hasn't yet pruned it from voice.state).
+//   - Restarts are bounded (MAX_ICE_RESTARTS); past that, or once the peer has
+//     left the roster, we give up and close the peer.
+const ICE_DISCONNECT_GRACE_MS = 2000;   // "disconnected" may self-heal; wait before restarting
+const ICE_RESTART_RETRY_MS = 4000;      // re-check cadence after a restart attempt
+const ANSWERER_FAIL_TIMEOUT_MS = 20000; // answerer drops a peer stuck failed this long
+const MAX_ICE_RESTARTS = 4;             // give up (close peer) after this many attempts
+
+// reconnectPlan maps a connectionState (+ whether we're the offerer) to the timer
+// action the state-change handler should take. Pure; exported for unit testing.
+//   action "clear"   — healthy/closed: cancel any pending timer, reset attempts
+//   action "restart" — arm a timer (after delayMs) to run an ICE restart
+//   action "drop"    — arm a timer (after delayMs) to close a stuck peer
+//   action "none"    — leave any existing timer running, do nothing
+export function reconnectPlan(connectionState, isOfferer) {
+  switch (connectionState) {
+  case "connected":
+  case "completed":
+  case "closed":
+    return { action: "clear" };
+  case "disconnected":
+    return isOfferer ? { action: "restart", delayMs: ICE_DISCONNECT_GRACE_MS } : { action: "none" };
+  case "failed":
+    return isOfferer ? { action: "restart", delayMs: 0 } : { action: "drop", delayMs: ANSWERER_FAIL_TIMEOUT_MS };
+  default:
+    return { action: "none" };
+  }
+}
+
+// restartOutcome decides what a fired restart timer should do, given the peer's
+// current connectionState, how many restarts we've already spent, and whether the
+// peer is still in the roster. Pure; exported for unit testing.
+//   "recovered" — connection healed (or was torn down) since the timer armed
+//   "gone"      — peer left the voice channel; close it
+//   "give-up"   — exhausted MAX_ICE_RESTARTS; close it
+//   "restart"   — perform another ICE restart
+export function restartOutcome(connectionState, restarts, maxRestarts, inRoster) {
+  if (connectionState === "connected" || connectionState === "completed" || connectionState === "closed") return "recovered";
+  if (!inRoster) return "gone";
+  if (restarts >= maxRestarts) return "give-up";
+  return "restart";
+}
+
+function isOfferer(remoteUserId) { return myUserId < remoteUserId; }
+
+// armTimer schedules fn after delayMs, unless a reconnect timer is already in
+// flight for this peer (a recovery/retry cycle owns the single per-peer slot).
+function armTimer(meta, delayMs, fn) {
+  if (!meta || meta.timer) return;
+  meta.timer = setTimeout(() => { meta.timer = null; fn(); }, delayMs);
+}
+
+function clearReconnectTimer(meta) {
+  if (meta && meta.timer) { clearTimeout(meta.timer); meta.timer = null; }
+}
+
+// applyReconnectPlan runs the reconnectPlan for a peer's current connectionState.
+function applyReconnectPlan(remoteUserId, pc) {
+  const meta = peerMeta.get(remoteUserId);
+  if (!meta) return;
+  const plan = reconnectPlan(pc.connectionState, isOfferer(remoteUserId));
+  switch (plan.action) {
+  case "clear":
+    clearReconnectTimer(meta);
+    meta.restarts = 0;
+    break;
+  case "restart":
+    armTimer(meta, plan.delayMs, () => doIceRestart(remoteUserId));
+    break;
+  case "drop":
+    armTimer(meta, plan.delayMs, () => {
+      const p = peerConns.get(remoteUserId);
+      if (p && (p.connectionState === "failed" || p.connectionState === "disconnected")) closePeer(remoteUserId);
+    });
+    break;
+  // "none": leave any existing timer running
+  }
+}
+
+// doIceRestart re-offers with fresh ICE on the existing peer connection (offerer
+// side), or gives up / closes the peer per restartOutcome. Re-arms itself to
+// re-check after a cadence, so a restart that doesn't take is retried or abandoned.
+async function doIceRestart(remoteUserId) {
+  const pc = peerConns.get(remoteUserId);
+  const meta = peerMeta.get(remoteUserId);
+  if (!pc || !meta || activeChannelId === null) return;
+  const inRoster = participants.some(p => p.user_id === remoteUserId);
+  const outcome = restartOutcome(pc.connectionState, meta.restarts, MAX_ICE_RESTARTS, inRoster);
+  if (outcome === "recovered") { meta.restarts = 0; return; }
+  if (outcome === "gone" || outcome === "give-up") { closePeer(remoteUserId); return; }
+  // outcome === "restart": only the offerer re-offers (answerer waits for it).
+  meta.restarts++;
+  if (isOfferer(remoteUserId)) {
+    try {
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: offer.sdp });
+    } catch { /* re-check below will retry */ }
+  }
+  armTimer(meta, ICE_RESTART_RETRY_MS, () => doIceRestart(remoteUserId));
+}
+
 // --- peer connection lifecycle --------------------------------------------
 
 async function onVoiceState(payload) {
@@ -330,6 +453,7 @@ async function onICE(payload) {
 function createPC(remoteUserId) {
   const pc = new RTCPeerConnection({ iceServers });
   peerConns.set(remoteUserId, pc);
+  peerMeta.set(remoteUserId, { restarts: 0, timer: null });
 
   if (localStream) {
     for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
@@ -357,15 +481,17 @@ function createPC(remoteUserId) {
     }
   };
 
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === "failed" || pc.connectionState === "closed") closePeer(remoteUserId);
-  };
+  // Reconnect rather than tear down on trouble: an ICE restart re-negotiates
+  // transport on this same connection. See the reconnection section above.
+  pc.onconnectionstatechange = () => applyReconnectPlan(remoteUserId, pc);
 
   return pc;
 }
 
 function closePeer(userId) {
   removeMeter(userId);
+  const meta = peerMeta.get(userId);
+  if (meta) { clearReconnectTimer(meta); peerMeta.delete(userId); }
   const pc = peerConns.get(userId);
   if (pc) {
     pc.onicecandidate = null;

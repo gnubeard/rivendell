@@ -157,3 +157,54 @@ test("get/setVolumeForUser round-trips and defaults unset users to 1", () => {
   voice.setVolumeForUser(9999, 5); // clamped on the way in
   assert.equal(voice.getVolumeForUser(9999), 1);
 });
+
+// --- reconnection on peer failure (ICE restart) -----------------------------
+// The reconnection policy lives in two pure functions. The timer/RTCPeerConnection
+// plumbing is browser-only, but the decisions (who restarts, when, and when to
+// give up) are the part that must stay correct.
+
+test("reconnectPlan: a healthy connection clears any pending reconnect", () => {
+  for (const st of ["connected", "completed", "closed"]) {
+    assert.deepEqual(voice.reconnectPlan(st, true), { action: "clear" });
+    assert.deepEqual(voice.reconnectPlan(st, false), { action: "clear" });
+  }
+});
+
+test("reconnectPlan: offerer restarts on failure (now) and on disconnect (after grace)", () => {
+  const failed = voice.reconnectPlan("failed", true);
+  assert.equal(failed.action, "restart");
+  assert.equal(failed.delayMs, 0); // failed is terminal for that ICE generation — act now
+
+  const disc = voice.reconnectPlan("disconnected", true);
+  assert.equal(disc.action, "restart");
+  assert.ok(disc.delayMs > 0); // disconnected may self-heal — give it a grace window
+});
+
+test("reconnectPlan: answerer never initiates — waits on disconnect, drops a stuck-failed peer", () => {
+  assert.deepEqual(voice.reconnectPlan("disconnected", false), { action: "none" });
+  const failed = voice.reconnectPlan("failed", false);
+  assert.equal(failed.action, "drop");
+  assert.ok(failed.delayMs > 0); // safety net only, after a long wait
+});
+
+test("reconnectPlan: unknown/transient states do nothing", () => {
+  assert.deepEqual(voice.reconnectPlan("new", true), { action: "none" });
+  assert.deepEqual(voice.reconnectPlan("connecting", false), { action: "none" });
+});
+
+test("restartOutcome: a recovered/closed connection stops the restart loop", () => {
+  for (const st of ["connected", "completed", "closed"]) {
+    assert.equal(voice.restartOutcome(st, 0, 4, true), "recovered");
+  }
+});
+
+test("restartOutcome: a peer that left the roster is closed, not restarted", () => {
+  assert.equal(voice.restartOutcome("failed", 0, 4, false), "gone");
+});
+
+test("restartOutcome: restarts are bounded, then we give up", () => {
+  assert.equal(voice.restartOutcome("failed", 0, 4, true), "restart");
+  assert.equal(voice.restartOutcome("failed", 3, 4, true), "restart");
+  assert.equal(voice.restartOutcome("failed", 4, 4, true), "give-up");
+  assert.equal(voice.restartOutcome("disconnected", 5, 4, true), "give-up");
+});
