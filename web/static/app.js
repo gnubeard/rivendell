@@ -1555,6 +1555,12 @@ function wireComposer() {
         return;
       }
     }
+    // Up arrow on an empty composer → edit the most recent own message.
+    if (e.key === "ArrowUp" && !input.value && !editingMessageId) {
+      const msgs = state.messages[state.activeChannelId] || [];
+      const own = msgs.filter((m) => m.user_id === state.me.id && !m.deleted_at);
+      if (own.length) { e.preventDefault(); startEdit(own[own.length - 1]); }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const content = input.value;
