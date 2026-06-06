@@ -183,6 +183,60 @@ export function setVoiceDeafened(d) {
   notifyState();
 }
 
+// --- per-user volume (persisted playout gain) ------------------------------
+//
+// Each remote participant carries an independent playout volume in [0,1],
+// applied as their <audio> element's .volume (1 = unchanged, 0 = silent —
+// distinct from deafen, which mutes everyone at once). Volumes are keyed by
+// user id and persisted to localStorage so a chronically quiet/loud friend
+// stays adjusted across calls and reloads. The design doc floats a Web Audio
+// GainNode, but since the range is 0–1 the element's own .volume is exactly
+// equivalent and avoids routing remote WebRTC audio through Web Audio — which
+// has a long-standing no-output bug in Chromium and would also fight the
+// deafen path (.muted) and the metering AudioContext.
+const VOLUME_STORE_KEY = "rivendell.voiceVolumes";
+let volumes = loadVolumes();   // userId (number) -> 0..1
+
+function loadVolumes() {
+  const m = new Map();
+  try {
+    const raw = localStorage.getItem(VOLUME_STORE_KEY);
+    if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) m.set(Number(k), clampVolume(v));
+  } catch { /* localStorage unavailable (node tests / private mode) or corrupt */ }
+  return m;
+}
+
+function persistVolumes() {
+  try {
+    const obj = {};
+    for (const [k, v] of volumes) if (v !== 1) obj[k] = v; // only store non-defaults
+    localStorage.setItem(VOLUME_STORE_KEY, JSON.stringify(obj));
+  } catch { /* non-fatal — volume just won't persist this session */ }
+}
+
+// clampVolume coerces any input to a valid playout gain in [0,1]. Pure;
+// exported for unit testing. Non-finite input falls back to 1 (unchanged).
+export function clampVolume(v) {
+  if (v == null) return 1;          // unset (null/undefined) -> unchanged
+  v = Number(v);
+  if (!Number.isFinite(v)) return 1;
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+// getVolumeForUser returns a user's stored playout gain, or 1 (unchanged).
+export function getVolumeForUser(userId) {
+  return volumes.has(userId) ? volumes.get(userId) : 1;
+}
+
+// setVolumeForUser sets, persists, and live-applies a user's playout gain.
+export function setVolumeForUser(userId, vol) {
+  const v = clampVolume(vol);
+  volumes.set(userId, v);
+  persistVolumes();
+  const audio = audioEls.get(userId);
+  if (audio) audio.volume = v;
+}
+
 // setSpeakingCallback registers cb(userId, speaking) for speaking-indicator UI.
 export function setSpeakingCallback(cb) { onSpeaking = cb; }
 
@@ -293,6 +347,7 @@ function createPC(remoteUserId) {
       audio = document.createElement("audio");
       audio.autoplay = true;
       audio.muted = deafened;
+      audio.volume = getVolumeForUser(remoteUserId); // restore any saved per-user level
       document.body.appendChild(audio);
       audioEls.set(remoteUserId, audio);
     }

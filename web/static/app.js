@@ -25,6 +25,8 @@ import {
   isInCall,
   voiceChannelId,
   setSpeakingCallback,
+  setVolumeForUser,
+  getVolumeForUser,
   handleVoiceSignal,
   startRingSound,
   stopRingSound,
@@ -788,6 +790,10 @@ function renderMembers() {
       ? el("span", { class: "member-call", title: isSelf ? "You're on the call" : "On the call" }, "🔊")
       : null;
     const speaking = onCall && speakingIds.has(u.id);
+    // Per-user volume slider: only for remote participants on our current call
+    // (their <audio> element exists only then). Adjusts that one person's
+    // playout level (voice.js setVolumeForUser), persisted across calls.
+    const volume = onCall && !isSelf ? volumeSlider(u) : null;
     list.append(
       el("li", {
         "data-user-id": String(u.id),
@@ -798,12 +804,33 @@ function renderMembers() {
         el("span", { class: `dot ${presenceClass(u)}` }),
         el("div", { class: "member-text" },
           el("span", { class: "member-name" }, u.display_name),
-          el("span", { class: "member-status", title: u.status_text || null }, statusLine)),
+          el("span", { class: "member-status", title: u.status_text || null }, statusLine),
+          volume),
         callCue,
         remove
       )
     );
   }
+}
+
+// volumeSlider builds the per-user playout-volume control shown under an on-call
+// remote member's name. Clicks are kept off the row (which would open a DM); the
+// title tracks the live percentage. The value is applied + persisted by voice.js.
+function volumeSlider(u) {
+  const pct = (v) => `Volume — ${Math.round(v * 100)}%`;
+  return el("input", {
+    type: "range", min: "0", max: "1", step: "0.05",
+    value: String(getVolumeForUser(u.id)),
+    class: "member-volume",
+    title: pct(getVolumeForUser(u.id)),
+    "aria-label": `Volume for ${u.display_name}`,
+    onclick: (e) => e.stopPropagation(),
+    oninput: (e) => {
+      const v = Number(e.target.value);
+      setVolumeForUser(u.id, v);
+      e.target.title = pct(v);
+    },
+  });
 }
 
 // removeMember (moderator+) removes another user from the active private channel.

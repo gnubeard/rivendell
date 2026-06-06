@@ -321,14 +321,14 @@ config is unchanged.
 - ✅ Extend `voice.js` to manage N peer connections
 - ✅ Voice channel sidebar UI (participant list, join/leave)
 - ✅ Speaking indicators (AnalyserNode)
-- Participant volume sliders
+- ✅ Participant volume sliders
 - Soft participant cap (warn at 8, block at 12)
 
 ### Phase 4 — polish
 - Push-to-talk
 - Reconnection on peer connection failure (ICE restart)
 - Graceful handling of getUserMedia denial (mic permission)
-- Per-user volume knob persistence (localStorage)
+- ✅ Per-user volume knob persistence (localStorage)
 - Mobile: test that the call strip doesn't obscure the composer
 
 ---

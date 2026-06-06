@@ -126,3 +126,34 @@ test("computeRMS rises with louder signals (threshold ordering holds)", () => {
   const loud = new Float32Array(256).fill(0.05);
   assert.ok(voice.computeRMS(quiet) < voice.computeRMS(loud));
 });
+
+// --- per-user volume --------------------------------------------------------
+// The playout gain is clamped to [0,1]; anything non-numeric falls back to 1
+// (unchanged) so a corrupt stored value can never silence or over-drive a peer.
+
+test("clampVolume keeps in-range values untouched", () => {
+  assert.equal(voice.clampVolume(0), 0);
+  assert.equal(voice.clampVolume(1), 1);
+  assert.equal(voice.clampVolume(0.5), 0.5);
+});
+
+test("clampVolume bounds out-of-range values to [0,1]", () => {
+  assert.equal(voice.clampVolume(-0.5), 0);
+  assert.equal(voice.clampVolume(2), 1);
+  assert.equal(voice.clampVolume(Infinity), 1);
+});
+
+test("clampVolume falls back to 1 (unchanged) on non-finite input", () => {
+  assert.equal(voice.clampVolume(NaN), 1);
+  assert.equal(voice.clampVolume(undefined), 1);
+  assert.equal(voice.clampVolume(null), 1); // Number(null) === 0, but treat as unset
+  assert.equal(voice.clampVolume("nope"), 1);
+});
+
+test("get/setVolumeForUser round-trips and defaults unset users to 1", () => {
+  assert.equal(voice.getVolumeForUser(9999), 1); // never set -> unchanged
+  voice.setVolumeForUser(9999, 0.3);
+  assert.equal(voice.getVolumeForUser(9999), 0.3);
+  voice.setVolumeForUser(9999, 5); // clamped on the way in
+  assert.equal(voice.getVolumeForUser(9999), 1);
+});

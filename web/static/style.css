@@ -431,6 +431,16 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 @media (prefers-reduced-motion: reduce) {
   .member.speaking .dot { animation: none; box-shadow: 0 0 0 3px rgba(80,180,80,0.6); }
 }
+/* Per-user volume slider: a slim full-width range under an on-call member's
+   name. Sits in the .member-text column so it spans the row's text width. */
+.member-volume {
+  width: 100%;
+  margin-top: 0.2rem;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 /* Header on-call cue for DMs (no roster there): the other party is connected. */
 .header-call { margin-left: 0.35rem; font-size: 0.9rem; line-height: 1; }
 
