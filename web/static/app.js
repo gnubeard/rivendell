@@ -185,24 +185,27 @@ function boop() {
   // Only use a context that a prior user gesture already created — never create
   // one here, or the browser logs "AudioContext was prevented from starting".
   if (!audioCtx) return;
-  // Browsers auto-suspend the context when the tab is idle/backgrounded; resume
-  // is allowed because the page has already had a gesture (primeAudio ran).
-  if (audioCtx.state === "suspended") audioCtx.resume();
-  const t = audioCtx.currentTime;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = "sine";
-  // A gentle downward bend reads as a rounded, low-key "boop". Kept a touch
-  // baritone, but not so low that small speakers (which roll off bass) swallow
-  // it; the gain is nudged up to compensate for reduced low-frequency loudness.
-  osc.frequency.setValueAtTime(520, t);
-  osc.frequency.exponentialRampToValueAtTime(380, t + 0.18);
-  gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.exponentialRampToValueAtTime(0.16, t + 0.015); // soft attack
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22); // quick gentle decay
-  osc.connect(gain).connect(audioCtx.destination);
-  osc.start(t);
-  osc.stop(t + 0.23);
+  const run = () => {
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    // A gentle downward bend reads as a rounded, low-key "boop". Kept a touch
+    // baritone, but not so low that small speakers (which roll off bass) swallow
+    // it; the gain is nudged up to compensate for reduced low-frequency loudness.
+    osc.frequency.setValueAtTime(520, t);
+    osc.frequency.exponentialRampToValueAtTime(380, t + 0.18);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.015); // soft attack
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22); // quick gentle decay
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.23);
+  };
+  // Browsers auto-suspend the context when the tab is idle/backgrounded. resume()
+  // is async — schedule oscillators only after it resolves so currentTime is live
+  // and start times aren't silently pushed into the past.
+  if (audioCtx.state === "suspended") { audioCtx.resume().then(run).catch(() => {}); } else { run(); }
 }
 
 // playTones plays a short sequence of sine notes ({f: Hz, t: start offset, d:
@@ -210,21 +213,23 @@ function boop() {
 // the context itself — silent until a user gesture has primed audio.
 function playTones(seq) {
   if (!audioCtx) return;
-  if (audioCtx.state === "suspended") audioCtx.resume();
-  const t0 = audioCtx.currentTime;
-  for (const n of seq) {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = n.f;
-    const s = t0 + n.t;
-    gain.gain.setValueAtTime(0.0001, s);
-    gain.gain.exponentialRampToValueAtTime(0.14, s + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, s + n.d);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(s);
-    osc.stop(s + n.d + 0.02);
-  }
+  const run = () => {
+    const t0 = audioCtx.currentTime;
+    for (const n of seq) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = n.f;
+      const s = t0 + n.t;
+      gain.gain.setValueAtTime(0.0001, s);
+      gain.gain.exponentialRampToValueAtTime(0.14, s + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, s + n.d);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(s);
+      osc.stop(s + n.d + 0.02);
+    }
+  };
+  if (audioCtx.state === "suspended") { audioCtx.resume().then(run).catch(() => {}); } else { run(); }
 }
 // A rising two-note chirp when someone joins the call, falling when they leave —
 // the direction makes the two instantly distinguishable without looking.
@@ -2953,9 +2958,11 @@ function wireVoiceControls() {
     if (!ringState) return;
     const chId = ringState.channelId;
     stopRingSound();
+    stopPendingSound();
     socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
     ringState = null;
     renderRingBanner();
+    renderChannelHeader(state.channels[state.activeChannelId]);
   };
 
   // Call button in the channel header (DMs and regular channels).
