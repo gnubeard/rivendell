@@ -126,19 +126,51 @@
   with no optimistic local update, so debouncing self would lag a deliberate pick).
   Pending flips are flushed on reconnect (resync re-pulls the authoritative roster).
   The equality test is a pure state.js helper, presenceMatches (unit-tested).
+- THE PIECE DE RESISTANCE — Claude agent wired into the chat — v1.0.32–34. Works
+  a treat. A bot user authenticates with a bearer token (random+SHA-256-hashed,
+  same scheme as sessions) minted at POST /api/admin/bot-tokens (admin-only;
+  v1.0.33 added a management UI, v1.0.34 a user picker + project-scoped
+  permissions). scripts/claude-bridge (bash, deps: curl/jq/claude — no Go change
+  beyond the token API) polls a private #claude channel it's a member of, forwards
+  each new human message to `claude --print` running in the repo dir, and posts the
+  result back by editing an "⚙️ Working…" placeholder in place (falls back to a new
+  post if the edit fails). Cursor (last-seen id) persists to a state file and
+  advances BEFORE running Claude so a crash never replays a request; output is
+  trimmed to stay under the 4096-byte message limit. So work requests — commits,
+  deploys, the lot — can now be sent from inside Rivendell itself.
+- Voice calling, phases 1+2 — v1.1.0. P2P WebRTC signaled over the existing WS hub;
+  no media server, no new Go deps (design in docs/voice.md). Phase 1 (signaling
+  skeleton): config vars (RIVENDELL_STUN_URL / TURN_URL / TURN_SECRET), hub voice
+  state map + point-to-point routing for voice.* WS types (offer/answer/ice relayed
+  verbatim after a channel-access check; join/leave/mute fan out an authoritative
+  voice.state), GET /api/channels/{id}/voice, GET /api/rtc/credentials (HMAC
+  time-limited TURN creds, no coturn user DB), and the 30 s DM ring-timeout
+  goroutine. Phase 2 (DM calling): voice.js with getUserMedia + one
+  RTCPeerConnection (offer/answer/ICE-trickle), DM call UI (📞 button, incoming-call
+  ring banner with accept/decline + soft Web Audio ring, active-call strip), and
+  mute/deafen (local audio gate; mute still broadcast for the indicator). End-to-end
+  green: two users in a DM can call each other. STUN-only works on a LAN / real-IP
+  network; TURN (coturn) is the relay fallback for symmetric NAT / CGNAT — see the
+  backlog + ops notes for standing it up.
 
 ## Backlog (sorted by effort)
 
-(empty — all scoped backlog items shipped; see Meta / future ideas below)
+- [M] Voice phase 3 — voice channels (multi-party mesh). Extend voice.js to manage
+  N peer connections, voice-channel sidebar UI (participant list + join/leave),
+  speaking indicators (AnalyserNode RMS), per-participant volume sliders, soft cap
+  (warn at 8, block at 12). See docs/voice.md §Phase 3.
+- [S] Voice phase 4 — polish. Push-to-talk, ICE-restart on peer-connection failure,
+  graceful getUserMedia-denial handling, per-user volume persistence (localStorage),
+  mobile call-strip vs. composer overlap. See docs/voice.md §Phase 4.
+- [S→M] Stand up a TURN server (coturn) so calls work across symmetric NAT / CGNAT.
+  → ops, not code: coturn container + use-auth-secret = RIVENDELL_TURN_SECRET, open
+  UDP 3478 + the relay port range on firewalld AND the Oracle Cloud security list,
+  set RIVENDELL_TURN_URL. STUN-only ships today; this is the fallback tier.
 
 
 ## Meta / future ideas (not yet scoped)
 
-Piece de resistance:
-- A Claude agent running on this box, wired into the chat, so work requests can
-  be sent from inside Rivendell itself (chat → agent → commits/deploys). Its own
-  design pass: how it authenticates, which channel/DM it listens on, how it
-  reports progress back, and the safety rails around what it's allowed to run.
+(piece de resistance shipped — see Done above)
 
 ---
 *Come back when we have lots of tokens and a gleam in our eye.*
