@@ -27,6 +27,8 @@ import {
   handleVoiceSignal,
   startRingSound,
   stopRingSound,
+  startPendingSound,
+  stopPendingSound,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
@@ -2930,7 +2932,7 @@ function wireVoiceControls() {
     if (ringState) {
       // Cancel the outgoing ring.
       const chId = ringState.channelId;
-      stopRingSound();
+      stopPendingSound();
       socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
       ringState = null;
       renderRingBanner();
@@ -2945,6 +2947,7 @@ function wireVoiceControls() {
     ringState = { channelId: ch.id, direction: "outgoing", fromUserId: state.me.id };
     renderChannelHeader(ch);
     renderRingBanner();
+    startPendingSound(audioCtx); // caller-side "waiting for pickup" tone
   };
 }
 
@@ -2965,6 +2968,7 @@ async function onVoiceEvent(evt) {
     // Response to a ring we sent, or the other side cancelling their ring.
     if (!ringState) return;
     stopRingSound();
+    stopPendingSound();
     const accepted = p.accept;
     const chId = ringState.channelId;
     ringState = null;
@@ -2983,6 +2987,7 @@ async function onVoiceEvent(evt) {
   if (evt.type === "voice.ring_timeout") {
     if (ringState && ringState.channelId === p.dm_channel_id) {
       stopRingSound();
+      stopPendingSound();
       ringState = null;
       renderRingBanner();
       renderChannelHeader(state.channels[state.activeChannelId]);

@@ -21,9 +21,15 @@ let deafened = false;
 let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened}) -> void
 
-// Ring-sound state
+// Ring-sound state. The incoming-call ringtone (callee) and the call-pending
+// tone (caller waiting for pickup) are independent so they never share an
+// interval — a single client is only ever one side of a ring, but keeping them
+// separate is cheap and avoids any cross-talk.
 let ringInterval = null;
 let ringAudioCtx = null;
+let ringTick = 0;             // counts ringtone repeats, to occasionally accent
+let pendingInterval = null;
+let pendingAudioCtx = null;
 
 export function initVoice(myId, socketSend, stateChangeCb) {
   myUserId = myId;
@@ -268,22 +274,85 @@ function notifyState() {
 
 // --- ring sound -----------------------------------------------------------
 
-// startRingSound plays a repeating two-tone phone ring via Web Audio.
-// Pass the shared AudioContext from app.js (already primed by a user gesture).
+// startRingSound plays the incoming-call ringtone (what the *callee* hears):
+// a light, floaty arpeggio of harmonious tones, every few rings adding a
+// brighter accent to grab attention. Pass the shared AudioContext from app.js
+// (already primed by a user gesture).
 export function startRingSound(audioCtx) {
   if (ringInterval) stopRingSound();
   ringAudioCtx = audioCtx;
-  playRingTone(audioCtx);
-  ringInterval = setInterval(() => playRingTone(ringAudioCtx), 3000);
+  ringTick = 0;
+  playRingTone(audioCtx, ringTick);
+  ringInterval = setInterval(() => playRingTone(ringAudioCtx, ++ringTick), 3000);
 }
 
 export function stopRingSound() {
   clearInterval(ringInterval);
   ringInterval = null;
   ringAudioCtx = null;
+  ringTick = 0;
 }
 
-function playRingTone(ctx) {
+// startPendingSound plays the call-pending tone (what the *caller* hears while
+// waiting for the other party to pick up): the old two-tone phone ring, which
+// reads naturally as a "we're dialing, hold on" sound. Repeats every 3s.
+export function startPendingSound(audioCtx) {
+  if (pendingInterval) stopPendingSound();
+  pendingAudioCtx = audioCtx;
+  playPendingTone(audioCtx);
+  pendingInterval = setInterval(() => playPendingTone(pendingAudioCtx), 3000);
+}
+
+export function stopPendingSound() {
+  clearInterval(pendingInterval);
+  pendingInterval = null;
+  pendingAudioCtx = null;
+}
+
+// playRingTone: a gentle ascending arpeggio over a major-sixth chord (C–E–G–A),
+// sine waves with a slow attack and long release so the notes bloom and overlap
+// — floaty and harmonious. Every third ring (tick % 3 === 2) adds a sharp,
+// bright accent an octave up to catch a distracted ear.
+function playRingTone(ctx, tick) {
+  if (!ctx) return;
+  try {
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    // Major sixth: C5, E5, G5, A5 — all consonant, pleasant rising shimmer.
+    const notes = [523.25, 659.25, 783.99, 880.0];
+    notes.forEach((freq, i) => {
+      const t = t0 + i * 0.16;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.07, t + 0.06); // soft bloom
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9); // long float-out
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.95);
+    });
+    // Occasional sharp accent: a brief, brighter triangle ping up high.
+    if (tick % 3 === 2) {
+      const t = t0 + 0.64;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = 1318.51; // E6 — sits an octave above the arpeggio
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.06, t + 0.01); // fast, sharp attack
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.25);
+    }
+  } catch {}
+}
+
+// playPendingTone: the classic two-tone phone ring (480/440 Hz), kept verbatim
+// from the old ringtone — now the caller-side "waiting for pickup" sound.
+function playPendingTone(ctx) {
   if (!ctx) return;
   try {
     if (ctx.state === "suspended") ctx.resume();
