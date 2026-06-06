@@ -2216,6 +2216,31 @@ async function runSearch(reset) {
 // --- controls: status, avatar, new channel, admin, logout ---------------
 
 function wireControls() {
+  // SPA permalink navigation. A pasted/markdown link to this instance points at
+  // a full URL like https://host/#c<chan>/m<msg>; with target="_blank" a click
+  // would open a fresh app load in a new tab. Instead, intercept clicks on any
+  // same-origin anchor whose hash is a permalink and route them through the
+  // in-app jumpToMessage (no reload). Delegated on document so it covers message
+  // bodies, the pins modal, and anywhere else a link is rendered. Modified
+  // clicks (new-tab/window intent) and cross-origin links fall through to the
+  // browser unchanged.
+  document.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest && e.target.closest("a[href]");
+    if (!a) return;
+    let u;
+    try { u = new URL(a.href, location.href); } catch (_) { return; }
+    if (u.origin !== location.origin) return;
+    const permalink = parsePermalink(u.hash);
+    if (!permalink) return;
+    e.preventDefault();
+    if (state.channels[permalink.channelId]) {
+      jumpToMessage(permalink.channelId, permalink.messageId);
+    } else {
+      flashNotice("That message is in a channel you can't access.");
+    }
+  });
+
   $("#history-latest-btn").onclick = () => {
     const cid = state.activeChannelId;
     if (cid) selectChannel(cid);
