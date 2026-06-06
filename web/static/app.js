@@ -1221,12 +1221,18 @@ function scrollToBottom(wrap) {
   });
   // Images and iframes (e.g. YouTube embeds) load asynchronously and expand
   // the container after the rAF pass. Re-pin when each one finishes, but only
-  // if the reader is still near the bottom (don't yank them back if they've
-  // already scrolled up to read something).
+  // if the reader hasn't manually scrolled away since we pinned.
+  // We capture the target scrollTop now (= scrollHeight − clientHeight, the max
+  // possible value). After the pin, wrap.scrollTop == targetTop. When the image
+  // loads, wrap.scrollHeight grows but scrollTop stays put — so checking
+  // "scrollTop is still near targetTop" reliably tells us whether the user
+  // scrolled away (vs. checking distance-from-new-bottom, which would be the
+  // image height and could easily exceed any fixed pixel threshold).
+  const targetTop = wrap.scrollHeight - wrap.clientHeight;
   wrap.querySelectorAll("img, iframe").forEach(media => {
     if (media.tagName === "IMG" && media.complete) return;
     media.addEventListener("load", () => {
-      if (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80)
+      if (wrap.scrollTop >= targetTop - 5)
         wrap.scrollTop = wrap.scrollHeight;
     }, { once: true });
   });
