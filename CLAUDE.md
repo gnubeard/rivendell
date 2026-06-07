@@ -121,7 +121,12 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   write it back to the column (doing so was a bug that reset away/dnd on every
   reconnect — `TestStatusDurableAcrossReconnect` guards it). Effective `online`
   reported to clients = connected AND status != "offline" (so "offline" doubles as
-  invisible); computed in both `onPresenceChange` and `handleListUsers`.
+  invisible); computed in both `onPresenceChange` and `handleListUsers`. **Idle**
+  is a separate ephemeral per-connection hub flag (`hub.IsIdle`): a user is idle
+  only when *every* tab/connection is idle (one active tab keeps them non-idle).
+  It is included in `GET /api/users` as the `idle` field. Bots (`is_bot = true`)
+  never connect over WebSocket, so their online status is derived from the
+  `users.status` column directly rather than hub presence.
 - **Presence is debounced client-side (~1s).** `presence.update` is not applied
   immediately — `schedulePresenceUpdate` (app.js) holds it per user for
   `PRESENCE_DEBOUNCE_MS`, replacing any pending update for that user; if the latest
@@ -147,11 +152,17 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
 
 `RIVENDELL_ADDR`, `RIVENDELL_DATABASE_URL`, `RIVENDELL_WEB_DIR`, `RIVENDELL_PUBLIC_URL`,
 `RIVENDELL_COOKIE_SECURE`, `RIVENDELL_SESSION_TTL`, `RIVENDELL_MAGIC_LINK_TTL`,
-`RIVENDELL_MAX_MESSAGE_BYTES`, `RIVENDELL_MAX_AVATAR_BYTES`, `RIVENDELL_BOOTSTRAP_ADMIN`,
+`RIVENDELL_MAX_MESSAGE_BYTES`, `RIVENDELL_MAX_AVATAR_BYTES`, `RIVENDELL_MAX_IMAGE_BYTES`
+(file-upload size cap, default 5 MiB), `RIVENDELL_BLOBS_DIR` (content-addressed blob
+storage dir, default `blobs`), `RIVENDELL_BOOTSTRAP_ADMIN`,
 `RIVENDELL_INSTANCE_NAME` (display name/brand of this instance; "rivendell" is the
 software, the instance can be e.g. "rivendell" — served unauthenticated at
-`GET /api/instance` and applied to the page title + every `.brand`). See
-`.env.example`. On an empty install the server creates a first admin
+`GET /api/instance` and applied to the page title + every `.brand`).
+Voice/WebRTC: `RIVENDELL_STUN_URL` (default: `stun:stun.l.google.com:19302`),
+`RIVENDELL_TURN_URL` (comma-separated list of TURN endpoints, e.g.
+`turn:turn.example.com:3478,turns:turn.example.com:5349`; omit for STUN-only),
+`RIVENDELL_TURN_SECRET` (shared HMAC secret for time-limited coturn credentials).
+See `.env.example`. On an empty install the server creates a first admin
 (`RIVENDELL_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
 this fires only when there are zero admins.
 
@@ -196,23 +207,27 @@ Key design invariants per feature — preserve these when modifying related code
 
 **Markdown links + inline images.** `format.js` extracts links from each escaped run *before* the markdown pass: `inlineMarkup` runs only on the gaps between links, so a URL never feeds through the italic rule — this fixes underscores mangling URLs (don't refactor it back to a single regex sweep that linkifies last). `LINK_RE` matches `[text](url)` (https only) or bare http(s) URLs; a bare URL whose path ends in an image extension renders as `<img class=msg-image>` wrapped in a link. The escape-first XSS invariant is preserved. `formatMessage(..., {embedImages:false})` is used for search rows only (the whole row is click-to-jump). Composer: pasting a single URL onto a non-empty selection wraps it `[selection](url)`.
 
+**Voice / WebRTC** (phases 1–4 complete). P2P mesh over WebRTC, signaled through the existing WS hub. No media server; no new Go deps. Key invariants — don't break these:
+- **Offerer = lower user_id.** Deterministic rule that avoids glare when two peers join simultaneously without a separate negotiation step. `onVoiceState` in voice.js uses `myUserId < remoteUserId` to decide; `onOffer` uses it to detect and roll back the wrong offer.
+- **DM calls end for both parties.** When one party hangs up (`endDMVoiceCall`) or disconnects (`cleanupVoiceForUser`), the server removes *both* participants from the DM voice channel — nobody is left alone. Regular voice channels don't do this. `TestDMCallEndsForBothParties` / `TestVoiceChannelLeaveKeepsOthers` guard both sides.
+- **TURN credentials are HMAC-SHA1, not SHA256.** coturn validates with SHA1; `handleGetRTCCredentials` uses `crypto/sha1`. A "cleanup" to SHA256 silently breaks every TURN credential. `TestRTCCredentials` asserts the digest length (20 bytes) as an independent guard.
+- **ICE restart: offerer drives it, answerer waits.** `reconnectPlan` (pure, unit-tested) decides the action per connection state and role; `restartOutcome` (pure, unit-tested) decides what to do when the timer fires. Only the offerer re-offers; the answerer's existing `onOffer` path handles it transparently.
+- **Self join/leave tones fire inside the mic-live window.** Greet fires *after* `getUserMedia` resolves (AEC settled); farewell fires *before* tracks are stopped. Playing either one during the device-open/close transition clips/drops it. `voice.test.js` records a timeline and asserts the ordering.
+- **Per-user volume uses `audio.volume`, not a Web Audio `GainNode`.** Routing remote WebRTC audio through Web Audio has a long-standing no-output bug in Chromium. The range is 0–1 so the element's own `.volume` is equivalent and doesn't conflict with deafen (`.muted`) or the metering `AudioContext`. Volumes persist to localStorage.
+- **Pure helpers are all unit-tested in voice.test.js:** `computeRMS`, `clampVolume`, `pttShouldFire`, `pttKeyLabel`, `micErrorMessage`, `reconnectPlan`, `restartOutcome`.
+- REST: `GET /api/voice/state` (all accessible voice channels + participants, for page-load seed); `GET /api/channels/{id}/voice` (single channel); `GET /api/rtc/credentials` (fresh STUN/TURN credential pair).
+
+**Theme.** `users.theme` column (migration `0012`). Persisted via `PATCH /api/me` alongside `display_name`/`status_text`; defaults to `"default"`; validated against a known list — unknown value → 400, persisted value unchanged. Returned in `GET /api/me` and all user objects. `TestUpdateProfileValidation` covers round-trip and rejection.
+
+**Bot tokens / is_bot flag.** Bots are regular users with `is_bot = true` (migration `0013`). `PUT /api/admin/users/{id}/bot` (admin-only) sets/clears the flag and broadcasts `user.update`. Bot tokens are permanent Bearer credentials (random 256-bit, SHA-256-hashed, same scheme as sessions) managed at `GET/POST/DELETE /api/admin/bot-tokens` (admin-only). A request with a valid `Authorization: Bearer <token>` header authenticates as the owning user without a session cookie. `TestBotTokenAuth` covers token auth. Because bots never hold a WebSocket connection, their online status in `GET /api/users` comes from `users.status`, not hub presence.
+
+**Link preview proxy.** `GET /api/link-preview?url=<https-url>` fetches OG/Twitter card meta from an explicitly allowlisted set of hosts (`bsky.app`, `twitter.com`, `x.com`, `xcancel.com`) and returns `{title, description, image}`. Any fetch error or non-2xx returns an empty object (never 5xx). Non-https URLs and non-allowlisted hosts return 400. To extend the allowlist, update `allowedPreviewHosts` in `handlers.go`. Never proxy arbitrary URLs.
+
+**File / image uploads** (migration `0014`). Content-addressed blobs on a local volume (`blobs/<2-hex-prefix>/<sha256>`), metadata in Postgres (`blobs` table), behind the `blobs.BlobStore` interface (`FSStore` the only impl). `POST /api/uploads` takes a raw image body, bounds it with `http.MaxBytesReader` (`RIVENDELL_MAX_IMAGE_BYTES`) *before* reading, **sniffs** the content type with `http.DetectContentType` (never trusts the header) and allowlists png/jpeg/webp/gif, then stores + dedups by hash; returns `{hash, url, content_type, size}`. `GET /api/blobs/{hash}` serves it **gated behind the session** (images stay as private as the channels they're in), validates the hash is 64-char lowercase hex (path-traversal immunity — the filename is never user input), and sets `Cache-Control: private, max-age=31536000, immutable` (blobs are immutable). Writes are atomic (tmp + rename). Uploads are idempotent — same bytes → same hash → one file. If the blob store can't be created at boot, uploads are disabled (503), not fatal. No thumbnails (CSS `max-width` handles display); no EXIF stripping yet (would have to happen *before* hashing). `TestBlobUploadAndServe` covers the lifecycle. No new dependencies — all stdlib.
+
 When in doubt on UI, favor clarity over polish — aesthetics are secondary to "it works." Keep changes small and tested. Commit a baseline before large changes so diffs and rollbacks are clean.
 
 ## Backlog
-
-Effort tags: XS = a few lines / one-shot · S = small, one layer · M = a session,
-multiple layers · L = full feature (DB+API+realtime+UI) · XL = major project / new
-security model. Sorted by effort, lowest first.
-
-- **[M] Voice phase 3 — voice channels (multi-party mesh).** Extend voice.js to manage
-  N peer connections, voice-channel sidebar UI (participant list + join/leave), speaking
-  indicators (AnalyserNode RMS), per-participant volume sliders, soft cap (warn at 8,
-  block at 12). See `docs/voice.md §Phase 3`.
-- **[S→M] TURN server (coturn)** so calls work across symmetric NAT / CGNAT. Ops, not
-  code: coturn container + `use-auth-secret = RIVENDELL_TURN_SECRET`, open UDP 3478 +
-  the relay port range on firewalld AND the Oracle Cloud security list, set
-  `RIVENDELL_TURN_URL`. STUN-only works on a LAN / real-IP network; TURN is the relay
-  fallback for symmetric NAT / CGNAT.
 
 **Deferred / future:**
 - **[XL] OTR / end-to-end encrypted messaging.** Different security model entirely:
