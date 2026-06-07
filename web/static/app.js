@@ -474,7 +474,6 @@ async function enterApp() {
   wireComposer();
   wireControls();
   wireSwipe();
-  wireReactionTooltip();
   wireIdleDetection();
   // Returning to the tab clears the open channel's unread (you're looking now).
   window.addEventListener("focus", onWindowFocus);
@@ -2115,7 +2114,6 @@ function reactionsRow(m) {
     row.append(el("button", {
       class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
       title: titleText,
-      "data-names": names,
       disabled: isOrphan && !mine,
       // Pass the rendered "mine" so the toggle is correct even when the message
       // isn't in the active window (the pins modal renders pins it fetched itself).
@@ -2562,70 +2560,6 @@ function wireSwipe() {
       else if (!document.body.classList.contains("dm-active")) openDrawer("members");
     }
   }, { passive: true });
-}
-
-// wireReactionTooltip shows a "who reacted" tooltip on long-press of a reaction
-// pill. Long-press = 500ms hold without more than 10px of finger drift. The tooltip
-// stays visible after lift until the next touch, and the synthetic click that follows
-// a long-press touchend is eaten so the reaction doesn't accidentally toggle.
-function wireReactionTooltip() {
-  const tip = document.createElement("div");
-  tip.className = "reaction-tooltip";
-  tip.hidden = true;
-  document.body.appendChild(tip);
-
-  const LONG_MS = 500;
-  const DRIFT_PX = 10;
-  let timer = null, startX = 0, startY = 0, eatNextClick = false;
-
-  function show(btn) {
-    const names = btn.dataset.names;
-    if (!names) return;
-    eatNextClick = true;
-    tip.textContent = names;
-    tip.style.left = "-9999px";
-    tip.style.top = "0";
-    tip.hidden = false;
-    // Position above the pill, centered; fall back below if near top of viewport.
-    const r = btn.getBoundingClientRect();
-    const tw = tip.offsetWidth, th = tip.offsetHeight;
-    let x = r.left + r.width / 2 - tw / 2;
-    let y = r.top - th - 8;
-    if (y < 4) y = r.bottom + 8;
-    x = Math.max(4, Math.min(x, window.innerWidth - tw - 4));
-    tip.style.left = x + "px";
-    tip.style.top = y + "px";
-  }
-
-  function cancelTimer() { clearTimeout(timer); timer = null; }
-  function hide() { cancelTimer(); tip.hidden = true; }
-
-  document.addEventListener("touchstart", (e) => {
-    hide();
-    if (e.touches.length !== 1) return;
-    const btn = e.target.closest(".reaction");
-    if (!btn) return;
-    startX = e.touches[0].clientX;
-    startY = e.touches[0].clientY;
-    timer = setTimeout(() => { timer = null; show(btn); }, LONG_MS);
-  }, { passive: true });
-
-  document.addEventListener("touchmove", (e) => {
-    if (!timer) return;
-    const t = e.touches[0];
-    if (Math.abs(t.clientX - startX) > DRIFT_PX || Math.abs(t.clientY - startY) > DRIFT_PX) cancelTimer();
-  }, { passive: true });
-
-  // Cancel timer on lift (tooltip stays visible if already shown, hide on next touch).
-  document.addEventListener("touchend", cancelTimer, { passive: true });
-  document.addEventListener("touchcancel", hide, { passive: true });
-
-  // Eat the synthetic click that follows a long-press so the reaction doesn't toggle.
-  document.addEventListener("click", (e) => {
-    if (!eatNextClick) return;
-    eatNextClick = false;
-    if (e.target.closest(".reaction")) { e.stopPropagation(); e.preventDefault(); }
-  }, { capture: true });
 }
 
 // wireIdleDetection tracks user activity and signals the server when this
