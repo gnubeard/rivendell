@@ -321,6 +321,56 @@ test("extractPreviewableURL skips non-previewable URLs before returning a matchi
   );
 });
 
+// --- blob image tests --------------------------------------------------------
+
+const FAKE_HASH = "a".repeat(64); // 64-char hex string (all 'a', valid)
+
+test("blob image ![alt](/api/blobs/<hash>) renders as an inline image", () => {
+  const out = formatMessage(`![cat photo](/api/blobs/${FAKE_HASH})`);
+  assert.ok(out.includes(`<img class="msg-image" src="/api/blobs/${FAKE_HASH}"`), "img tag present");
+  assert.ok(out.includes("msg-image-link"), "wrapped in a link");
+  assert.ok(!out.includes("!["), "markdown syntax consumed");
+});
+
+test("blob image is wrapped in a link to the blob URL", () => {
+  const out = formatMessage(`![x](/api/blobs/${FAKE_HASH})`);
+  assert.ok(out.includes(`href="/api/blobs/${FAKE_HASH}"`));
+});
+
+test("blob image with embedImages:false renders as a plain link (search rows)", () => {
+  const out = formatMessage(`![photo](/api/blobs/${FAKE_HASH})`, null, null, { embedImages: false });
+  assert.ok(!out.includes("<img"), "no img in search rows");
+  assert.ok(out.includes(`href="/api/blobs/${FAKE_HASH}"`), "falls back to link");
+});
+
+test("blob image does not match a wrong-length or uppercase hash", () => {
+  const shortHash = "a".repeat(63);
+  const out1 = formatMessage(`![x](/api/blobs/${shortHash})`);
+  assert.ok(!out1.includes("<img"), "short hash not matched");
+  const upperHash = "A".repeat(64);
+  const out2 = formatMessage(`![x](/api/blobs/${upperHash})`);
+  assert.ok(!out2.includes("<img"), "uppercase hash not matched");
+});
+
+test("blob URL without the ![ prefix stays as a literal (not imaged)", () => {
+  // A plain [text](/api/blobs/hash) without the ! is not a blob image.
+  const out = formatMessage(`[file](/api/blobs/${FAKE_HASH})`);
+  assert.ok(!out.includes("<img"), "no image without ! prefix");
+});
+
+test("blob image in a code span is left as literal text", () => {
+  const out = formatMessage(`\`![x](/api/blobs/${FAKE_HASH})\``);
+  assert.ok(out.includes("<code>"), "inside code span");
+  assert.ok(!out.includes("<img"), "never imaged inside code");
+});
+
+test("blob image XSS: injected alt text is HTML-escaped before reaching the img", () => {
+  // The alt text is captured from the already-escaped string, so any raw
+  // HTML in the original is already safe. Verify via a full round-trip.
+  const out = formatMessage(`![\"><script>bad</script>](/api/blobs/${FAKE_HASH})`);
+  assert.ok(!out.includes("<script>"), "raw script tag must not survive");
+});
+
 test("parsePermalink rejects the old /m/ slash form and junk", () => {
   // Regression: hrefs once emitted `#c5/m/123`, which the parser must NOT accept
   // as that drift silently broke shared links on fresh load.

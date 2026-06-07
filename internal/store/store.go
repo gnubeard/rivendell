@@ -197,3 +197,14 @@ type BotToken struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Blob is a content-addressed image stored in the local blob store. The hash is
+// a hex-encoded SHA-256 of the file bytes and serves as the primary key and the
+// filename on disk. UploaderID may be nil if the uploader account was deleted.
+type Blob struct {
+	Hash        string    `json:"hash"`
+	UploaderID  *int64    `json:"uploader_id,omitempty"`
+	ContentType string    `json:"content_type"`
+	Size        int64     `json:"size"`
+	CreatedAt   time.Time `json:"created_at"`
+}

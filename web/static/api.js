@@ -152,6 +152,20 @@ export const api = {
   voiceParticipants: (channelId) => req("GET", `/api/channels/${channelId}/voice`),
   rtcCredentials: () => req("GET", "/api/rtc/credentials"),
 
+  // file uploads (images only for v1); returns { hash, url, content_type, size }
+  uploadBlob: async (file) => {
+    const res = await fetch("/api/uploads", {
+      method: "POST",
+      headers: { "Content-Type": file.type },
+      body: file,
+      credentials: "same-origin",
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data && data.error) || "upload failed");
+    return data;
+  },
+  blobURL: (hash) => `/api/blobs/${hash}`,
+
   // link preview proxy (bsky.app and twitter.com/x.com only)
   linkPreview: (url) => req("GET", `/api/link-preview?url=${encodeURIComponent(url)}`),
 

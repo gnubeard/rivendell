@@ -41,7 +41,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
+	_, err = st.DB().Exec(`TRUNCATE blobs, emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -53,6 +53,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		PublicURL:       "http://rivendell.test",
 		MaxMessageBytes: 4096,
 		MaxAvatarBytes:  1 << 20,
+		MaxImageBytes:   5 * 1024 * 1024,
+		BlobsDir:        t.TempDir(),
 		WebDir:          t.TempDir(),
 		InstanceName:    "rivendell-test",
 	}
@@ -2056,5 +2058,206 @@ func TestBotTokenAuth(t *testing.T) {
 	rev.Body.Close()
 	if rev.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("revoked token: want 401, got %d", rev.StatusCode)
+	}
+}
+
+// TestSetBotFlag guards PUT /api/admin/users/{id}/bot: admin-only, toggleable,
+// persisted, and broadcast. Bots' online status derives from users.status (not
+// hub presence) — that invariant is covered by handleListUsers, not here.
+func TestSetBotFlag(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	memberC, member := seedMember(t, ts, st, "pippin", "Pippin", store.RoleMember)
+
+	// Non-admin cannot set the bot flag.
+	resp, _ := doJSON(t, memberC, "PUT", ts.URL+"/api/admin/users/"+itoa(member.ID)+"/bot",
+		map[string]bool{"bot": true})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member set bot: want 403, got %d", resp.StatusCode)
+	}
+
+	// Admin sets is_bot = true; response carries the updated user.
+	resp, body := doJSON(t, adminC, "PUT", ts.URL+"/api/admin/users/"+itoa(member.ID)+"/bot",
+		map[string]bool{"bot": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set bot: %d %s", resp.StatusCode, body)
+	}
+	var u store.User
+	if err := json.Unmarshal(body, &u); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !u.IsBot {
+		t.Fatalf("is_bot should be true after setting it")
+	}
+
+	// Admin clears the flag again.
+	resp, body = doJSON(t, adminC, "PUT", ts.URL+"/api/admin/users/"+itoa(member.ID)+"/bot",
+		map[string]bool{"bot": false})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clear bot: %d %s", resp.StatusCode, body)
+	}
+	json.Unmarshal(body, &u)
+	if u.IsBot {
+		t.Fatalf("is_bot should be false after clearing it")
+	}
+}
+
+// TestBlobUploadAndServe covers the full upload→serve lifecycle: POST a valid PNG,
+// get back a hash+URL, then GET the URL and verify the bytes come back intact.
+// It also checks the content-sniffing rejection path.
+func TestBlobUploadAndServe(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	// Minimal valid 1×1 PNG (51 bytes, verified by http.DetectContentType).
+	minPNG := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // signature
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+		0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, // IDAT chunk
+		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc,
+		0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, // IEND chunk
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+
+	upload := func(body []byte, ct string) (*http.Response, map[string]any) {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/uploads", bytes.NewReader(body))
+		req.Header.Set("Content-Type", ct)
+		resp, err := adminC.Do(req)
+		if err != nil {
+			t.Fatalf("upload request: %v", err)
+		}
+		defer resp.Body.Close()
+		var m map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&m)
+		return resp, m
+	}
+
+	t.Run("upload valid PNG", func(t *testing.T) {
+		resp, m := upload(minPNG, "image/png")
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("want 201, got %d", resp.StatusCode)
+		}
+		hash, _ := m["hash"].(string)
+		rawURL, _ := m["url"].(string)
+		if len(hash) != 64 {
+			t.Fatalf("hash should be 64-char hex, got %q", hash)
+		}
+		if rawURL != "/api/blobs/"+hash {
+			t.Errorf("url mismatch: %q", rawURL)
+		}
+
+		// Fetch the blob back.
+		getResp, err := adminC.Get(ts.URL + rawURL)
+		if err != nil {
+			t.Fatalf("get blob: %v", err)
+		}
+		defer getResp.Body.Close()
+		if getResp.StatusCode != http.StatusOK {
+			t.Fatalf("want 200, got %d", getResp.StatusCode)
+		}
+		got := new(bytes.Buffer)
+		_, _ = got.ReadFrom(getResp.Body)
+		if !bytes.Equal(got.Bytes(), minPNG) {
+			t.Error("round-tripped bytes differ from original")
+		}
+		if ct := getResp.Header.Get("Content-Type"); ct != "image/png" {
+			t.Errorf("content-type: got %q, want image/png", ct)
+		}
+		cc := getResp.Header.Get("Cache-Control")
+		if !strings.Contains(cc, "immutable") {
+			t.Errorf("cache-control should be immutable, got %q", cc)
+		}
+	})
+
+	t.Run("dedup: same bytes → same hash, no error", func(t *testing.T) {
+		resp1, m1 := upload(minPNG, "image/png")
+		resp2, m2 := upload(minPNG, "image/png")
+		if resp1.StatusCode != http.StatusCreated || resp2.StatusCode != http.StatusCreated {
+			t.Fatalf("want 201/201, got %d/%d", resp1.StatusCode, resp2.StatusCode)
+		}
+		if m1["hash"] != m2["hash"] {
+			t.Errorf("same bytes should produce same hash: %v vs %v", m1["hash"], m2["hash"])
+		}
+	})
+
+	t.Run("rejects non-image (sniff, not header)", func(t *testing.T) {
+		// Send actual text bytes but claim it's PNG — sniff overrides header.
+		resp, _ := upload([]byte("not an image at all"), "image/png")
+		if resp.StatusCode != http.StatusUnsupportedMediaType {
+			t.Errorf("want 415 for non-image bytes, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("rejects empty body", func(t *testing.T) {
+		resp, _ := upload(nil, "image/png")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("want 400 for empty body, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("invalid hash returns 404", func(t *testing.T) {
+		getResp, err := adminC.Get(ts.URL + "/api/blobs/notahash")
+		if err != nil {
+			t.Fatal(err)
+		}
+		getResp.Body.Close()
+		if getResp.StatusCode != http.StatusNotFound {
+			t.Errorf("want 404 for invalid hash, got %d", getResp.StatusCode)
+		}
+	})
+
+	t.Run("unauthenticated cannot fetch blob", func(t *testing.T) {
+		_, m := upload(minPNG, "image/png")
+		rawURL := m["url"].(string)
+		resp, err := http.Get(ts.URL + rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("want 401, got %d", resp.StatusCode)
+		}
+	})
+}
+
+// TestLinkPreviewValidation guards the security contract of the link preview
+// proxy: only https URLs and an explicitly allowlisted set of hostnames are
+// accepted. Everything else returns 400 before any outbound fetch is attempted.
+func TestLinkPreviewValidation(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	cases := []struct {
+		url    string
+		wantOK bool
+	}{
+		{"", false},                            // missing url param
+		{"http://bsky.app/post/123", false},    // non-https
+		{"https://evil.com/phish", false},      // non-allowlisted host
+		{"https://bsky.app/profile/foo", true}, // allowlisted — validation only; fetch may fail
+		{"https://x.com/user/status/1", true},
+		{"https://xcancel.com/user/status/1", true},
+		{"https://twitter.com/user/status/1", true},
+	}
+	for _, c := range cases {
+		u := ts.URL + "/api/link-preview"
+		if c.url != "" {
+			u += "?url=" + c.url
+		}
+		resp, body := doJSON(t, adminC, "GET", u, nil)
+		if c.wantOK {
+			// Allowlisted: may 200 with empty body if the host is unreachable
+			// in the test environment, but must never be a 400 validation rejection.
+			if resp.StatusCode == http.StatusBadRequest {
+				t.Errorf("url %q: got 400 validation rejection, want pass-through: %s", c.url, body)
+			}
+		} else {
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("url %q: got %d, want 400", c.url, resp.StatusCode)
+			}
+		}
 	}
 }

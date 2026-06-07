@@ -1769,10 +1769,44 @@ function wireComposer() {
     setTimeout(() => { popup.hidden = true; completion = null; }, 200);
   });
 
-  // Paste a single URL onto a non-empty selection → wrap it as a [text](url)
-  // markdown link. Only fires when the clipboard is exactly one URL and there's a
-  // selection; otherwise the default paste runs untouched.
-  input.addEventListener("paste", (e) => {
+  // uploadAndInsert: POST a File to /api/uploads and insert the result as a blob
+  // image markdown token. A placeholder is inserted synchronously so the user can
+  // see something happening; it's replaced (or removed on failure) when the upload
+  // resolves. The placeholder uses a timestamp suffix to be unique within the
+  // composer text, so string-replace lands on the right spot even if the user typed
+  // more in the meantime.
+  async function uploadAndInsert(file) {
+    const placeholder = `![uploading-${Date.now()}]()`;
+    const pos = input.selectionStart;
+    const sep = (pos > 0 && input.value[pos - 1] !== "\n" && input.value[pos - 1] !== " ") ? " " : "";
+    const insertion = sep + placeholder;
+    input.value = input.value.slice(0, pos) + insertion + input.value.slice(pos);
+    input.setSelectionRange(pos + insertion.length, pos + insertion.length);
+    autoGrow();
+    try {
+      const result = await api.uploadBlob(file);
+      input.value = input.value.replace(placeholder, `![image](${result.url})`);
+    } catch (ex) {
+      input.value = input.value.replace(placeholder, "");
+      alert("Image upload failed: " + ex.message);
+    }
+    autoGrow();
+  }
+
+  // Paste handler: intercept image files from the clipboard (e.g. a screenshot),
+  // then fall through to the existing URL-wrap logic for plain-text URL pastes.
+  input.addEventListener("paste", async (e) => {
+    const items = Array.from((e.clipboardData || window.clipboardData)?.items || []);
+    const imageItem = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+    if (imageItem) {
+      e.preventDefault();
+      const file = imageItem.getAsFile();
+      if (file) uploadAndInsert(file);
+      return;
+    }
+    // Paste a single URL onto a non-empty selection → wrap it as a [text](url)
+    // markdown link. Only fires when the clipboard is exactly one URL and there's a
+    // selection; otherwise the default paste runs untouched.
     const url = ((e.clipboardData || window.clipboardData)?.getData("text") || "").trim();
     if (!/^https?:\/\/\S+$/.test(url)) return;
     const start = input.selectionStart, end = input.selectionEnd;
@@ -1832,6 +1866,36 @@ function wireComposer() {
       }
     }
   };
+
+  // Attach button: click triggers the hidden file input.
+  const attachInput = $("#attach-input");
+  const attachBtn = $("#attach-btn");
+  if (attachBtn && attachInput) {
+    attachBtn.addEventListener("click", () => attachInput.click());
+    attachInput.addEventListener("change", () => {
+      if (attachInput.files[0]) {
+        uploadAndInsert(attachInput.files[0]);
+        attachInput.value = ""; // reset so the same file can be re-selected
+      }
+    });
+  }
+
+  // Drag-and-drop: accept image files dropped onto the composer area.
+  const composerEl = input.closest(".composer");
+  if (composerEl) {
+    composerEl.addEventListener("dragover", (e) => {
+      if ([...e.dataTransfer.items].some((i) => i.type.startsWith("image/"))) {
+        e.preventDefault();
+      }
+    });
+    composerEl.addEventListener("drop", (e) => {
+      const file = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/"));
+      if (file) {
+        e.preventDefault();
+        uploadAndInsert(file);
+      }
+    });
+  }
 }
 
 // --- emoji picker --------------------------------------------------------

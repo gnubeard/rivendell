@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"rivendell/internal/auth"
+	"rivendell/internal/blobs"
 	"rivendell/internal/config"
 	"rivendell/internal/store"
 	"rivendell/internal/ws"
@@ -38,6 +39,7 @@ type Server struct {
 	cfg          config.Config
 	st           *store.Store
 	hub          *ws.Hub
+	blobStore    *blobs.FSStore
 	typingMu     sync.Mutex
 	typingTimers map[typingKey]*time.Timer
 	ringMu       sync.Mutex
@@ -52,6 +54,14 @@ func New(cfg config.Config, st *store.Store) *Server {
 		rings:        make(map[int64]*activeRing),
 	}
 	s.hub = ws.NewHub(s.onPresenceChange, s.onWSMessage)
+	if cfg.BlobsDir != "" {
+		bs, err := blobs.NewFSStore(cfg.BlobsDir)
+		if err != nil {
+			log.Printf("blob store: %v; file uploads disabled", err)
+		} else {
+			s.blobStore = bs
+		}
+	}
 	return s
 }
 
@@ -120,6 +130,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/channels/{id}/read", s.auth(s.handleMarkRead))
 	mux.HandleFunc("PUT /api/channels/{id}/mute", s.auth(s.handleMuteChannel))
 	mux.HandleFunc("DELETE /api/channels/{id}/mute", s.auth(s.handleUnmuteChannel))
+
+	// File uploads (images only). POST returns {hash,url,content_type,size};
+	// GET serves the blob gated behind session auth with a long-lived cache header.
+	mux.HandleFunc("POST /api/uploads", s.auth(s.handleUploadBlob))
+	mux.HandleFunc("GET /api/blobs/{hash}", s.auth(s.handleGetBlob))
 
 	// Link preview proxy (bsky.app and twitter.com/x.com only).
 	mux.HandleFunc("GET /api/link-preview", s.auth(s.handleLinkPreview))

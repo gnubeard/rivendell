@@ -65,6 +65,12 @@ function inlineMarkup(escaped, meLower) {
 // whitespace; the bare URL stops at whitespace (the `<` guard is moot post-escape).
 const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
 
+// BLOB_IMG_RE matches the image markdown written by the client for uploaded blobs:
+// ![alt](/api/blobs/<sha256-hex>). The path is a controlled server-side route and
+// the hash is exactly 64 lowercase hex characters — safe to embed without further
+// sanitisation. Processed before LINK_RE so the `!` prefix is consumed cleanly.
+const BLOB_IMG_RE = /!\[([^\]\n]*)\]\((\/api\/blobs\/[a-f0-9]{64})\)/g;
+
 // IMAGE_URL_RE recognizes a URL whose path ends in a known image extension
 // (optionally followed by a ?query or #fragment). Used only on *bare* URLs — an
 // explicit [text](url) keeps its text and never becomes an image.
@@ -268,6 +274,28 @@ export function formatMessage(text, me, emojis, opts) {
   return html;
 }
 
+// inlineWithBlobImages splits an escaped segment on BLOB_IMG_RE, rendering each
+// match as an <img> (or plain link when embedImages is false, e.g. search rows).
+// Gaps between matches are handed off to inline() for the normal link/markup pass.
+function inlineWithBlobImages(seg, meLower, embedImages, hideUrl) {
+  let out = "";
+  let last = 0;
+  BLOB_IMG_RE.lastIndex = 0;
+  let m;
+  while ((m = BLOB_IMG_RE.exec(seg)) !== null) {
+    out += inline(seg.slice(last, m.index), meLower, embedImages, hideUrl);
+    // m[1] is already HTML-escaped (from the escaped input string).
+    // m[2] is /api/blobs/<hex64> — no user-controlled characters.
+    if (embedImages) {
+      out += imageEmbed(m[2]);
+    } else {
+      out += linkAnchor(m[2], m[1] || "image");
+    }
+    last = m.index + m[0].length;
+  }
+  return out + inline(seg.slice(last), meLower, embedImages, hideUrl);
+}
+
 // Handle `inline code` spans, leaving their contents free of inline markdown.
 function inlineWithCode(escapedLine, meLower, emojis, embedImages, hideUrl) {
   const segs = escapedLine.split(/`/);
@@ -287,17 +315,18 @@ function inlineWithCode(escapedLine, meLower, emojis, embedImages, hideUrl) {
 // the same layering used for code spans above — so the inline pass can never run
 // over (and mangle) a generated <img> tag, even when a shortcode contains the
 // underscores that the italic rule keys on. Unknown shortcodes are left in place
-// as literal text for inline() to render.
+// as literal text for inlineWithBlobImages() to handle. Blob images are processed
+// next so that !(…) syntax is consumed before LINK_RE sees it.
 function inlineWithEmoji(seg, meLower, emojis, embedImages, hideUrl) {
-  if (!emojis) return inline(seg, meLower, embedImages, hideUrl);
+  if (!emojis) return inlineWithBlobImages(seg, meLower, embedImages, hideUrl);
   let out = "";
   let last = 0;
   let m;
   EMOJI_RE.lastIndex = 0;
   while ((m = EMOJI_RE.exec(seg)) !== null) {
     if (!hasEmoji(emojis, m[1])) continue;
-    out += inline(seg.slice(last, m.index), meLower, embedImages, hideUrl) + emojiImg(m[1]);
+    out += inlineWithBlobImages(seg.slice(last, m.index), meLower, embedImages, hideUrl) + emojiImg(m[1]);
     last = m.index + m[0].length;
   }
-  return out + inline(seg.slice(last), meLower, embedImages, hideUrl);
+  return out + inlineWithBlobImages(seg.slice(last), meLower, embedImages, hideUrl);
 }

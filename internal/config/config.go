@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.2.27"
+const Version = "1.2.28"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -24,6 +24,8 @@ type Config struct {
 	PublicURL       string        // base URL used to build magic links for the admin to copy
 	MaxMessageBytes int           // reject messages larger than this
 	MaxAvatarBytes  int           // reject avatar uploads larger than this
+	MaxImageBytes   int           // reject image uploads (POST /api/uploads) larger than this
+	BlobsDir        string        // directory for content-addressed blob storage
 	BootstrapAdmin  string        // username created on first boot if no admins exist
 	InstanceName    string        // display name of this instance (e.g. "rivendell")
 	StunURL         string        // STUN server URL for WebRTC NAT traversal
@@ -42,6 +44,8 @@ func Load() (Config, error) {
 		MagicLinkTTL:    envDur("RIVENDELL_MAGIC_LINK_TTL", 72*time.Hour),
 		MaxMessageBytes: envInt("RIVENDELL_MAX_MESSAGE_BYTES", 8000),
 		MaxAvatarBytes:  envInt("RIVENDELL_MAX_AVATAR_BYTES", 512*1024),
+		MaxImageBytes:   envInt("RIVENDELL_MAX_IMAGE_BYTES", 5*1024*1024),
+		BlobsDir:        env("RIVENDELL_BLOBS_DIR", "blobs"),
 		BootstrapAdmin:  env("RIVENDELL_BOOTSTRAP_ADMIN", "admin"),
 		InstanceName:    env("RIVENDELL_INSTANCE_NAME", "rivendell"),
 		StunURL:         env("RIVENDELL_STUN_URL", "stun:stun.l.google.com:19302"),
