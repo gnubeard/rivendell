@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.3.22"
+const Version = "1.3.23"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -31,6 +31,7 @@ type Config struct {
 	StunURL         string        // STUN server URL for WebRTC NAT traversal
 	TurnURL         string        // TURN relay URL(s), comma-separated (empty = STUN only)
 	TurnSecret      string        // shared HMAC secret for time-limited TURN credentials
+	VapidSubject    string        // VAPID `sub` claim for Web Push (mailto: or https URL)
 }
 
 func Load() (Config, error) {
@@ -51,6 +52,12 @@ func Load() (Config, error) {
 		StunURL:         env("RIVENDELL_STUN_URL", "stun:stun.l.google.com:19302"),
 		TurnURL:         env("RIVENDELL_TURN_URL", ""),
 		TurnSecret:      env("RIVENDELL_TURN_SECRET", ""),
+		VapidSubject:    env("RIVENDELL_VAPID_SUBJECT", ""),
+	}
+	// Default the VAPID subject to the public URL (a valid `sub` per RFC 8292) so
+	// push works out of the box; operators can override with a mailto:.
+	if c.VapidSubject == "" {
+		c.VapidSubject = c.PublicURL
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("config: RIVENDELL_DATABASE_URL is required")

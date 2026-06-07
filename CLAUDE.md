@@ -42,13 +42,16 @@ internal/store/               store.go (open/migrate + domain structs),
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
 internal/httpapi/             server.go (routes/middleware/realtime),
                               handlers.go (handler bodies)
+internal/push/                push.go (Web Push: VAPID + RFC 8291/8188, stdlib only)
 web/index.html                single-page shell (login / set-password / app views)
 web/static/                   app.js, api.js, ws.js, format.js, state.js,
                               voice.js, secret.js, notify.js, syntax.js, style.css
+web/sw.js                     service worker (Web Push display + click routing)
+web/manifest.json             PWA manifest (installability; iOS push needs install)
 web/test/                     format.test.js, state.test.js, voice.test.js,
                               secret.test.js, notify.test.js, reactions.test.js,
                               ws.test.js (node:test)
-docs/                         otr.md, voice.md, video.md — design docs
+docs/                         otr.md, voice.md, video.md, web_push.md — design docs
 ```
 
 Module path is `rivendell`; Go 1.26. Imports are `rivendell/internal/...`.
@@ -172,6 +175,9 @@ Voice/WebRTC: `RIVENDELL_STUN_URL` (default: `stun:stun.l.google.com:19302`),
 `RIVENDELL_TURN_URL` (comma-separated list of TURN endpoints, e.g.
 `turn:turn.example.com:3478,turns:turn.example.com:5349`; omit for STUN-only),
 `RIVENDELL_TURN_SECRET` (shared HMAC secret for time-limited coturn credentials).
+Web Push: `RIVENDELL_VAPID_SUBJECT` (the VAPID `sub` claim — a mailto: or https
+URL; defaults to `RIVENDELL_PUBLIC_URL`). The VAPID keypair itself is generated
+on first boot and persisted in `push_vapid`, so there is no key to configure.
 See `.env.example`. On an empty install the server creates a first admin
 (`RIVENDELL_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
 this fires only when there are zero admins.
@@ -247,6 +253,47 @@ Key design invariants per feature — preserve these when modifying related code
 - **Pure helpers are all unit-tested in secret.test.js:** `formatSafetyNumber`, `buildAAD`, `replayOk`, `canonicalPubKeyOrder`, `ratchetStep`, `encryptMessage`, `decryptMessage`.
 - **Multi-tab sibling dismiss.** When a peer's tab accepts a request, the server sends `secret.dismiss` to the peer's other connections so their request banners clear — identical to the `voice.ring_dismissed` pattern. The one tab that completed the handshake holds the session; others have no matching pending state and ignore the accept.
 - **Session ends on peer disconnect.** `terminateSessionForPeer` ends any active session when presence signals the peer went offline; `sendEndAllOnUnload` fires `secret.end` best-effort on page unload.
+
+**Notifications + Web Push** (migration `0016`). Foreground notifications
+(`notify.js`, `shouldNotify`) fire while a tab is alive; **Web Push** delivers
+DMs/@-mentions when the app is fully closed. The two are routed by connectivity
+and must not double-fire — see `docs/web_push.md` for the full design. Key
+invariants — don't break these:
+- **All push crypto is stdlib (`internal/push`), composed not imported.** VAPID =
+  ECDSA P-256 signing an ES256 JWT (RFC 8292); payload = RFC 8291 over the
+  `aes128gcm` content coding (RFC 8188) via `crypto/ecdh` + `crypto/hkdf` +
+  AES-128-GCM. No `webpush-go`, no JWT lib. `internal/push/push_test.go` round-trips
+  the encryption (encrypt server-side, decrypt receiver-side) and verifies the JWT.
+- **Two distinct keys.** The VAPID key (ECDSA, long-lived, persisted in
+  `push_vapid`, generated on first boot) signs the JWT and is the browser's
+  `applicationServerKey`. The message ephemeral key (ECDH, fresh per push) is the
+  `aes128gcm` `keyid`. Don't conflate them.
+- **JWT signature is JOSE raw `r||s` (64 bytes), never DER.** A `SignASN1`
+  "cleanup" silently breaks every push. `aud` is recomputed per endpoint
+  (scheme://host) — a cached/global `aud` is rejected by Mozilla/Apple.
+- **Gated on connectivity + mutes.** `sendPushNotifications` pushes only to ping
+  recipients who are **not** connected (`hub.IsConnected` — connected users get the
+  foreground WS path) and haven't muted the channel. Runs in a goroutine off the
+  message-create path; a slow push service must never slow a send. A `404`/`410`
+  prunes the subscription (`push.ErrSubscriptionGone`).
+- **Secret chat is never pushed** — OTR messages don't persist and never reach
+  `handleCreateMessage`, so there's nothing to leak. Push payloads carry the same
+  plaintext the server already stores for normal messages.
+- **One toggle.** The "Desktop notifications" checkbox drives both foreground and
+  push (`enablePush`/`disablePush` in app.js). Push is best-effort: if SW
+  registration or `subscribe` fails (old browser, blocked), foreground still works.
+  `firePing` prefers `registration.showNotification` (works on Android, where
+  `new Notification()` throws), falling back to the page-context constructor.
+- **iOS needs an installed PWA** (16.4+) — hence `web/manifest.json` +
+  apple-touch-icon. Desktop/Android push works without install.
+- **Pure helpers unit-tested in `notify.test.js`:** `urlBase64ToUint8Array`,
+  `pushSubscriptionPayload` (trims a PushSubscription to the strict
+  `{endpoint, keys}` body the server's `DisallowUnknownFields` decoder accepts —
+  `expirationTime` must be dropped).
+- `web/sw.js` is notifications-only — no fetch caching/offline-app behaviour. It
+  `skipWaiting()`/`clients.claim()` so updates take effect immediately, renders
+  `push` events, and on `notificationclick` focuses an existing tab (posting it the
+  permalink to `jumpToMessage`) or `openWindow`s the deep link.
 
 When in doubt on UI, favor clarity over polish — aesthetics are secondary to "it works." Keep changes small and tested. Commit a baseline before large changes so diffs and rollbacks are clean.
 

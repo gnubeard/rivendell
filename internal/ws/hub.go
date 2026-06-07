@@ -158,6 +158,15 @@ func (h *Hub) ConnectedCount() int {
 	return len(h.byUser)
 }
 
+// IsConnected reports whether the user has at least one live WebSocket
+// connection. Used to route notifications: connected users get the foreground
+// path; disconnected users get a Web Push.
+func (h *Hub) IsConnected(userID int64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.byUser[userID]) > 0
+}
+
 // OnlineUserIDs returns the set of users with at least one live connection.
 func (h *Hub) OnlineUserIDs() []int64 {
 	h.mu.Lock()

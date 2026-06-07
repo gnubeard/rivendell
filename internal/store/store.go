@@ -209,3 +209,14 @@ type Blob struct {
 	Size        int64     `json:"size"`
 	CreatedAt   time.Time `json:"created_at"`
 }
+
+// PushSubscription is a browser's Web Push registration for a user (one per
+// device/browser). The keys are base64url, exactly as the PushSubscription
+// exposes them; the server never decodes them except to encrypt a payload.
+type PushSubscription struct {
+	ID       int64  `json:"id"`
+	UserID   int64  `json:"user_id"`
+	Endpoint string `json:"endpoint"`
+	P256dh   string `json:"p256dh"`
+	Auth     string `json:"auth"`
+}

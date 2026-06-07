@@ -8,10 +8,16 @@ import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
   showNotification,
+  showViaServiceWorker,
   requestNotificationPermission,
   currentPermission,
   notificationsSupported,
-} from "./notify.js";
+  pushSupported,
+  ensureServiceWorker,
+  subscribeToPush,
+  unsubscribeFromPush,
+  pushSubscriptionPayload,
+} from "./notify.js?v=__RIVENDELL_VERSION__";
 import {
   initSecret,
   isSecretSupported,
@@ -519,6 +525,9 @@ async function enterApp() {
   wireControls();
   wireSwipe();
   wireIdleDetection();
+  // Web Push: register the service worker + refresh the subscription if
+  // notifications are on, and route SW notification clicks to the message.
+  initPushRouting();
   // Returning to the tab clears the open channel's unread (you're looking now).
   window.addEventListener("focus", onWindowFocus);
   document.addEventListener("visibilitychange", () => {
@@ -2824,8 +2833,12 @@ function wireControls() {
       if (notifCb.checked) {
         const perm = await requestNotificationPermission();
         notifEnabled = perm === "granted";
+        // Also register for offline (Web Push) delivery. Best-effort: a failure
+        // here still leaves foreground notifications working.
+        if (notifEnabled) enablePush();
       } else {
         notifEnabled = false;
+        disablePush();
       }
       saveNotifPref();
       renderNotifControl();
@@ -3479,7 +3492,10 @@ function renderNotificationTotal() {
 }
 
 // firePing alerts the user to a ping (DM or @-mention): always a soft chime, plus
-// an OS notification when they've opted in and aren't already looking here.
+// an OS notification when they've opted in and aren't already looking here. The
+// notification routes through the service worker when one is registered (works
+// on mobile, and clicks deep-link via the SW), falling back to a page-context
+// Notification with an onclick.
 function firePing(evt, ch) {
   boop();
   if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: !tabUnfocused() })) {
@@ -3488,12 +3504,67 @@ function firePing(evt, ch) {
   const author = state.users[evt.payload.user_id];
   const who = author ? author.display_name : "Someone";
   const title = ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
-  showNotification(title, {
-    body: evt.payload.content || "",
-    tag: `rivendell-ch-${evt.payload.channel_id}`,
-    icon: author && author.has_avatar ? api.avatarURL(author.id) : undefined,
-    onclick: () => selectChannel(evt.payload.channel_id),
+  const body = evt.payload.content || "";
+  const tag = `rivendell-ch-${evt.payload.channel_id}`;
+  const icon = author && author.has_avatar ? api.avatarURL(author.id) : undefined;
+  const url = "/" + permalinkHash(evt.payload.channel_id, evt.payload.id);
+  showViaServiceWorker(title, { body, tag, icon, url }).then((shown) => {
+    if (!shown) {
+      showNotification(title, { body, tag, icon, onclick: () => selectChannel(evt.payload.channel_id) });
+    }
   });
+}
+
+// enablePush registers the service worker and a push subscription, then sends it
+// to the server so DMs/@-mentions arrive when the app is fully closed. Idempotent
+// and best-effort — any failure (older browser, blocked SW, denied permission)
+// leaves foreground notifications working and is logged, not surfaced.
+async function enablePush() {
+  if (!pushSupported()) return;
+  try {
+    const { enabled, key } = await api.pushKey();
+    if (!enabled || !key) return; // server has push disabled
+    const sub = await subscribeToPush(key);
+    if (!sub) return;
+    await api.pushSubscribe(pushSubscriptionPayload(sub));
+  } catch (e) {
+    console.warn("rivendell: enable push failed:", e && e.message);
+  }
+}
+
+// disablePush cancels the browser's push subscription and tells the server to
+// drop it. Best-effort.
+async function disablePush() {
+  try {
+    const endpoint = await unsubscribeFromPush();
+    if (endpoint) await api.pushUnsubscribe(endpoint);
+  } catch (e) {
+    console.warn("rivendell: disable push failed:", e && e.message);
+  }
+}
+
+// initPushRouting registers the SW (so firePing can show via it and any push
+// arrives) when notifications are already enabled, refreshes the push
+// subscription, and routes a service-worker notification click back to the right
+// message. Called once at app start.
+function initPushRouting() {
+  if (!pushSupported()) return;
+  // Route clicks the SW forwards from a background notification.
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (data.type !== "notificationclick" || !data.url) return;
+    const hash = data.url.indexOf("#") >= 0 ? data.url.slice(data.url.indexOf("#")) : "";
+    const pl = parsePermalink(hash);
+    if (pl && state.channels[pl.channelId]) {
+      jumpToMessage(pl.channelId, pl.messageId);
+    }
+    try { window.focus(); } catch (e) { /* best-effort */ }
+  });
+  // If notifications are already on, make sure the SW is live and the
+  // subscription is fresh (it can be rotated by the browser at any time).
+  if (notifEnabled && currentPermission() === "granted") {
+    ensureServiceWorker().then(() => enablePush());
+  }
 }
 
 // renderNotifControl reflects the desktop-notification opt-in into the profile
@@ -3510,8 +3581,10 @@ function renderNotifControl() {
   if (!status) return;
   if (!supported) status.textContent = "Your browser doesn't support notifications.";
   else if (perm === "denied") status.textContent = "Blocked in your browser settings — allow notifications there to use this.";
-  else if (notifEnabled && perm === "granted") status.textContent = "On — you'll be notified of DMs and @-mentions when this tab isn't focused.";
-  else status.textContent = "Off — turn on to get desktop alerts for DMs and @-mentions.";
+  else if (notifEnabled && perm === "granted") status.textContent = pushSupported()
+    ? "On — you'll be notified of DMs and @-mentions, even when the app is closed."
+    : "On — you'll be notified of DMs and @-mentions when this tab isn't focused.";
+  else status.textContent = "Off — turn on to get alerts for DMs and @-mentions.";
 }
 
 // renderPttControl reflects the push-to-talk preference into the profile modal:

@@ -22,6 +22,7 @@ import (
 
 	"rivendell/internal/auth"
 	"rivendell/internal/config"
+	"rivendell/internal/push"
 	"rivendell/internal/store"
 	"rivendell/internal/ws"
 )
@@ -1002,16 +1003,141 @@ func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, authorID 
 }
 
 // recordPings computes and stores the ping rows for a message (used on create
-// and, after clearing the old rows, on edit). Best-effort: a failure is logged
-// but does not fail the request — the message itself is already persisted.
-func (s *Server) recordPings(ctx context.Context, ch store.Channel, msg store.Message) {
+// and, after clearing the old rows, on edit) and returns the recipient ids so a
+// caller can drive push delivery from the same list. Best-effort: a failure is
+// logged but does not fail the request — the message itself is already persisted.
+func (s *Server) recordPings(ctx context.Context, ch store.Channel, msg store.Message) []int64 {
 	recipients := s.pingRecipients(ctx, ch, msg.UserID, msg.Content)
 	if len(recipients) == 0 {
-		return
+		return recipients
 	}
 	if err := s.st.RecordMentions(ctx, msg.ID, ch.ID, recipients); err != nil {
 		log.Printf("recordPings: %v", err)
 	}
+	return recipients
+}
+
+// sendPushNotifications delivers a Web Push for a new message to every ping
+// recipient who is *not* currently connected (a connected user gets the
+// foreground WS notification instead) and hasn't muted the channel. Runs in its
+// own goroutine off the request path; all delivery is best-effort, and a push
+// service reporting a subscription gone (404/410) prunes it.
+func (s *Server) sendPushNotifications(ch store.Channel, msg store.Message, recipients []int64) {
+	if s.pusher == nil || len(recipients) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	author, _ := s.st.GetUserByID(ctx, msg.UserID)
+	who := author.DisplayName
+	if who == "" {
+		who = "Someone"
+	}
+	title := who
+	if !ch.IsDM {
+		title = who + " in #" + ch.Name
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title":     title,
+		"body":      truncateForPush(msg.Content, 180),
+		"channelId": ch.ID,
+		"url":       fmt.Sprintf("/#c%d/m%d", ch.ID, msg.ID),
+		"tag":       fmt.Sprintf("rivendell-ch-%d", ch.ID),
+	})
+	if err != nil {
+		log.Printf("push: marshal payload: %v", err)
+		return
+	}
+
+	for _, uid := range recipients {
+		if s.hub.IsConnected(uid) {
+			continue
+		}
+		if muted, err := s.st.IsChannelMuted(ctx, uid, ch.ID); err == nil && muted {
+			continue
+		}
+		subs, err := s.st.ListPushSubscriptions(ctx, uid)
+		if err != nil {
+			log.Printf("push: list subscriptions for user %d: %v", uid, err)
+			continue
+		}
+		for _, sub := range subs {
+			err := s.pusher.Send(ctx, push.Subscription{
+				Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth,
+			}, payload)
+			switch {
+			case errors.Is(err, push.ErrSubscriptionGone):
+				_ = s.st.DeletePushSubscriptionByEndpoint(ctx, sub.Endpoint)
+			case err != nil:
+				log.Printf("push: send to user %d: %v", uid, err)
+			}
+		}
+	}
+}
+
+// truncateForPush bounds a notification body to n runes, appending an ellipsis if
+// it was cut. Rune-aware so a multibyte character is never split.
+func truncateForPush(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// handlePushKey returns whether Web Push is available on this server and, if so,
+// the VAPID application server key the browser needs for pushManager.subscribe.
+func (s *Server) handlePushKey(w http.ResponseWriter, r *http.Request) {
+	if s.pusher == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "key": s.pusher.PublicKey()})
+}
+
+// handlePushSubscribe registers (or refreshes) the caller's browser push
+// subscription. The body is the trimmed PushSubscription shape
+// {endpoint, keys:{p256dh, auth}}.
+func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	var req struct {
+		Endpoint string `json:"endpoint"`
+		Keys     struct {
+			P256dh string `json:"p256dh"`
+			Auth   string `json:"auth"`
+		} `json:"keys"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !strings.HasPrefix(req.Endpoint, "https://") || req.Keys.P256dh == "" || req.Keys.Auth == "" {
+		writeErr(w, http.StatusBadRequest, "invalid subscription")
+		return
+	}
+	if err := s.st.AddPushSubscription(r.Context(), u.ID, req.Endpoint, req.Keys.P256dh, req.Keys.Auth); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not save subscription")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePushUnsubscribe removes a push subscription by endpoint (called when the
+// user turns notifications off or the browser rotates the subscription).
+func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Endpoint == "" {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := s.st.DeletePushSubscriptionByEndpoint(r.Context(), req.Endpoint); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not remove subscription")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
@@ -1177,8 +1303,11 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	// Record durable pings (DM recipients / @-mentions) before broadcasting, so a
 	// client that reacts to message.new by re-fetching unread sees them.
-	s.recordPings(r.Context(), ch, msg)
+	recipients := s.recordPings(r.Context(), ch, msg)
 	s.broadcast("message.new", msg, s.audienceForChannel(r.Context(), ch))
+	// Offline notifications: push to pinged recipients who aren't connected. Off
+	// the request path — push services must never slow a send.
+	go s.sendPushNotifications(ch, msg, recipients)
 	writeJSON(w, http.StatusCreated, msg)
 }
 

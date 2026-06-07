@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -22,6 +23,7 @@ import (
 	"rivendell/internal/auth"
 	"rivendell/internal/blobs"
 	"rivendell/internal/config"
+	"rivendell/internal/push"
 	"rivendell/internal/store"
 	"rivendell/internal/ws"
 )
@@ -47,6 +49,7 @@ type Server struct {
 	st           *store.Store
 	hub          *ws.Hub
 	blobStore    *blobs.FSStore
+	pusher       *push.Sender // nil if Web Push couldn't be initialised (push disabled)
 	typingMu     sync.Mutex
 	typingTimers map[typingKey]*time.Timer
 	ringMu       sync.Mutex
@@ -72,7 +75,40 @@ func New(cfg config.Config, st *store.Store) *Server {
 			s.blobStore = bs
 		}
 	}
+	s.initPush()
 	return s
+}
+
+// initPush loads (or, on first boot, generates and persists) this server's VAPID
+// keypair and builds the push Sender. Any failure logs and leaves push disabled
+// rather than blocking startup — offline notifications are a best-effort extra.
+func (s *Server) initPush() {
+	ctx := context.Background()
+	privB64, pubB64, err := s.st.GetVAPIDKeys(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		priv, pub, gerr := push.GenerateVAPIDKeys()
+		if gerr != nil {
+			log.Printf("push: generate VAPID keys: %v; push disabled", gerr)
+			return
+		}
+		if serr := s.st.SaveVAPIDKeys(ctx, priv, pub); serr != nil {
+			log.Printf("push: persist VAPID keys: %v; push disabled", serr)
+			return
+		}
+		// Re-read so a concurrent boot that won the INSERT race wins the keys too.
+		privB64, pubB64, err = s.st.GetVAPIDKeys(ctx)
+	}
+	if err != nil {
+		log.Printf("push: load VAPID keys: %v; push disabled", err)
+		return
+	}
+	sender, err := push.NewSender(privB64, s.cfg.VapidSubject)
+	if err != nil {
+		log.Printf("push: %v; push disabled", err)
+		return
+	}
+	s.pusher = sender
+	log.Printf("push: web push enabled (VAPID public key %s)", pubB64)
 }
 
 // Handler returns the fully-routed http.Handler with global middleware applied.
@@ -168,6 +204,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/bot-tokens", s.requireRole(store.RoleAdmin, s.handleListBotTokens))
 	mux.HandleFunc("POST /api/admin/bot-tokens", s.requireRole(store.RoleAdmin, s.handleCreateBotToken))
 	mux.HandleFunc("DELETE /api/admin/bot-tokens/{id}", s.requireRole(store.RoleAdmin, s.handleDeleteBotToken))
+
+	// Web Push (offline notifications). The public key seeds pushManager.subscribe;
+	// subscribe/unsubscribe register and clear a browser's subscription.
+	mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
+	mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))
+	mux.HandleFunc("POST /api/push/unsubscribe", s.auth(s.handlePushUnsubscribe))
 
 	// Voice / WebRTC.
 	mux.HandleFunc("GET /api/voice/state", s.auth(s.handleGetVoiceState))

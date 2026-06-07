@@ -41,6 +41,12 @@ export const api = {
   updateMe: (patch) => req("PATCH", "/api/me", patch),
   setStatus: (status) => req("PUT", "/api/me/status", { status }),
   publishIdentityKey: (key) => req("PUT", "/api/me/identity-key", { key }),
+
+  // web push (offline notifications)
+  pushKey: () => req("GET", "/api/push/key"),
+  pushSubscribe: (subscription) => req("POST", "/api/push/subscribe", subscription),
+  pushUnsubscribe: (endpoint) => req("POST", "/api/push/unsubscribe", { endpoint }),
+
   uploadAvatar: async (file) => {
     const res = await fetch("/api/me/avatar", {
       method: "POST",
