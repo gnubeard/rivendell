@@ -1356,9 +1356,9 @@ async function loadChannel(id) {
   renderChannelHeader(ch);
   renderSecretBanner();
   // Invite + leave affordances only make sense for a real private channel
-  // (not DMs/public).
+  // (not DMs/public). Inviting is moderator+ only.
   const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
-  $("#invite-btn").hidden = !realPrivate;
+  $("#invite-btn").hidden = !realPrivate || !isModPlus();
   $("#leave-btn").hidden = !realPrivate;
   $("#pins-btn").hidden = !ch;
   // A DM is 1:1 — there's no roster worth showing, so collapse the members
@@ -1480,7 +1480,7 @@ async function jumpToMessage(channelId, messageId) {
     const ch = state.channels[channelId];
     renderChannelHeader(ch);
     const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
-    $("#invite-btn").hidden = !realPrivate;
+    $("#invite-btn").hidden = !realPrivate || !isModPlus();
     $("#leave-btn").hidden = !realPrivate;
     $("#pins-btn").hidden = !ch;
     document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));

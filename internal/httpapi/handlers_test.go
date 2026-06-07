@@ -679,6 +679,13 @@ func TestPrivateChannelInvite(t *testing.T) {
 		t.Fatalf("expected 2 members, got %d: %s", len(members), body)
 	}
 
+	// A regular member of the channel still cannot invite — only moderators+.
+	_, erin := seedMember(t, ts, st, "erin", "Erin", store.RoleMember)
+	resp, _ = doJSON(t, daveC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/members", map[string]int64{"user_id": erin.ID})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-moderator member invite should be 403, got %d", resp.StatusCode)
+	}
+
 	// You cannot manage membership of a DM.
 	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": dave.ID})
 	var dm store.Channel

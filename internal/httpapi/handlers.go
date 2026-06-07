@@ -805,9 +805,9 @@ func (s *Server) handleListChannelMembers(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, members)
 }
 
-// handleAddChannelMember invites a user to a private channel. Only members of
-// the channel (or moderators+) may invite, and only into a real private channel
-// — DMs are fixed at two participants and public channels have no membership.
+// handleAddChannelMember invites a user to a private channel. Only moderators+
+// may invite, and only into a real private channel — DMs are fixed at two
+// participants and public channels have no membership.
 func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	id, err := pathInt(r, "id")
@@ -828,8 +828,8 @@ func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusForbidden, "a DM is limited to its two participants")
 		return
 	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "only members can invite to this channel")
+	if roleRank(u.Role) < roleRank(store.RoleModerator) {
+		writeErr(w, http.StatusForbidden, "only moderators can invite to this channel")
 		return
 	}
 	var req struct {
