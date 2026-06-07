@@ -746,6 +746,19 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
    fixed width (no roster column to span); mirrors .member-volume's look. */
 .header-volume { width: 90px; margin-left: 0.4rem; height: 4px; vertical-align: middle; cursor: pointer; accent-color: var(--accent); }
 
+/* Desktop: lock the four "corner" bars to matched heights so the sidebar/main
+   column dividers meet flush. The top pair (sidebar header + channel header) share
+   one height; the bottom pair (sidebar footer + composer) share a taller one (the
+   composer holds a textarea). The composer keeps min-height + flex-end so it still
+   grows upward as you type while its bottom-anchored buttons stay put — the slack
+   sits above the textarea. Mobile uses slide-in drawers and is exempt (the corners
+   don't meet there), so these live behind a desktop-only query. */
+@media (min-width: 721px) {
+  .sidebar-head, .channel-header { min-height: 57px; }
+  .sidebar-foot { min-height: 72px; }
+  .composer { min-height: 72px; display: flex; flex-direction: column; justify-content: flex-end; }
+}
+
 @media (max-width: 720px) {
   /* The conversation takes the whole screen; the sidebar (channels/DMs/profile)
      and members panel become slide-in drawers from the left and right. */
