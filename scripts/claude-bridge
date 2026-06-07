@@ -176,7 +176,7 @@ while true; do
         printf '[msg %s user %s] %s\n' "$MSG_ID" "$USER_ID" "${CONTENT:0:100}"
 
         # Post a visible placeholder so the user sees activity immediately.
-        WORK_JSON=$(post_msg "$CHANNEL_ID" "⚙️ Working…" 2>/dev/null) || WORK_JSON=""
+        WORK_JSON=$(post_msg "$CHANNEL_ID" ":working: Working…" 2>/dev/null) || WORK_JSON=""
         WORK_ID=$(jq -r '.id // empty' <<<"$WORK_JSON")
 
         # Run Claude in the repo directory. Capture both stdout and stderr.
