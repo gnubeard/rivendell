@@ -72,6 +72,13 @@ const avatarVersion = {};
 // Link preview cache: url -> { title, description, image } | "loading" | "failed".
 // Populated lazily as messages scroll into view; persists for the session.
 const linkPreviewCache = new Map();
+// Debounce token: multiple preview fetches completing close together collapse into
+// one renderMessages() call instead of one per URL.
+let _previewRenderTimer = null;
+function schedulePreviewRender() {
+  if (_previewRenderTimer) return;
+  _previewRenderTimer = setTimeout(() => { _previewRenderTimer = null; renderMessages(); }, 60);
+}
 // Message ids deleted *during this session* (seen live via message.delete). Only
 // these get a "message deleted" tombstone; messages that arrive already-deleted
 // from history render as nothing, so a fresh load isn't littered with tombstones.
@@ -1322,6 +1329,9 @@ async function loadChannel(id) {
     // A short first page means there's nothing older to scroll back to.
     if (msgs.length < PAGE) historyComplete.add(id);
     else historyComplete.delete(id);
+    // Pre-fire all link preview fetches in parallel so they arrive before (or
+    // close to) the first render rather than triggering individual re-renders.
+    msgs.forEach(m => { const u = extractPreviewableURL(m.content); if (u) fetchLinkPreview(u); });
     renderMessages(true); // opening a channel always lands at the newest message
     renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
@@ -2329,7 +2339,7 @@ async function fetchLinkPreview(url) {
   } catch {
     linkPreviewCache.set(url, "failed");
   }
-  renderMessages();
+  schedulePreviewRender();
 }
 
 // buildLinkPreview returns a preview card or YouTube embed DOM node for the

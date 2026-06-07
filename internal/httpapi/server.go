@@ -5,7 +5,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"html"
 	"log"
 	"net/http"
@@ -760,7 +762,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	base := filepath.Base(full)
 	// index.html and app.js are templated; all other assets are served as-is.
 	if base == "app.js" {
-		s.serveTemplated(w, full, "application/javascript; charset=utf-8")
+		s.serveTemplated(w, r, full, "application/javascript; charset=utf-8")
 		return
 	}
 	if info, err := os.Stat(full); err == nil && !info.IsDir() && base != "index.html" {
@@ -771,10 +773,10 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
-	s.serveTemplated(w, filepath.Join(s.cfg.WebDir, "index.html"), "text/html; charset=utf-8")
+	s.serveTemplated(w, r, filepath.Join(s.cfg.WebDir, "index.html"), "text/html; charset=utf-8")
 }
 
-func (s *Server) serveTemplated(w http.ResponseWriter, path, contentType string) {
+func (s *Server) serveTemplated(w http.ResponseWriter, r *http.Request, path, contentType string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -782,6 +784,20 @@ func (s *Server) serveTemplated(w http.ResponseWriter, path, contentType string)
 	}
 	out := strings.ReplaceAll(string(data), instanceNamePlaceholder, html.EscapeString(s.cfg.InstanceName))
 	out = strings.ReplaceAll(out, versionPlaceholder, config.Version)
+	etag := fmt.Sprintf(`"%x"`, sha256.Sum256([]byte(out)))
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	if filepath.Base(path) == "app.js" {
+		// URL includes the version (?v=X), so this exact response is immutable.
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		// index.html URL has no version suffix; must revalidate to pick up new
+		// app.js references, but can short-circuit with a 304 via ETag.
+		w.Header().Set("Cache-Control", "no-cache, private")
+	}
 	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write([]byte(out))
 }

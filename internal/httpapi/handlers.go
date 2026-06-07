@@ -2152,8 +2152,15 @@ func (s *Server) handleGetBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rc.Close()
+	etag := `"` + hash + `"`
+	if r.Header.Get("If-None-Match") == etag {
+		rc.Close()
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.Header().Set("Content-Type", blob.ContentType)
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Length", strconv.FormatInt(blob.Size, 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, rc)
