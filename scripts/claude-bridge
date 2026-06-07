@@ -142,14 +142,21 @@ set_status_text "operational — waiting"
 # Main loop
 
 TMPFILE=$(mktemp)
-cleanup() {
+SHUTDOWN=0
+
+do_cleanup() {
     rm -f "$TMPFILE"
     set_status "offline"
     set_status_text "offline"
     echo "bridge stopped"
     exit 0
 }
-trap cleanup INT TERM
+
+on_shutdown() {
+    SHUTDOWN=1
+    echo "bridge: shutdown requested — finishing current work before exit…" >&2
+}
+trap on_shutdown INT TERM
 
 # handle_channel <channel_id> <mode>
 # mode = "normal"  → full Claude in $REPO_DIR with BRIDGE_PREAMBLE
@@ -203,7 +210,7 @@ handle_channel() {
         if [ "$mode" = "dm" ]; then
             # DM mode: low-effort, no file write tools, run outside the repo.
             claude_out=$(cd /tmp && claude --print --effort low \
-                --disallowed-tools "Edit Write Bash" \
+                --disallowed-tools "Edit,Write,Bash" \
                 "$content" 2>&1) || claude_exit=$?
         else
             claude_out=$(cd "$REPO_DIR" && claude --print "$BRIDGE_PREAMBLE$content" 2>&1) || claude_exit=$?
@@ -241,14 +248,17 @@ $trimmed"
 }
 
 while true; do
-    sleep "$POLL_INTERVAL"
+    sleep "$POLL_INTERVAL" || true   # interrupted sleep (on signal) must not trigger errexit
+    [ "$SHUTDOWN" -eq 1 ] && do_cleanup
 
     # Main claude channel — full access.
     handle_channel "$CHANNEL_ID" "normal"
+    [ "$SHUTDOWN" -eq 1 ] && do_cleanup
 
     # DM channels — discover dynamically each cycle, handle in low-effort mode.
     while IFS= read -r dm_id; do
         [ -n "$dm_id" ] && handle_channel "$dm_id" "dm"
+        [ "$SHUTDOWN" -eq 1 ] && do_cleanup
     done < <(api GET /channels 2>/dev/null \
         | jq -r '[.[] | select(.is_dm == true)] | .[].id' 2>/dev/null || true)
 done
