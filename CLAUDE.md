@@ -18,8 +18,8 @@ packages (Node is used only as the test runner).
 
 Do not add dependencies to "help." Specifically, do **not** introduce:
 
-- an HTTP router (we use stdlib `net/http` with Go 1.22 `ServeMux` method+pattern
-  routing, e.g. `mux.HandleFunc("POST /api/auth/login", ...)`),
+- an HTTP router (we use stdlib `net/http` `ServeMux` method+pattern routing,
+  e.g. `mux.HandleFunc("POST /api/auth/login", ...)`),
 - a WebSocket library (we hand-roll RFC 6455 in `internal/ws/websocket.go`),
 - a password-hashing or crypto library (we hand-roll PBKDF2-HMAC-SHA256 on top of
   stdlib `crypto`; see below),
@@ -47,7 +47,7 @@ web/static/                   app.js, api.js, ws.js, format.js, state.js, style.
 web/test/                     format.test.js, state.test.js (node:test)
 ```
 
-Module path is `rivendell`; Go 1.22. Imports are `rivendell/internal/...`.
+Module path is `rivendell`; Go 1.26. Imports are `rivendell/internal/...`.
 
 ## Build, test, run (use the Makefile)
 
@@ -139,6 +139,9 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   don't remove it. Realtime init must never be able to break UI wiring — wire
   controls before `startRealtime()`, and `new WebSocket` is wrapped because some
   browsers throw synchronously under a CSP that doesn't allow the `wss:` origin.
+  App layout: `grid-template-rows: 100%` + `overflow: hidden` on the root grid;
+  `min-height: 0` on `.sidebar`, `.main`, `.members`, and `.message-list` so
+  the message list (and sidebar scroll region) are the actual scroll containers.
 
 ## Configuration (env vars, all optional except the DB URL in prod)
 
@@ -164,150 +167,33 @@ are required for realtime:
 2. If a Content-Security-Policy header is set, `connect-src` must explicitly list
    the `wss://` origin — Firefox does not expand `'self'` to cover `ws/wss`.
 
-## Punch list — all six items completed
+## Feature notes
 
-These were the requested next-work items; all are now implemented and tested.
+Key design invariants per feature — preserve these when modifying related code.
 
-1. **Private-channel creation UX.** ✅ Replaced the `confirm()` flow with a small
-   create-channel modal (`#channel-modal`) carrying an explicit "Private" checkbox.
-2. **Edit display name and status text.** ✅ Added an "Edit profile" modal
-   (`#profile-modal`) for both fields (replacing the `prompt()` for status text);
-   opened by clicking the name or status text in the sidebar foot.
-3. **Presence dot colors.** ✅ `presenceClass()` in app.js + per-status `--away`
-   (amber) / `--dnd` (red) vars; online=green, offline=grey.
-4. **Scrolling.** ✅ App grid pinned to `grid-template-rows: 100%` + `overflow:
-   hidden`; `min-height: 0` on `.sidebar/.main/.members` and `.message-list` so the
-   message list (and the sidebar scroll region) are the scroll containers.
-5. **Delete and reorder channels.** ✅ Hover controls (↑/↓/✕) on each channel row,
-   mod/admin only. Reorder renormalizes positions to contiguous indices (positions
-   all default to 0) and PATCHes only the rows that changed; delete uses
-   `ArchiveChannel`. DMs are excluded from these controls.
-6. **DMs.** ✅ A DM is a private channel with `is_dm = TRUE` and exactly two
-   members (migration `0002_dms.sql`). Key design points to preserve:
-   - **Canonical name `dm-<minUserId>-<maxUserId>`** makes a pair map to exactly
-     one channel; `UNIQUE(name)` makes create-or-find race-safe
-     (`store.GetOrCreateDM`, `POST /api/dms`).
-   - **Visibility is members-only — even for moderators/admins.** Unlike regular
-     private channels (which keep the mod+ bypass), `handleListChannels` and
-     `canAccessChannel` special-case `is_dm` so nobody can see/read another pair's
-     DM. `audienceForChannel` already scopes realtime to members (DMs are private).
-   - **The client derives the "other" participant by parsing the two ids out of the
-     channel name** (`state.js` `dmParticipants`/`otherDMParticipant`, unit-tested),
-     since a single broadcast can't bake in a per-recipient "other". DMs render in
-     their own sidebar section; start one by clicking a member in the member list.
+**DMs.** A DM is a private channel with `is_dm = TRUE` and exactly two members (migration `0002_dms.sql`).
+- Canonical name `dm-<minUserId>-<maxUserId>` maps a pair to exactly one channel; `UNIQUE(name)` makes create-or-find race-safe (`store.GetOrCreateDM`, `POST /api/dms`).
+- Visibility is members-only — even moderators/admins cannot see another pair's DM. `handleListChannels` and `canAccessChannel` special-case `is_dm`; `audienceForChannel` scopes realtime to members.
+- The client derives the "other" participant by parsing the two ids out of the channel name (`state.js` `dmParticipants`/`otherDMParticipant`, unit-tested) — a single broadcast can't bake in a per-recipient "other".
 
-### Follow-up fixes (post punch-list)
+**Private-channel invites.** `GET`/`POST /api/channels/{id}/members` (`handleListChannelMembers`/`handleAddChannelMember`). Only a channel member (or mod+) may invite, only into a real private channel — public channels return 400, DMs 403 (fixed at two participants). Adding a member re-broadcasts `channel.new` to the now-larger audience. The members panel is scoped to the active channel's membership for private channels/DMs (public channels show everyone); `refreshActiveMembers()` re-fetches on channel open, on invite, and on realtime channel events for the active channel.
 
-- **Private-channel invites.** `GET`/`POST /api/channels/{id}/members`
-  (`handleListChannelMembers`/`handleAddChannelMember`). Only a channel member
-  (or mod+) may invite, only into a real private channel — **public channels 400
-  and DMs 403** (a DM is fixed at two participants). Adding a member re-broadcasts
-  `channel.new` to the now-larger audience so the invitee learns of it in
-  realtime. UI: the `+` in the members panel header opens `#invite-modal`.
-  The **members panel is scoped to the active channel's membership** for private
-  channels/DMs (public channels show everyone); `refreshActiveMembers()` re-fetches
-  on channel open, on invite, and on realtime channel events for the active channel.
-- **Pinned messages.** `pinned_at`/`pinned_by` on `messages` (migration `0004`,
-  mirrors `edited_at`/`deleted_at`; `pinned_at IS NOT NULL` = pinned). Pin/unpin is
-  **moderator+** (`PUT`/`DELETE /api/messages/{id}/pin`); listing
-  (`GET /api/channels/{id}/pins`) is any member with channel access. Pin/unpin
-  broadcasts a plain `message.update`, so the client folds `pinned_at` in via the
-  existing `addMessage` reducer — no new event type. The pins panel
-  (`#pins-modal`, 📌 in the channel header) fetches its own list since a pin may be
-  older than the loaded message window; deleting a message also clears its pin.
-- **Deleted-channel restore/purge.** Channel delete is a soft-delete
-  (`archived_at`), and the `UNIQUE(name)` constraint keeps the name reserved while
-  archived — so the name can't be reused until the tombstone is dealt with. Admin
-  modal "Deleted channels" tab (admin-only): `GET /api/admin/channels/archived`,
-  `POST …/{id}/restore` (clears `archived_at`, re-broadcasts `channel.new`; no name
-  conflict since the name was never freed), `DELETE /api/admin/channels/{id}`
-  (hard delete — cascades messages/members away and frees the name; refuses live
-  channels). `archived_at` is now exposed on the channel JSON (omitempty).
-- **Scrollback / history.** Storage is unbounded (plain rows, indexed
-  `(channel_id, id DESC)`); the API does keyset pagination
-  (`GET …/messages?before=<id>&limit=<n>`, `id < before ORDER BY id DESC`). The
-  client loads the most recent `PAGE` (50) on open and fetches older pages as you
-  scroll near the top (`loadOlderMessages` → `state.oldestMessageId` cursor →
-  `prependMessages`), guarded by an in-flight flag and a `historyComplete` set
-  (a short page = reached the start). `renderMessages` preserves the reader's
-  scroll position on re-render (only auto-scrolls to bottom when already there).
-- **In-app unread indicators.** `state.unread` (channelId→count, pure
-  `bumpUnread`/`clearUnread`, unit-tested). `message.new` for a non-active channel
-  that isn't your own bumps it; selecting a channel clears it. Rendered as a count
-  pill + bold name on channel/DM rows. A soft DM chime (Web Audio) plays for DMs.
-  (No browser Notification API yet.)
-- **Deleted messages** collapse: a run of consecutive soft-deleted messages
-  renders as one compact "N messages deleted" line (`renderMessages`).
-- **Status text is visible** in the member list (stacked under the name, falling
-  back to the presence word); the member-row alignment fix keeps the self row in
-  line with the rest.
-- **Reactions** (migration `0009`). `message_reactions` PK
-  `(message_id, user_id, emoji)` — one of each emoji per user per message is
-  intrinsic; add is idempotent (`ON CONFLICT DO NOTHING`). `emoji` is **either** a
-  known custom `:shortcode:` **or** a literal Unicode grapheme; the client resolves
-  which at render (registry hit → `<img>`, else literal). `PUT`/`DELETE
-  /api/messages/{id}/reactions` carry the emoji in the **body** (no URL-encoding of
-  Unicode); any member with channel access may toggle their own on a visible,
-  non-deleted message (deleted → **409**, no access → **403**). Validation is
-  **stdlib-only** (no emoji library — prime directive): a known shortcode, or
-  `validUnicodeEmoji` (every rune a symbol/ZWJ/variation-selector/keycap-base and
-  ≥1 emoji-ish rune — admits flags, skin-tone & ZWJ sequences, keycaps; rejects
-  words). One realtime event, **`reaction.update`**, carries the re-aggregated
-  groups (not add/remove deltas), folded client-side by `setReactions` — so a plain
-  edit/pin `message.update` that omits `reactions` must **preserve** the existing
-  ones (`addMessage` guards this; unit-tested). List/search/pins endpoints decorate
-  via the batched `ReactionsForMessages` (no N+1); soft-delete **sheds** reactions
-  (`DeleteReactionsForMessage`; cascade covers hard delete). Server stays
-  viewer-agnostic — `Reaction{Emoji, UserIDs}` only; the client derives count and
-  "did I react". UI: pill row under each message + a "react" action floating the
-  shared emoji picker (now also a common-Unicode palette); the pins modal shows
-  toggleable pills — `toggleReaction` takes the pill's known `mine` so it's correct
-  even when the pinned message is **outside the loaded window** (don't regress this
-  to a `findMessage` lookup). Search rows stay text-only (the whole row is
-  click-to-jump).
-- **Channel topics** are editable inline by **moderator+** (the backend already
-  existed: `PATCH /api/channels/{id}`, mod-gated, broadcasts `channel.update`).
-  `renderChannelHeader()` is the single place that paints the header title/topic
-  (both `loadChannel` and `selectChannel` call it — don't re-inline that paint).
-  Clicking the topic span opens an inline `<input>` (`beginTopicEdit`; Enter/blur
-  save, Esc cancel). Note the realtime gotcha: a `channel.update` for the **active**
-  channel must repaint the header — for a while it only re-rendered the channel
-  *list*, so a topic change wouldn't show live; the handler now calls
-  `renderChannelHeader` too, but **skips it while an edit input is open** so it
-  doesn't clobber your own typing. Modals: Esc closes the top-most open one; the
-  About/Pinned modals have no × (backdrop-tap dismisses on mobile).
-- **Inline message editing** replaces the old `prompt()`. The invariant: `render­Messages`
-  is the source of truth — a message whose id == `editingMessageId` draws the inline
-  editor (seeded from `editDraft`) instead of body/reactions/actions. Because the
-  whole list re-renders on every message event, the editor would be destroyed mid-
-  edit; `renderMessages` therefore **captures the live draft + caret + focus before
-  `innerHTML` reset and restores them after** (re-grabbing focus only if it was
-  focused, so a background re-render never steals the caret). Don't "simplify" this
-  to a DOM node it tries to preserve across renders — drive it from state. Enter
-  saves / Shift+Enter newline / Esc cancels; empty-or-unchanged cancels (delete
-  removes); channel switch abandons the edit; a save error keeps the editor open.
-- **Markdown links + inline images.** `format.js` extracts links from each escaped
-  run *before* the markdown pass: `inlineMarkup` (bold/italic/strike/mentions) runs
-  only on the gaps between links, so a URL is never fed through the italic rule —
-  this is what fixes underscores mangling URLs (don't refactor it back to a single
-  regex sweep that linkifies last). `LINK_RE` matches `[text](url)` (https only, so
-  `[x](javascript:…)` stays literal) or a bare http(s) URL; a bare URL whose path
-  ends in an image extension renders inline as an `<img class=msg-image>` (wrapped
-  in a link to the full URL) instead of its text. The escape-first XSS invariant is
-  preserved — URLs land in `href`/`src` already escaped, so a quote can't break out.
-  `formatMessage(text, me, emojis, {embedImages:false})` disables the image embed
-  for **search rows** only (the whole row is click-to-jump; an inline image would
-  fight that — they fall back to plain links). Composer: pasting a single URL onto a
-  non-empty selection wraps it `[selection](url)`.
+**Pinned messages.** `pinned_at`/`pinned_by` on `messages` (migration `0004`). Pin/unpin is moderator+ (`PUT`/`DELETE /api/messages/{id}/pin`); listing (`GET /api/channels/{id}/pins`) is any member with channel access. Pin/unpin broadcasts a plain `message.update` — no new event type. The pins panel (`#pins-modal`) fetches its own list since a pin may be older than the loaded message window; deleting a message also clears its pin.
 
-When in doubt on UI, favor clarity over polish — aesthetics are explicitly
-secondary to "it works" for this draft. Keep changes small and tested.
+**Deleted-channel restore/purge.** Channel delete is a soft-delete (`archived_at`); `UNIQUE(name)` keeps the name reserved while archived. Admin-only: `GET /api/admin/channels/archived`, `POST …/{id}/restore` (clears `archived_at`, re-broadcasts `channel.new`), `DELETE /api/admin/channels/{id}` (hard delete — cascades messages/members, frees the name; refuses live channels). `archived_at` is exposed on the channel JSON (omitempty).
 
-## Status / history
+**Scrollback / history.** Keyset pagination: `GET …/messages?before=<id>&limit=<n>`. Client loads the most recent `PAGE` (50) on open and fetches older pages on scroll-near-top (`loadOlderMessages` → `state.oldestMessageId` cursor → `prependMessages`), guarded by an in-flight flag and a `historyComplete` set (short page = reached the start). `renderMessages` preserves the reader's scroll position on re-render; auto-scrolls to bottom only when already there.
 
-Backend, frontend, and tooling are built and green. Auth, presence/status,
-channels (public/private), roles, messaging (with edit/soft-delete), avatars,
-realtime, and now DMs are working, plus the full punch list above. Known-good as
-of the last session; voice/video was always the big deferred item for later (it
-would layer onto the existing WS hub as a signaling channel). If git history is
-sparse, commit a baseline before large changes so diffs and rollbacks are clean.
+**Unread indicators.** `state.unread` (channelId→count, pure `bumpUnread`/`clearUnread`, unit-tested). `message.new` for a non-active channel that isn't your own bumps it; selecting a channel clears it. Rendered as a count pill + bold name on channel/DM rows. A soft DM chime (Web Audio) plays for DMs.
+
+**Deleted message collapse.** A run of consecutive soft-deleted messages renders as one compact "N messages deleted" line in `renderMessages`.
+
+**Reactions** (migration `0009`). `message_reactions` PK `(message_id, user_id, emoji)` — one of each emoji per user per message; add is idempotent (`ON CONFLICT DO NOTHING`). `emoji` is either a known custom `:shortcode:` or a literal Unicode grapheme; the client resolves which at render (registry hit → `<img>`, else literal). `PUT`/`DELETE /api/messages/{id}/reactions` carry the emoji in the body (no URL-encoding of Unicode); deleted messages return 409. Validation is stdlib-only: a known shortcode or `validUnicodeEmoji` (every rune a symbol/ZWJ/variation-selector/keycap-base and ≥1 emoji-ish rune). One realtime event **`reaction.update`** carries re-aggregated groups; a plain `message.update` that omits `reactions` must **preserve** the existing ones (`addMessage` guards this; unit-tested). List/search/pins decorate via batched `ReactionsForMessages` (no N+1); soft-delete sheds reactions. The pins modal shows toggleable pills — `toggleReaction` takes the pill's known `mine` so it's correct even when the pinned message is outside the loaded window (don't regress this to a `findMessage` lookup).
+
+**Channel topics.** Editable inline by moderator+ (`PATCH /api/channels/{id}`, broadcasts `channel.update`). `renderChannelHeader()` is the single paint point for the header title/topic — both `loadChannel` and `selectChannel` call it, don't re-inline. A `channel.update` for the active channel must repaint the header but skips it while an edit input is open to avoid clobbering your own typing. Modals: Esc closes the top-most open one; the About/Pinned modals have no × (backdrop-tap dismisses on mobile).
+
+**Inline message editing.** `renderMessages` is the source of truth — a message whose id == `editingMessageId` draws the inline editor (seeded from `editDraft`). Before each `innerHTML` reset, `renderMessages` captures the live draft + caret + focus and restores them after; focus is only re-grabbed if it was focused, so background re-renders never steal the caret. Don't "simplify" this to preserving a DOM node — drive it from state. Enter saves / Shift+Enter newline / Esc cancels; empty-or-unchanged cancels (delete removes); channel switch abandons the edit; a save error keeps the editor open.
+
+**Markdown links + inline images.** `format.js` extracts links from each escaped run *before* the markdown pass: `inlineMarkup` runs only on the gaps between links, so a URL never feeds through the italic rule — this fixes underscores mangling URLs (don't refactor it back to a single regex sweep that linkifies last). `LINK_RE` matches `[text](url)` (https only) or bare http(s) URLs; a bare URL whose path ends in an image extension renders as `<img class=msg-image>` wrapped in a link. The escape-first XSS invariant is preserved. `formatMessage(..., {embedImages:false})` is used for search rows only (the whole row is click-to-jump). Composer: pasting a single URL onto a non-empty selection wraps it `[selection](url)`.
+
+When in doubt on UI, favor clarity over polish — aesthetics are secondary to "it works." Keep changes small and tested. Commit a baseline before large changes so diffs and rollbacks are clean.
