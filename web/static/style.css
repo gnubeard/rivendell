@@ -551,8 +551,15 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
   accent-color: var(--accent);
 }
 
-/* Header on-call cue for DMs (no roster there): the other party is connected. */
-.header-call { margin-left: 0.35rem; font-size: 0.9rem; line-height: 1; }
+/* Header on-call cue for DMs (no roster there): the other party is connected.
+   Doubles as a click target that toggles the partner's volume slider, so it
+   gets a pointer and a hover hint. */
+.header-call { margin-left: 0.35rem; font-size: 0.9rem; line-height: 1; cursor: pointer; }
+.header-call:hover { filter: brightness(1.3); }
+
+/* The DM partner's volume slider, revealed inline beside the header 🔊. Slim,
+   fixed width (no roster column to span); mirrors .member-volume's look. */
+.header-volume { width: 90px; margin-left: 0.4rem; height: 4px; vertical-align: middle; cursor: pointer; accent-color: var(--accent); }
 
 @media (max-width: 720px) {
   /* The conversation takes the whole screen; the sidebar (channels/DMs/profile)

@@ -147,6 +147,13 @@ let callParticipantIds = new Set();
 // speakingIds is the set of user ids currently detected as speaking (voice.js
 // AnalyserNode metering, via onSpeaking). Used to pulse a ring on roster rows.
 let speakingIds = new Set();
+// DM partner volume: the header 🔊 toggles a compact slider for the other DM
+// participant (reusing voice.js per-user playout gain). dmVolumeChannelId/Open
+// track which DM the slider is bound to and whether it's expanded, so a re-render
+// (e.g. a voice.state update) doesn't collapse it mid-adjust, while a channel
+// switch or the partner leaving the call does reset it (see renderChannelHeader).
+let dmVolumeChannelId = null;
+let dmVolumeOpen = false;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (tag, attrs = {}, ...kids) => {
@@ -1132,6 +1139,19 @@ function renderChannelHeader(ch) {
     const otherOnCall = !!(voiceCallState.inCall && voiceCallState.channelId === ch.id
       && otherId && callParticipantIds.has(otherId));
     dmCall.hidden = !otherOnCall;
+    // Clicking the 🔊 reveals a slider for the partner's playout volume. It only
+    // makes sense while they're on the call (their <audio> element — the thing
+    // .volume drives — exists only then), so bind/collapse it to that lifecycle.
+    const dmVol = $("#dm-volume");
+    if (otherOnCall) {
+      if (dmVolumeChannelId !== ch.id) { dmVolumeChannelId = ch.id; dmVolumeOpen = false; }
+      const v = getVolumeForUser(otherId);
+      dmVol.value = String(v);
+      dmVol.title = `Volume — ${Math.round(v * 100)}%`;
+      dmVol.hidden = !dmVolumeOpen;
+    } else {
+      dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
+    }
     // Show/update the call button for DM channels.
     if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
       callBtn.textContent = "📵";
@@ -1148,6 +1168,8 @@ function renderChannelHeader(ch) {
   }
   dmDot.hidden = true;
   dmCall.hidden = true;
+  $("#dm-volume").hidden = true;
+  dmVolumeChannelId = null; dmVolumeOpen = false;
   if (ch && !ch.is_dm) {
     if (isInCall() && voiceCallState.channelId === ch.id) {
       callBtn.textContent = "🔴";
@@ -3156,6 +3178,27 @@ function wireVoiceControls() {
     renderChannelHeader(ch);
     renderRingBanner();
     startPendingSound(audioCtx); // caller-side "waiting for pickup" tone
+  };
+
+  // DM partner volume: the header 🔊 toggles a slider for the other participant.
+  // The slider drives voice.js's per-user playout gain (persisted across calls).
+  const toggleDMVolume = () => {
+    if ($("#channel-dm-call").hidden) return; // only when the partner is on call
+    dmVolumeOpen = !dmVolumeOpen;
+    renderChannelHeader(state.channels[state.activeChannelId]);
+    if (dmVolumeOpen) $("#dm-volume").focus();
+  };
+  $("#channel-dm-call").onclick = toggleDMVolume;
+  $("#channel-dm-call").onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleDMVolume(); }
+  };
+  $("#dm-volume").oninput = (e) => {
+    const ch = state.channels[state.activeChannelId];
+    const otherId = ch && ch.is_dm && S.otherDMParticipant(ch, state.me && state.me.id);
+    if (!otherId) return;
+    const v = Number(e.target.value);
+    setVolumeForUser(otherId, v);
+    e.target.title = `Volume — ${Math.round(v * 100)}%`;
   };
 
   wirePushToTalk();
