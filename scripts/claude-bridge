@@ -97,6 +97,39 @@ trim_output() {
     fi
 }
 
+# fetch_message_images <content> <outdir>
+# Downloads any /api/blobs/<hash> images referenced in the message content into
+# <outdir>, and echoes a newline-separated list of the local file paths written.
+# Image attachments arrive in the message as `![image](/api/blobs/<sha256>)`
+# markdown (see the upload UX in CLAUDE.md); the blob endpoint is session-gated
+# but accepts our Bearer token. Each blob is named by its hash plus an extension
+# derived from the served Content-Type so Claude's Read tool can view it.
+fetch_message_images() {
+    local content="$1" outdir="$2"
+    local -a hashes
+    mapfile -t hashes < <(grep -oE 'blobs/[0-9a-f]{64}' <<<"$content" \
+        | sed 's#blobs/##' | sort -u)
+    [ "${#hashes[@]}" -eq 0 ] && return 0
+
+    local h ct ext outfile
+    for h in "${hashes[@]}"; do
+        outfile="$outdir/$h"
+        ct=$(curl -sf -X GET \
+            -H "Authorization: Bearer $RIVENDELL_BOT_TOKEN" \
+            -o "$outfile" -w '%{content_type}' \
+            "$RIVENDELL_URL/api/blobs/$h" 2>/dev/null) || continue
+        case "$ct" in
+            image/png)  ext=png ;;
+            image/jpeg) ext=jpg ;;
+            image/webp) ext=webp ;;
+            image/gif)  ext=gif ;;
+            *)          ext=img ;;   # unrecognised type — pass it through anyway
+        esac
+        mv "$outfile" "$outfile.$ext" 2>/dev/null || continue
+        printf '%s\n' "$outfile.$ext"
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Startup
 
@@ -206,17 +239,39 @@ handle_channel() {
         work_json=$(post_msg "$channel_id" ":working: Working…" 2>/dev/null) || work_json=""
         work_id=$(jq -r '.id // empty' <<<"$work_json")
 
+        # Pull down any attached images so Claude can actually see them. The
+        # blob markdown in the message text is a server-relative URL behind the
+        # session, useless to Claude on its own; we fetch each blob to a temp
+        # dir, hand Claude the local paths, and --add-dir the dir so its Read
+        # tool may open them.
+        local img_dir img_paths prompt_content
+        img_dir=$(mktemp -d)
+        img_paths=$(fetch_message_images "$content" "$img_dir")
+        prompt_content="$content"
+        local -a img_args=()
+        if [ -n "$img_paths" ]; then
+            prompt_content="$content
+
+[The user attached image file(s). Read each of these local paths with the Read tool to view them:]
+$img_paths"
+            img_args=(--add-dir "$img_dir")
+        fi
+
         local claude_exit=0 claude_out
         if [ "$mode" = "dm" ]; then
             # DM mode: low-effort, no file write tools.
-            # -- terminates flag parsing so $content isn't consumed as a tool name
-            # by the greedy <tools...> nargs of --disallowed-tools.
+            # -- terminates flag parsing so $prompt_content isn't consumed as a
+            # tool name by the greedy <tools...> nargs of --disallowed-tools.
             claude_out=$(cd "$REPO_DIR" && claude --print --effort low \
-                --disallowed-tools "Edit,Write,Bash" -- \
-                "$content" 2>&1) || claude_exit=$?
+                --disallowed-tools "Edit,Write,Bash" "${img_args[@]}" -- \
+                "$prompt_content" 2>&1) || claude_exit=$?
         else
-            claude_out=$(cd "$REPO_DIR" && claude --print "$BRIDGE_PREAMBLE$content" 2>&1) || claude_exit=$?
+            # -- terminates flag parsing so the prompt isn't swallowed by the
+            # greedy <directories...> nargs of --add-dir.
+            claude_out=$(cd "$REPO_DIR" && claude --print "${img_args[@]}" -- \
+                "$BRIDGE_PREAMBLE$prompt_content" 2>&1) || claude_exit=$?
         fi
+        rm -rf "$img_dir"
 
         local trimmed reply
         trimmed=$(trim_output "$claude_out")
