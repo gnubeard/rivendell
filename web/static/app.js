@@ -824,6 +824,9 @@ function renderMembers() {
   // Moderators+ can remove others from a real private channel (not DMs/public).
   const activeCh = state.channels[state.activeChannelId];
   const canRemove = isMod && !!(activeCh && activeCh.is_private && !activeCh.is_dm);
+  // Bots are hidden from public channel rosters; they show normally in private
+  // channels they belong to, and remain visible in the invite list.
+  if (activeCh && !activeCh.is_private) users = users.filter((u) => !u.is_bot);
   // On-call cue: only meaningful when the channel we're viewing is the call's own
   // channel (the roster we hold is for that channel). null = show no cue.
   const callIds = voiceCallState.inCall && voiceCallState.channelId === state.activeChannelId
