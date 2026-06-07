@@ -1,15 +1,5 @@
 # rivendell
 
-```
-   ____  _                      _      _ _ 
-  |  _ \(_)_   _____ _ __   __| | ___| | |
-  | |_) | \ \ / / _ \ '_ \ / _` |/ _ \ | |
-  |  _ <| |\ V /  __/ | | | (_| |  __/ | |
-  |_| \_\_| \_/ \___|_| |_|\__,_|\___|_|_|
-
-  the small private room
-```
-
 A self-hosted chat server for a small group of friends — a minimal, private
 alternative to Discord and Slack. Ships as a single Go binary backed by Postgres
 with a vanilla-JS web client and no frontend dependencies.
