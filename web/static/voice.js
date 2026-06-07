@@ -27,9 +27,15 @@ let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMuted}) -> void
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 
+const diagnosedPeers = new Set(); // remoteUserId -> diagnostics attached (attach once)
 export function attachCallDiagnostics(remoteUserId) {
   const pc = peerConns.get(remoteUserId);
   if (!pc) return;
+  // onconnectionstatechange fires "connected" on every (re)connect, including
+  // each ICE restart. Attach the listener + stats poll only once per peer so we
+  // don't stack a fresh setInterval on every reconnection.
+  if (diagnosedPeers.has(remoteUserId)) return;
+  diagnosedPeers.add(remoteUserId);
   pc.addEventListener("iceconnectionstatechange", () =>
     console.log(`[rtc ${remoteUserId}] ice=${pc.iceConnectionState} conn=${pc.connectionState}`));
   const timer = setInterval(async () => {
@@ -747,10 +753,17 @@ function createPC(remoteUserId) {
     }
   };
 
-  // Mid-call camera enable: addTrack fires onnegotiationneeded; offerer re-offers,
-  // answerer's existing onOffer path handles it transparently.
+  // Mid-call camera enable: addTrack fires onnegotiationneeded and we re-offer.
+  // EITHER peer may need to renegotiate — whoever adds the track must be the one
+  // to offer, because a fresh offer carries only the offerer's own m-lines (the
+  // offerer can't add an m-line on the answerer's behalf). So we do NOT gate this
+  // on isOfferer: the deterministic offerer rule governs the *initial* glare, not
+  // renegotiation. Simultaneous toggles are resolved by the lower-id-wins rollback
+  // already in onOffer. (Gating this on isOfferer was a bug: when the higher-id
+  // answerer enabled its camera mid-call, its track was never negotiated and the
+  // peer received no video — visible as `in fps=undefined` while `out fps` runs.)
   pc.onnegotiationneeded = async () => {
-    if (!isOfferer(remoteUserId) || activeChannelId === null) return;
+    if (activeChannelId === null) return;
     // Guard: don't re-offer while already mid-negotiation. The event can fire
     // at the wrong time (e.g. during a parallel ICE restart); skipping here is
     // safe — the browser will re-fire once we're back to stable if still needed.
@@ -779,6 +792,7 @@ function createPC(remoteUserId) {
 
 function closePeer(userId) {
   pendingIceCandidates.delete(userId);
+  diagnosedPeers.delete(userId); // allow diagnostics to re-attach on a rejoin
   removeMeter(userId);
   const meta = peerMeta.get(userId);
   if (meta) { clearReconnectTimer(meta); peerMeta.delete(userId); }
