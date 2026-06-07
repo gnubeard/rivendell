@@ -518,9 +518,20 @@ async function enterApp() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) onWindowFocus();
   });
-  // Best-effort: notify the peer that this session is ending when the page unloads.
-  // The presence-based fallback handles cases where this send doesn't make it.
-  window.addEventListener("beforeunload", () => { sendEndAllOnUnload(); });
+  // Best-effort: notify peers that this session is ending when the page unloads.
+  // The server-side WS-disconnect cleanup is the fallback for both.
+  window.addEventListener("beforeunload", () => {
+    sendEndAllOnUnload();
+    // Send voice.leave so the server ends the DM call before the WS closes.
+    // cleanupVoiceForUser (on WS close) only fires when this was the user's
+    // last connection — the beforeunload path has no such condition.
+    if (isInCall()) {
+      const chId = voiceChannelId();
+      if (chId !== null) {
+        try { socket && socket.send({ type: "voice.leave", channel_id: chId }); } catch {}
+      }
+    }
+  });
   try {
     startRealtime();
   } catch (e) {
