@@ -27,6 +27,27 @@ let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMuted}) -> void
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 
+export function attachCallDiagnostics(remoteUserId) {
+  const pc = peerConns.get(remoteUserId);
+  if (!pc) return;
+  pc.addEventListener("iceconnectionstatechange", () =>
+    console.log(`[rtc ${remoteUserId}] ice=${pc.iceConnectionState} conn=${pc.connectionState}`));
+  const timer = setInterval(async () => {
+    if (!peerConns.has(remoteUserId)) return clearInterval(timer);
+    const s = await pc.getStats();
+    let pair, inV, outV;
+    s.forEach(r => {
+      if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r;
+      if (r.type === "inbound-rtp"  && r.kind === "video") inV = r;
+      if (r.type === "outbound-rtp" && r.kind === "video") outV = r;
+    });
+    const lc = pair && s.get(pair.localCandidateId), rc = pair && s.get(pair.remoteCandidateId);
+    console.log(`[rtc ${remoteUserId}] path=${lc?.candidateType}->${rc?.candidateType} rtt=${pair?.currentRoundTripTime}s`,
+      `| in fps=${inV?.framesPerSecond} drop=${inV?.framesDropped} lost=${inV?.packetsLost} pli=${inV?.pliCount} jitter=${inV?.jitter}`,
+      `| out fps=${outV?.framesPerSecond} limit=${outV?.qualityLimitationReason} tgt=${outV?.targetBitrate}`);
+  }, 2000);
+}
+
 // pendingIceCandidates buffers remote ICE candidates that arrive before
 // setRemoteDescription has been called on a peer connection. This is a real
 // race: onOffer/onAnswer are async (each await yields to the event loop), and
@@ -747,7 +768,10 @@ function createPC(remoteUserId) {
     applyReconnectPlan(remoteUserId, pc);
     // Apply bitrate cap as soon as media starts flowing; also catches the case
     // where the connection briefly dropped and reconnected via ICE restart.
-    if (pc.connectionState === "connected") applyVideoSenderLimits(pc);
+    if (pc.connectionState === "connected") {
+	    attachCallDiagnostics(remoteUserId);
+	    applyVideoSenderLimits(pc);
+    }
   };
 
   return pc;
