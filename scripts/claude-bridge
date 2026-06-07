@@ -20,7 +20,6 @@
 #      Also add whichever human users you want to be able to send requests.
 #   4. Export RIVENDELL_URL and RIVENDELL_BOT_TOKEN, then run this script.
 #      A systemd unit or a persistent tmux session both work fine.
-# Dummy comment: triggering post-commit script
 
 set -euo pipefail
 
