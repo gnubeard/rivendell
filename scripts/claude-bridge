@@ -79,6 +79,14 @@ edit_msg() {
     api PATCH "/messages/$1" --data "$(jq -n --arg c "$2" '{content:$c}')"
 }
 
+set_status() {
+    api PUT /me/status --data "$(jq -n --arg s "$1" '{status:$s}')" >/dev/null 2>&1 || true
+}
+
+set_status_text() {
+    api PATCH /me --data "$(jq -n --arg t "$1" '{status_text:$t}')" >/dev/null 2>&1 || true
+}
+
 trim_output() {
     local text="$1"
     if [ "${#text}" -gt "$MAX_RESPONSE" ]; then
@@ -125,11 +133,21 @@ fi
 echo "polling every ${POLL_INTERVAL}s — ready"
 echo ""
 
+# Signal readiness via the bot's status.
+set_status "online"
+set_status_text "operational — waiting"
+
 # ---------------------------------------------------------------------------
 # Main loop
 
 TMPFILE=$(mktemp)
-cleanup() { rm -f "$TMPFILE"; echo "bridge stopped"; exit 0; }
+cleanup() {
+    rm -f "$TMPFILE"
+    set_status "offline"
+    set_status_text "offline"
+    echo "bridge stopped"
+    exit 0
+}
 trap cleanup INT TERM
 
 while true; do
@@ -183,6 +201,15 @@ $TRIMMED"
         else
             post_msg "$CHANNEL_ID" "$REPLY" >/dev/null || true
         fi
+
+        # Update status to reflect the last run outcome.
+        RUN_TIME=$(date +%H:%M)
+        if [ "$CLAUDE_EXIT" -eq 0 ]; then
+            set_status_text "last run: ✅ done at $RUN_TIME"
+        else
+            set_status_text "last run: ❌ error at $RUN_TIME"
+        fi
+        set_status "online"
 
     done < "$TMPFILE"
 done

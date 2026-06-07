@@ -440,6 +440,7 @@ body.dm-active #members-toggle { display: none; }
 .admin-table th { text-align: left; color: var(--text-faint); font-weight: 600; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); }
 .admin-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
 .admin-table select { width: auto; margin: 0; padding: 0.2rem; }
+.bot-badge { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.1em 0.4em; border-radius: 3px; background: var(--bg-3); border: 1px solid var(--border); color: var(--text-faint); vertical-align: middle; }
 .admin-emoji-list { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
 .admin-emoji { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.5rem; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.82rem; }
 .admin-emoji img { height: 22px; width: 22px; object-fit: contain; }

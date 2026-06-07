@@ -142,6 +142,7 @@ export const api = {
   createMagicLink: (userId) => req("POST", `/api/admin/users/${userId}/magic-link`),
   setRole: (userId, role) => req("PUT", `/api/admin/users/${userId}/role`, { role }),
   setActive: (userId, active) => req("PUT", `/api/admin/users/${userId}/active`, { active }),
+  setBot: (userId, bot) => req("PUT", `/api/admin/users/${userId}/bot`, { bot }),
   archivedChannels: () => req("GET", "/api/admin/channels/archived"),
   restoreChannel: (id) => req("POST", `/api/admin/channels/${id}/restore`),
   purgeChannel: (id) => req("DELETE", `/api/admin/channels/${id}`),

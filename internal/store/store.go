@@ -125,6 +125,7 @@ type User struct {
 	HasAvatar   bool       `json:"has_avatar"`
 	HasPassword bool       `json:"has_password"`
 	IsActive    bool       `json:"is_active"`
+	IsBot       bool       `json:"is_bot"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
 }

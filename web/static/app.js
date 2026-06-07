@@ -2805,6 +2805,9 @@ async function refreshAdminUsers() {
     const activeBtn = el("button", { class: "link", onclick: async () => {
       try { await api.setActive(u.id, !u.is_active); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
     }}, u.is_active ? "disable" : "enable");
+    const botBtn = el("button", { class: "link", onclick: async () => {
+      try { await api.setBot(u.id, !u.is_bot); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
+    }}, u.is_bot ? "unmark bot" : "mark bot");
     const linkBtn = el("button", { class: "link", onclick: async () => {
       try {
         const link = await api.createMagicLink(u.id);
@@ -2830,14 +2833,17 @@ async function refreshAdminUsers() {
     }
     avatarCell.append(avatarInput);
 
+    const statusCell = el("td", {}, u.is_active ? "active" : "disabled");
+    if (u.is_bot) statusCell.append(document.createTextNode(" "), el("span", { class: "bot-badge" }, "bot"));
+
     tbody.append(
       el("tr", {},
         el("td", {}, u.username),
         el("td", {}, u.display_name),
         el("td", {}, roleSel),
         el("td", {}, u.has_password ? "yes" : "no"),
-        el("td", {}, u.is_active ? "active" : "disabled"),
-        el("td", {}, linkBtn, document.createTextNode(" "), activeBtn),
+        statusCell,
+        el("td", {}, linkBtn, document.createTextNode(" "), activeBtn, document.createTextNode(" "), botBtn),
         avatarCell,
       )
     );

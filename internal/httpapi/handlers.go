@@ -284,9 +284,9 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, id := range s.hub.OnlineUserIDs() {
 		online[id] = true
 	}
-	// Ordinary users don't see disabled accounts in the roster; admins still see
-	// everyone, since the admin panel reuses this endpoint to re-enable them.
-	showDisabled := roleRank(userFrom(r.Context()).Role) >= roleRank(store.RoleAdmin)
+	// Ordinary users don't see disabled accounts or bot accounts in the roster;
+	// admins still see everyone, since the admin panel reuses this endpoint.
+	showHidden := roleRank(userFrom(r.Context()).Role) >= roleRank(store.RoleAdmin)
 	type userWithPresence struct {
 		store.User
 		Online bool `json:"online"`
@@ -294,7 +294,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]userWithPresence, 0, len(users))
 	for _, u := range users {
-		if !u.IsActive && !showDisabled {
+		if (!u.IsActive || u.IsBot) && !showHidden {
 			continue
 		}
 		// Invisible users (chosen status "offline") read as offline even while
@@ -1671,6 +1671,32 @@ func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.st.SetActive(r.Context(), id, req.Active); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not update user")
+		return
+	}
+	updated, _ := s.st.GetUserByID(r.Context(), id)
+	s.broadcast("user.update", updated, nil)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleSetBot(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var req struct {
+		Bot bool `json:"bot"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if _, err := s.st.GetUserByID(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err := s.st.SetBot(r.Context(), id, req.Bot); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not update user")
 		return
 	}
