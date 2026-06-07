@@ -4161,6 +4161,7 @@ function renderVideoGrid() {
   const remoteTile = el("div", { class: "video-tile" });
   if (remoteVideo && !remoteVideoMuted) {
     remoteTile.appendChild(remoteVideo);
+    remoteVideo.play().catch(() => {});
   } else {
     const other = otherId != null ? state.users[otherId] : null;
     const avatarDiv = el("div", { class: "video-avatar" });
@@ -4180,6 +4181,7 @@ function renderVideoGrid() {
     if (localVid) {
       localVid.className = "video-tile-local";
       grid.appendChild(localVid);
+      localVid.play().catch(() => {});
     }
   }
 
