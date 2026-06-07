@@ -21,6 +21,98 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* Themes. The default (above) is the built-in dark look; a theme is selected by
+   data-theme on <html> and only re-points the color variables — layout/sizing
+   live in the rules below and are theme-agnostic. The set here must mirror
+   validThemes in internal/httpapi/handlers.go and the <select> in index.html.
+   button.primary / .unread-badge paint dark text (#0b1220) on --accent, so every
+   --accent stays light/bright enough to read against. */
+
+html[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-2: #f4f5f7;
+  --bg-3: #e9ebf0;
+  --bg-hover: #e2e5ea;
+  --border: #d4d8e0;
+  --text: #1f2329;
+  --text-dim: #5c6370;
+  --text-faint: #8b929e;
+  --accent: #4d8bff;
+  --accent-dim: #aac4f5;
+  --online: #2faa6b;
+  --away: #c98a2e;
+  --dnd: #d64550;
+  --danger: #d64550;
+}
+
+html[data-theme="forest"] {
+  --bg: #121a14;
+  --bg-2: #18221a;
+  --bg-3: #1f2c22;
+  --bg-hover: #26352a;
+  --border: #2c3d30;
+  --text: #d6e4d8;
+  --text-dim: #8aa18f;
+  --text-faint: #5f7565;
+  --accent: #6fcf8f;
+  --accent-dim: #3a6b4a;
+  --online: #6fcf8f;
+  --away: #d8b25a;
+  --dnd: #e0726c;
+  --danger: #e0726c;
+}
+
+html[data-theme="hotpink"] {
+  --bg: #1a1016;
+  --bg-2: #23141d;
+  --bg-3: #2c1924;
+  --bg-hover: #381f2d;
+  --border: #432536;
+  --text: #f3dce9;
+  --text-dim: #c08aa6;
+  --text-faint: #8a6178;
+  --accent: #ff66b2;
+  --accent-dim: #8a2d5d;
+  --online: #4fd1a0;
+  --away: #e0a458;
+  --dnd: #ff5d7a;
+  --danger: #ff5d7a;
+}
+
+html[data-theme="contrast"] {
+  --bg: #000000;
+  --bg-2: #000000;
+  --bg-3: #0a0a0a;
+  --bg-hover: #1f1f1f;
+  --border: #ffffff;
+  --text: #ffffff;
+  --text-dim: #e6e6e6;
+  --text-faint: #c2c2c2;
+  --accent: #ffd400;
+  --accent-dim: #b39600;
+  --online: #00ff66;
+  --away: #ffaa00;
+  --dnd: #ff4040;
+  --danger: #ff4040;
+}
+
+html[data-theme="vermillion"] {
+  --bg: #1a1310;
+  --bg-2: #221813;
+  --bg-3: #2c1f18;
+  --bg-hover: #382820;
+  --border: #45342a;
+  --text: #f0e3da;
+  --text-dim: #c0a08f;
+  --text-faint: #8a7263;
+  --accent: #ff5a3c;
+  --accent-dim: #8a3525;
+  --online: #5fcf8f;
+  --away: #e0a458;
+  --dnd: #ff5d5d;
+  --danger: #ff5d5d;
+}
+
 * { box-sizing: border-box; }
 
 /* The `hidden` attribute must win over class-level `display` rules (.modal,

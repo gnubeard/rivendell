@@ -1091,6 +1091,31 @@ func TestUpdateProfileValidation(t *testing.T) {
 	if me.DisplayName != "Big Admin" || me.StatusText != "around" {
 		t.Fatalf("profile not updated: %s", body)
 	}
+	if me.Theme != "default" {
+		t.Fatalf("fresh user should default to the 'default' theme, got %q", me.Theme)
+	}
+
+	// A valid theme persists and round-trips on the returned user.
+	resp, body = doJSON(t, adminC, "PATCH", ts.URL+"/api/me", map[string]string{"theme": "vermillion"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("theme update: %d %s", resp.StatusCode, body)
+	}
+	json.Unmarshal(body, &me)
+	if me.Theme != "vermillion" {
+		t.Fatalf("theme not updated: %s", body)
+	}
+	// And it sticks across a reload (GET /api/me).
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/me", nil)
+	json.Unmarshal(body, &me)
+	if me.Theme != "vermillion" {
+		t.Fatalf("theme not durable: %s", body)
+	}
+
+	// An unknown theme is rejected (and leaves the persisted value untouched).
+	resp, _ = doJSON(t, adminC, "PATCH", ts.URL+"/api/me", map[string]string{"theme": "bogus"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid theme should 400, got %d", resp.StatusCode)
+	}
 }
 
 // unreadResp mirrors the /api/unread payload.

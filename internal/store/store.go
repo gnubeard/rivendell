@@ -121,6 +121,7 @@ type User struct {
 	Role        Role       `json:"role"`
 	Status      string     `json:"status"`
 	StatusText  string     `json:"status_text"`
+	Theme       string     `json:"theme"`
 	HasAvatar   bool       `json:"has_avatar"`
 	HasPassword bool       `json:"has_password"`
 	IsActive    bool       `json:"is_active"`

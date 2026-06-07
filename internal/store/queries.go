@@ -12,7 +12,7 @@ import (
 var ErrNotFound = errors.New("store: not found")
 
 // userCols is the canonical projection used by scanUser.
-const userCols = `id, username, display_name, role, status, status_text,
+const userCols = `id, username, display_name, role, status, status_text, theme,
 	(avatar IS NOT NULL) AS has_avatar, (password_hash IS NOT NULL) AS has_password,
 	is_active, created_at, last_seen_at`
 
@@ -20,7 +20,7 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var lastSeen sql.NullTime
 	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.Status,
-		&u.StatusText, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.CreatedAt, &lastSeen)
+		&u.StatusText, &u.Theme, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.CreatedAt, &lastSeen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -81,9 +81,9 @@ func (s *Store) SetPassword(ctx context.Context, id int64, hash string) error {
 	return s.exec(ctx, `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`, id, hash)
 }
 
-func (s *Store) UpdateProfile(ctx context.Context, id int64, displayName, statusText string) error {
-	return s.exec(ctx, `UPDATE users SET display_name = $2, status_text = $3, updated_at = now() WHERE id = $1`,
-		id, displayName, statusText)
+func (s *Store) UpdateProfile(ctx context.Context, id int64, displayName, statusText, theme string) error {
+	return s.exec(ctx, `UPDATE users SET display_name = $2, status_text = $3, theme = $4, updated_at = now() WHERE id = $1`,
+		id, displayName, statusText, theme)
 }
 
 func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {

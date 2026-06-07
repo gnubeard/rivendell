@@ -685,6 +685,25 @@ async function resync() {
 
 // --- rendering -----------------------------------------------------------
 
+// THEMES mirrors the <select> in index.html and validThemes on the server.
+// "default" is the built-in dark look (no overrides).
+const THEMES = ["default", "light", "forest", "hotpink", "contrast", "vermillion"];
+
+// applyTheme paints the chosen UI theme by setting data-theme on <html>; the CSS
+// re-points its color variables for that theme (style.css). Unknown/empty falls
+// back to the dark default so a bad value can never leave the UI unstyled.
+function applyTheme(theme) {
+  const t = THEMES.includes(theme) ? theme : "default";
+  document.documentElement.setAttribute("data-theme", t);
+}
+
+// myTheme is the persisted theme for the current user (the source of truth the
+// profile-modal preview reverts to when closed without saving).
+function myTheme() {
+  const me = state.me ? state.users[state.me.id] || state.me : null;
+  return me ? me.theme : "default";
+}
+
 function renderMe() {
   const me = state.users[state.me.id] || state.me;
   $("#me-name").textContent = me.display_name;
@@ -692,6 +711,7 @@ function renderMe() {
   $("#me-avatar").style.backgroundImage = me.has_avatar ? `url(${avatarSrc(me.id)})` : "";
   $("#me-avatar").textContent = me.has_avatar ? "" : initials(me.display_name);
   $("#status-select").value = me.status;
+  applyTheme(me.theme);
 }
 
 // regularChannelOrder is the channel ordering with DMs excluded — DMs live in
@@ -2289,7 +2309,11 @@ function wireControls() {
 
   $("#me-name").onclick = openProfileModal;
   $("#me-status-text").onclick = openProfileModal;
-  $("#profile-close").onclick = () => ($("#profile-modal").hidden = true);
+  // Closing the modal without saving must drop a live theme preview.
+  $("#profile-close").onclick = () => { $("#profile-modal").hidden = true; applyTheme(myTheme()); };
+  // Live-preview the theme as the user browses the list; persisted on Save,
+  // reverted (to myTheme) if the modal is dismissed without saving.
+  $("#profile-theme").onchange = (e) => applyTheme(e.target.value);
 
   // Desktop-notification opt-in. Turning it on requests the OS permission;
   // turning it off just drops the in-app preference (the OS grant is sticky and
@@ -2313,13 +2337,16 @@ function wireControls() {
     err.textContent = "";
     const display_name = $("#profile-display").value.trim();
     const status_text = $("#profile-status-text").value.trim();
+    const theme = $("#profile-theme").value;
     try {
-      const me = await api.updateMe({ display_name, status_text });
+      const me = await api.updateMe({ display_name, status_text, theme });
       state = S.upsertUser(state, me);
       state = S.setMe(state, me);
-      renderMe();
+      renderMe(); // also re-applies the (now persisted) theme
       $("#profile-modal").hidden = true;
     } catch (ex) {
+      // A save error keeps the modal open; revert any live preview to persisted.
+      applyTheme(myTheme());
       err.textContent = ex.message;
     }
   };
@@ -2410,15 +2437,23 @@ function wireControls() {
   });
   $("#search-more").onclick = () => runSearch(false);
 
+  // closeModal hides a modal and, if it's the profile modal, reverts any live
+  // theme preview to the persisted value (so backdrop/Esc dismissals don't keep
+  // an unsaved theme on screen).
+  const closeModal = (m) => {
+    m.hidden = true;
+    if (m.id === "profile-modal") applyTheme(myTheme());
+  };
+
   for (const m of document.querySelectorAll(".modal"))
-    m.addEventListener("click", e => { if (e.target === m) m.hidden = true; });
+    m.addEventListener("click", e => { if (e.target === m) closeModal(m); });
 
   // Desktop: Escape closes the top-most open modal (mobile dismisses by tapping the
   // backdrop). Closing just the last-opened one lets a stacked flow unwind a step.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const open = [...document.querySelectorAll(".modal")].filter((m) => !m.hidden);
-    if (open.length) open[open.length - 1].hidden = true;
+    if (open.length) closeModal(open[open.length - 1]);
   });
 
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
@@ -2614,6 +2649,7 @@ function openProfileModal() {
   $("#profile-error").textContent = "";
   $("#profile-display").value = me.display_name || "";
   $("#profile-status-text").value = me.status_text || "";
+  $("#profile-theme").value = THEMES.includes(me.theme) ? me.theme : "default";
   renderNotifControl();
   pttCapturing = false; // never reopen mid-rebind
   renderPttControl();

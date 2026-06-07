@@ -32,6 +32,13 @@ var (
 	validStatus = map[string]bool{
 		"online": true, "away": true, "dnd": true, "offline": true,
 	}
+	// validThemes mirrors the theme set the web client knows how to paint
+	// (web/static/style.css). 'default' is the built-in dark theme. Keep these
+	// in sync when adding a theme; the DB column is unconstrained TEXT.
+	validThemes = map[string]bool{
+		"default": true, "light": true, "forest": true,
+		"hotpink": true, "contrast": true, "vermillion": true,
+	}
 )
 
 // --- health --------------------------------------------------------------
@@ -171,6 +178,7 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DisplayName *string `json:"display_name"`
 		StatusText  *string `json:"status_text"`
+		Theme       *string `json:"theme"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -192,7 +200,15 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.st.UpdateProfile(r.Context(), u.ID, displayName, statusText); err != nil {
+	theme := u.Theme
+	if req.Theme != nil {
+		theme = *req.Theme
+		if !validThemes[theme] {
+			writeErr(w, http.StatusBadRequest, "invalid theme")
+			return
+		}
+	}
+	if err := s.st.UpdateProfile(r.Context(), u.ID, displayName, statusText, theme); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not update profile")
 		return
 	}
