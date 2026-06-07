@@ -304,6 +304,12 @@ button.primary:hover { filter: brightness(1.08); }
 @keyframes anchor-flash { 0% { background: rgba(224, 164, 88, 0.28); } 100% { background: transparent; } }
 .msg-anchor { animation: anchor-flash 2.5s ease-out forwards; border-radius: 4px; }
 .history-banner { padding: 0.3rem 1.2rem; background: var(--bg-3); border-bottom: 1px solid var(--border); font-size: 0.82rem; color: var(--text-dim); }
+.reply-quote { display: flex; align-items: baseline; gap: 0.3rem; font-size: 0.78rem; color: var(--text-dim); cursor: pointer; margin-bottom: 0.12rem; max-width: 100%; }
+.reply-quote:hover .reply-quote-text { text-decoration: underline; }
+.reply-quote-arrow { color: var(--text-faint); flex-shrink: 0; }
+.reply-quote-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.reply-quote-text.deleted { font-style: italic; color: var(--text-faint); }
+.reply-quote-author { font-weight: 600; }
 .msg-body { word-wrap: break-word; overflow-wrap: anywhere; }
 .msg-body.deleted { color: var(--text-faint); font-style: italic; }
 .msg.deleted-run { padding: 0.05rem 0; }
@@ -362,6 +368,11 @@ button.primary:hover { filter: brightness(1.08); }
 
 .typing-indicator { padding: 0.2rem 1.2rem 0.1rem; font-size: 0.8rem; color: var(--text-dim); font-style: italic; min-height: 1.4em; }
 .composer { position: relative; padding: 0.7rem 1.2rem 1rem; border-top: 1px solid var(--border); }
+.composer-reply { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.6rem; margin-bottom: 0.5rem; background: var(--bg-3); border-left: 3px solid var(--accent); border-radius: 4px; font-size: 0.8rem; color: var(--text-dim); }
+.composer-reply-who { font-weight: 600; color: var(--text); }
+.composer-reply-snippet { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
+.composer-reply-cancel { margin-left: auto; background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 0.9rem; padding: 0 0.2rem; line-height: 1; }
+.composer-reply-cancel:hover { color: var(--text); }
 .composer textarea { resize: none; max-height: 180px; line-height: 1.4; padding-right: 4.5rem; }
 /* The emoji + attach buttons sit on the textarea's bottom-right (Enter sends, so
    the right edge is otherwise unused); the picker pops above like the mentions.

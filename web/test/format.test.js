@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, replySnippet } from "../static/format.js";
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');
@@ -156,6 +156,24 @@ test("a link inside escaped text keeps entities intact", () => {
 test("empty and null input", () => {
   assert.equal(formatMessage(""), "");
   assert.equal(formatMessage(null), "");
+});
+
+test("replySnippet condenses a message body to a one-line preview", () => {
+  assert.equal(replySnippet(""), "");
+  assert.equal(replySnippet(null), "");
+  assert.equal(replySnippet("hello world"), "hello world");
+  // multi-line collapses to a single line
+  assert.equal(replySnippet("line one\nline two"), "line one line two");
+  // image markdown becomes a token, not a raw URL
+  assert.equal(replySnippet("![pic](/api/blobs/" + "a".repeat(64) + ")"), "🖼 image");
+  // [text](url) keeps only the text
+  assert.equal(replySnippet("see [the docs](https://example.com/x)"), "see the docs");
+  // backticks are dropped
+  assert.equal(replySnippet("run `make test` now"), "run make test now");
+  // long bodies truncate with an ellipsis
+  const long = replySnippet("x".repeat(200));
+  assert.ok(long.length <= 80, "snippet is bounded");
+  assert.ok(long.endsWith("…"), "truncated snippet ends with an ellipsis");
 });
 
 test("mentionsUser matches whole-token, case-insensitively, with boundaries", () => {

@@ -1096,6 +1096,16 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusRequestEntityTooLarge, "message too long")
 		return
 	}
+	// A reply must point at a live message in this same channel. Validate here so a
+	// stray/forged reply_to_id can't dangle (or leak that a message exists in another
+	// channel). The DB's ON DELETE SET NULL only covers hard-deletes, not soft ones.
+	if req.ReplyTo != nil {
+		parent, err := s.st.GetMessage(r.Context(), *req.ReplyTo)
+		if err != nil || parent.ChannelID != id || parent.DeletedAt != nil {
+			writeErr(w, http.StatusBadRequest, "reply target not found in this channel")
+			return
+		}
+	}
 	msg, err := s.st.CreateMessage(r.Context(), id, u.ID, req.Content, req.ReplyTo)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not send message")

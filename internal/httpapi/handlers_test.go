@@ -305,6 +305,64 @@ func TestChannelAndMessageFlow(t *testing.T) {
 	}
 }
 
+func TestMessageReply(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	// Two channels: the reply target lives in the first.
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+	_, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "other"})
+	var other store.Channel
+	json.Unmarshal(body, &other)
+
+	// Parent message.
+	_, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]any{
+		"content": "the original",
+	})
+	var parent store.Message
+	json.Unmarshal(body, &parent)
+
+	// A valid reply echoes reply_to_id back.
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]any{
+		"content": "the reply", "reply_to_id": parent.ID,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post reply: %d %s", resp.StatusCode, body)
+	}
+	var reply store.Message
+	json.Unmarshal(body, &reply)
+	if reply.ReplyToID == nil || *reply.ReplyToID != parent.ID {
+		t.Fatalf("reply_to_id not round-tripped: %s", body)
+	}
+
+	// A reply to a non-existent message is rejected.
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]any{
+		"content": "dangling", "reply_to_id": 999999,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 replying to missing message, got %d", resp.StatusCode)
+	}
+
+	// A reply pointing at a message in a different channel is rejected.
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(other.ID)+"/messages", map[string]any{
+		"content": "cross-channel", "reply_to_id": parent.ID,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 replying across channels, got %d", resp.StatusCode)
+	}
+
+	// A reply to a soft-deleted message is rejected.
+	doJSON(t, adminC, "DELETE", ts.URL+"/api/messages/"+itoa(parent.ID), nil)
+	resp, _ = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]any{
+		"content": "to a ghost", "reply_to_id": parent.ID,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 replying to a deleted message, got %d", resp.StatusCode)
+	}
+}
+
 func TestMemberCannotCreateChannel(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	seedAdmin(t, ts, st)

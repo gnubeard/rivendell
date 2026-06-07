@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID, extractHideURL } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID, extractHideURL, replySnippet } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -125,6 +125,7 @@ let flashMessageId = null; // id of a jumped-to message to highlight; survives r
 let editingMessageId = null;  // id of the message being edited inline, or null
 let editDraft = "";           // current text of the inline editor, preserved on re-render
 let editFocusPending = false; // focus the editor on the next render (it just opened)
+let replyingToId = null;      // id of the message the composer is replying to, or null
 
 // Which DMs are open is server-authoritative (the dm_open table): the channel
 // list endpoint only returns DMs the user has open, so state.channels holds just
@@ -1066,10 +1067,12 @@ async function selectChannel(id) {
     if (draft.trim()) channelDrafts.set(leaving, draft);
     else channelDrafts.delete(leaving);
   }
-  // Leaving a channel abandons any inline edit in progress.
+  // Leaving a channel abandons any inline edit or pending reply in progress.
   editingMessageId = null;
   editDraft = "";
   editFocusPending = false;
+  replyingToId = null;
+  renderReplyBanner();
   state = S.setActiveChannel(state, id);
   try {
     localStorage.setItem("rivendell.activeChannel", id);
@@ -1555,11 +1558,15 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const m = msgs[i];
     const author = state.users[m.user_id];
     const t = new Date(m.created_at).getTime();
-    const grouped = m.user_id === lastUser && t - lastTime < 5 * 60 * 1000;
+    // A reply always starts a fresh (non-grouped) block so its quote sits cleanly
+    // under the author header it belongs to, rather than being tucked under a
+    // same-author run above it.
+    const grouped = m.user_id === lastUser && t - lastTime < 5 * 60 * 1000 && !m.reply_to_id;
     lastUser = m.user_id;
     lastTime = t;
 
     const editing = m.id === editingMessageId;
+    const replyQuote = editing ? null : buildReplyQuote(m);
     const preview = editing ? null : buildLinkPreview(m.content);
     const hideUrl = preview ? extractHideURL(m.content) : null;
     const body = editing
@@ -1574,6 +1581,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const actions = el("div", { class: "msg-actions" },
       el("button", { class: "link", title: "Add reaction",
         onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "react"),
+      el("button", { class: "link", title: "Reply to this message", onclick: () => startReply(m) }, "reply"),
       isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
       canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
       canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null);
@@ -1593,7 +1601,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }, formatTime(m.created_at));
 
     if (grouped) {
-      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, body, preview, reactions, rowActions)));
+      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, replyQuote, body, preview, reactions, rowActions)));
     } else {
       const avatar = author && author.has_avatar
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
@@ -1607,6 +1615,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
               permalink,
               pinMark
             ),
+            replyQuote,
             body,
             preview,
             reactions,
@@ -1646,6 +1655,71 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }
     editFocusPending = false;
   }
+}
+
+// buildReplyQuote renders the small "↪ Author: snippet" reference shown above a
+// reply. The parent is looked up in the loaded window; if it isn't loaded (it may
+// predate the current page) we still render a clickable stub — jumpToMessage fetches
+// the surrounding window on click. A soft-deleted parent shows a tombstone. The
+// snippet is plain text (text node), so it carries no XSS risk.
+function buildReplyQuote(m) {
+  if (!m.reply_to_id) return null;
+  const msgs = state.messages[state.activeChannelId] || [];
+  const parent = msgs.find((p) => p.id === m.reply_to_id);
+  let label;
+  if (parent && parent.deleted_at) {
+    label = el("span", { class: "reply-quote-text deleted" }, "original message deleted");
+  } else if (parent) {
+    const author = state.users[parent.user_id];
+    label = el("span", { class: "reply-quote-text" },
+      el("span", { class: "reply-quote-author" }, author ? author.display_name : "unknown"),
+      " ",
+      replySnippet(parent.content) || "(no text)");
+  } else {
+    label = el("span", { class: "reply-quote-text" }, "show original message");
+  }
+  return el("div", {
+    class: "reply-quote",
+    title: "Jump to the replied-to message",
+    onclick: () => jumpToMessage(state.activeChannelId, m.reply_to_id),
+  }, el("span", { class: "reply-quote-arrow" }, "↪"), label);
+}
+
+// renderReplyBanner paints (or hides) the "Replying to …" bar above the composer
+// from replyingToId. It's a single paint point: every state change calls it.
+function renderReplyBanner() {
+  const bar = $("#composer-reply");
+  if (!bar) return;
+  if (replyingToId == null) { bar.hidden = true; bar.innerHTML = ""; return; }
+  const msgs = state.messages[state.activeChannelId] || [];
+  const parent = msgs.find((m) => m.id === replyingToId);
+  const author = parent ? state.users[parent.user_id] : null;
+  bar.innerHTML = "";
+  bar.append(
+    el("span", { class: "composer-reply-label" },
+      "Replying to ",
+      el("span", { class: "composer-reply-who" }, author ? author.display_name : "a message")),
+    parent ? el("span", { class: "composer-reply-snippet" }, replySnippet(parent.content)) : null,
+    el("button", {
+      class: "composer-reply-cancel", type: "button",
+      title: "Cancel reply (Esc)", "aria-label": "Cancel reply",
+      onclick: cancelReply,
+    }, "✕")
+  );
+  bar.hidden = false;
+}
+
+function startReply(m) {
+  if (!m || m.deleted_at) return; // can't reply to a deleted message
+  replyingToId = m.id;
+  renderReplyBanner();
+  const input = $("#composer-input");
+  if (input) input.focus();
+}
+
+function cancelReply() {
+  replyingToId = null;
+  renderReplyBanner();
 }
 
 // --- composer + message actions -----------------------------------------
@@ -1903,6 +1977,12 @@ function wireComposer() {
         return;
       }
     }
+    // Esc on the composer cancels a pending reply (when no autocomplete is open).
+    if (e.key === "Escape" && replyingToId != null && popup.hidden) {
+      e.preventDefault();
+      cancelReply();
+      return;
+    }
     // Up arrow on an empty composer → edit the most recent own message.
     if (e.key === "ArrowUp" && !input.value && !editingMessageId) {
       const msgs = state.messages[state.activeChannelId] || [];
@@ -1924,13 +2004,18 @@ function wireComposer() {
       const sent = pendingUploads;
       pendingUploads = [];
       renderAttachments();
+      const replyId = replyingToId; // capture, then clear the banner optimistically
+      replyingToId = null;
+      renderReplyBanner();
       try {
-        await api.sendMessage(state.activeChannelId, content);
+        await api.sendMessage(state.activeChannelId, content, replyId);
         sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
         input.value = text;
         pendingUploads = sent; // put the attachments back so the send can be retried
         renderAttachments();
+        replyingToId = replyId; // restore the reply context too
+        renderReplyBanner();
         autoGrow(); // restore the box to fit the put-back text
         alert(ex.message);
       }

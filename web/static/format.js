@@ -38,6 +38,24 @@ export function mentionsUser(content, username) {
   return false;
 }
 
+// replySnippet condenses a message body into a one-line plaintext preview for the
+// reply-reference chip (the "↪ Author: …" line above a reply and the composer's
+// "Replying to" bar). Image-upload markdown collapses to a token, [text](url) keeps
+// only its text, backticks are dropped, and runs of whitespace fold so a multi-line
+// quote stays on one line. Pure and DOM-free — the result is rendered as a text node
+// (never innerHTML), so it carries no escaping obligation of its own.
+export function replySnippet(content, max = 80) {
+  if (!content) return "";
+  let s = String(content)
+    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "🖼 image") // image markdown → token
+    .replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, "$1")      // [text](url) → text
+    .replace(/`{1,3}/g, "")                            // drop code fences/backticks
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length > max) s = s.slice(0, max - 1).trimEnd() + "…";
+  return s;
+}
+
 // Apply text-only inline rules (bold/italic/strike/mentions) to an already-escaped
 // run. This deliberately does NOT touch links — link extraction happens one layer
 // up in inline(), so a URL is never fed through these regexes (that is what keeps
