@@ -6,6 +6,9 @@ rivendell
 .env
 .env.local
 
+# sensitive credentials
+.creds
+
 # Node (used only as the frontend test runner — no deps, no package manifest)
 node_modules/
 package.json

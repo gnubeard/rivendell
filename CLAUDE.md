@@ -94,6 +94,12 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
 - Node is present and is the frontend test runner only. Run web tests as
   `node --test web/test/*.test.js` (a bare `web/test/` directory arg is
   misinterpreted by this Node version).
+- **GitHub push uses a dedicated SSH key at `.creds/claude`.** No `~/.ssh` config
+  changes are needed. Push with:
+  ```
+  GIT_SSH_COMMAND='ssh -i .creds/claude' git push origin <branch>
+  ```
+  `.creds/` is `.gitignore`d — the key never leaves this directory.
 
 ## Conventions
 
