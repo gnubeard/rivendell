@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # claude-bridge — watches a private Rivendell channel and forwards each message
 # to Claude Code, posting the result back as an edit of the "working…" placeholder.
+# Also responds to DMs sent directly to the bot user (low-effort, read-only).
 #
 # Required env:
 #   RIVENDELL_URL        Base URL of your Rivendell instance  (e.g. http://localhost:8080)
@@ -130,7 +131,7 @@ if [ ! -f "$STATE_FILE" ]; then
     echo "  seeded at message id $SEED_ID"
 fi
 
-echo "polling every ${POLL_INTERVAL}s — ready"
+echo "polling every ${POLL_INTERVAL}s — ready (DM mode: enabled)"
 echo ""
 
 # Signal readiness via the bot's status.
@@ -150,66 +151,104 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-while true; do
-    sleep "$POLL_INTERVAL"
+# handle_channel <channel_id> <mode>
+# mode = "normal"  → full Claude in $REPO_DIR with BRIDGE_PREAMBLE
+# mode = "dm"      → low-effort Claude in /tmp, no write tools, no preamble
+handle_channel() {
+    local channel_id="$1"
+    local mode="$2"
+    local state_file
 
-    LAST_ID=$(cat "$STATE_FILE")
+    if [ "$mode" = "dm" ]; then
+        state_file="$STATE_DIR/rivendell-bridge-dm-$channel_id"
+    else
+        state_file="$STATE_FILE"
+    fi
 
-    # Fetch up to 20 recent messages, keep only those newer than our cursor,
-    # not from the bot itself, and not soft-deleted. Reverse to oldest-first.
-    api GET "/channels/$CHANNEL_ID/messages?limit=20" 2>/dev/null \
+    # Seed the cursor on first encounter.
+    if [ ! -f "$state_file" ]; then
+        local seed_id
+        seed_id=$(api GET "/channels/$channel_id/messages?limit=1" 2>/dev/null \
+            | jq -r 'if length > 0 then .[0].id else 0 end' 2>/dev/null) || return
+        printf '%s' "$seed_id" > "$state_file"
+        return
+    fi
+
+    local last_id
+    last_id=$(cat "$state_file")
+
+    api GET "/channels/$channel_id/messages?limit=20" 2>/dev/null \
         | jq -c \
-            --argjson last "$LAST_ID" \
+            --argjson last "$last_id" \
             --argjson bot  "$BOT_ID" \
             '[.[] | select(.id > $last and .user_id != $bot and .deleted_at == null)]
              | reverse | .[]' \
-        > "$TMPFILE" 2>/dev/null || continue
+        > "$TMPFILE" 2>/dev/null || return
 
     while IFS= read -r msg && [ -n "$msg" ]; do
-        MSG_ID=$(  jq -r '.id'      <<<"$msg")
-        CONTENT=$( jq -r '.content' <<<"$msg")
-        USER_ID=$( jq -r '.user_id' <<<"$msg")
+        local msg_id content user_id
+        msg_id=$(  jq -r '.id'      <<<"$msg")
+        content=$( jq -r '.content' <<<"$msg")
+        user_id=$( jq -r '.user_id' <<<"$msg")
 
-        # Advance the cursor before running Claude; a crash won't replay this.
-        printf '%s' "$MSG_ID" > "$STATE_FILE"
+        printf '%s' "$msg_id" > "$state_file"
 
-        printf '[msg %s user %s] %s\n' "$MSG_ID" "$USER_ID" "${CONTENT:0:100}"
+        printf '[%s msg %s user %s] %s\n' "$mode" "$msg_id" "$user_id" "${content:0:100}"
 
-        # Post a visible placeholder so the user sees activity immediately.
-        WORK_JSON=$(post_msg "$CHANNEL_ID" ":working: Working…" 2>/dev/null) || WORK_JSON=""
-        WORK_ID=$(jq -r '.id // empty' <<<"$WORK_JSON")
+        local work_json work_id
+        work_json=$(post_msg "$channel_id" ":working: Working…" 2>/dev/null) || work_json=""
+        work_id=$(jq -r '.id // empty' <<<"$work_json")
 
-        # Run Claude in the repo directory. Capture both stdout and stderr.
-        CLAUDE_EXIT=0
-        CLAUDE_OUT=$(cd "$REPO_DIR" && claude --print "$BRIDGE_PREAMBLE$CONTENT" 2>&1) || CLAUDE_EXIT=$?
-
-        TRIMMED=$(trim_output "$CLAUDE_OUT")
-        if [ "$CLAUDE_EXIT" -eq 0 ]; then
-            REPLY="✅ Done.
-
-$TRIMMED"
+        local claude_exit=0 claude_out
+        if [ "$mode" = "dm" ]; then
+            # DM mode: low-effort, no file write tools, run outside the repo.
+            claude_out=$(cd /tmp && claude --print --effort low \
+                --disallowed-tools "Edit Write Bash" \
+                "$content" 2>&1) || claude_exit=$?
         else
-            REPLY="❌ Error (exit $CLAUDE_EXIT).
-
-$TRIMMED"
+            claude_out=$(cd "$REPO_DIR" && claude --print "$BRIDGE_PREAMBLE$content" 2>&1) || claude_exit=$?
         fi
 
-        # Edit the placeholder in-place. Fall back to a new post if the edit fails.
-        if [ -n "$WORK_ID" ]; then
-            edit_msg "$WORK_ID" "$REPLY" 2>/dev/null \
-                || post_msg "$CHANNEL_ID" "$REPLY" >/dev/null || true
+        local trimmed reply
+        trimmed=$(trim_output "$claude_out")
+        if [ "$claude_exit" -eq 0 ]; then
+            reply="✅ Done.
+
+$trimmed"
         else
-            post_msg "$CHANNEL_ID" "$REPLY" >/dev/null || true
+            reply="❌ Error (exit $claude_exit).
+
+$trimmed"
         fi
 
-        # Update status to reflect the last run outcome.
-        RUN_TIME=$(TZ=America/Chicago date +%H:%M)
-        if [ "$CLAUDE_EXIT" -eq 0 ]; then
-            set_status_text "last run: ✅ done at $RUN_TIME"
+        if [ -n "$work_id" ]; then
+            edit_msg "$work_id" "$reply" 2>/dev/null \
+                || post_msg "$channel_id" "$reply" >/dev/null || true
         else
-            set_status_text "last run: ❌ error at $RUN_TIME"
+            post_msg "$channel_id" "$reply" >/dev/null || true
+        fi
+
+        local run_time
+        run_time=$(TZ=America/Chicago date +%H:%M)
+        if [ "$claude_exit" -eq 0 ]; then
+            set_status_text "last run: ✅ done at $run_time"
+        else
+            set_status_text "last run: ❌ error at $run_time"
         fi
         set_status "online"
 
     done < "$TMPFILE"
+}
+
+while true; do
+    sleep "$POLL_INTERVAL"
+
+    # Main claude channel — full access.
+    handle_channel "$CHANNEL_ID" "normal"
+
+    # DM channels — discover dynamically each cycle, handle in low-effort mode.
+    while IFS= read -r dm_id; do
+        [ -n "$dm_id" ] && handle_channel "$dm_id" "dm"
+    done < <(api GET /channels 2>/dev/null \
+        | jq -r '[.[] | select(.is_dm == true)] | .[].id' 2>/dev/null || true)
 done
