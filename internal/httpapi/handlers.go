@@ -284,9 +284,10 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, id := range s.hub.OnlineUserIDs() {
 		online[id] = true
 	}
-	// Ordinary users don't see disabled accounts or bot accounts in the roster;
-	// admins still see everyone, since the admin panel reuses this endpoint.
-	showHidden := roleRank(userFrom(r.Context()).Role) >= roleRank(store.RoleAdmin)
+	// Ordinary users don't see disabled accounts; admins see everyone since the
+	// admin panel reuses this endpoint. Bots are visible to all authenticated
+	// users so they appear in private-channel rosters for their members.
+	showDisabled := roleRank(userFrom(r.Context()).Role) >= roleRank(store.RoleAdmin)
 	type userWithPresence struct {
 		store.User
 		Online bool `json:"online"`
@@ -294,14 +295,22 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]userWithPresence, 0, len(users))
 	for _, u := range users {
-		if (!u.IsActive || u.IsBot) && !showHidden {
+		if !u.IsActive && !showDisabled {
 			continue
 		}
-		// Invisible users (chosen status "offline") read as offline even while
-		// they hold a connection — matching the presence.update broadcasts.
+		// Bots authenticate via tokens and hold no hub connection; derive their
+		// online status from the stored status column rather than hub presence.
+		// Regular users: invisible (status "offline") appears offline even while
+		// connected — matching the presence.update broadcasts.
+		var isOnline bool
+		if u.IsBot {
+			isOnline = u.Status == "online"
+		} else {
+			isOnline = online[u.ID] && u.Status != "offline"
+		}
 		out = append(out, userWithPresence{
 			User:   u,
-			Online: online[u.ID] && u.Status != "offline",
+			Online: isOnline,
 			Idle:   s.hub.IsIdle(u.ID),
 		})
 	}

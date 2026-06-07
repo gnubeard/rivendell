@@ -2795,19 +2795,26 @@ async function refreshAdminUsers() {
   tbody.innerHTML = "";
   for (const u of users) {
     const roleSel = el("select", { onchange: async (e) => {
-      try { await api.setRole(u.id, e.target.value); } catch (ex) { alert(ex.message); e.target.value = u.role; }
+      const val = e.target.value;
+      const wasBot = u.is_bot;
+      try {
+        if (val === "bot") {
+          await api.setBot(u.id, true);
+        } else {
+          if (wasBot) await api.setBot(u.id, false);
+          if (val !== u.role) await api.setRole(u.id, val);
+        }
+        await refreshAdminUsers();
+      } catch (ex) { alert(ex.message); e.target.value = wasBot ? "bot" : u.role; }
     }});
-    for (const r of ["member", "moderator", "admin"]) {
+    for (const r of ["member", "moderator", "admin", "bot"]) {
       const opt = el("option", { value: r }, r);
-      if (u.role === r) opt.selected = true;
+      if (u.is_bot ? r === "bot" : r === u.role) opt.selected = true;
       roleSel.append(opt);
     }
     const activeBtn = el("button", { class: "link", onclick: async () => {
       try { await api.setActive(u.id, !u.is_active); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
     }}, u.is_active ? "disable" : "enable");
-    const botBtn = el("button", { class: "link", onclick: async () => {
-      try { await api.setBot(u.id, !u.is_bot); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
-    }}, u.is_bot ? "unmark bot" : "mark bot");
     const linkBtn = el("button", { class: "link", onclick: async () => {
       try {
         const link = await api.createMagicLink(u.id);
@@ -2834,7 +2841,6 @@ async function refreshAdminUsers() {
     avatarCell.append(avatarInput);
 
     const statusCell = el("td", {}, u.is_active ? "active" : "disabled");
-    if (u.is_bot) statusCell.append(document.createTextNode(" "), el("span", { class: "bot-badge" }, "bot"));
 
     tbody.append(
       el("tr", {},
@@ -2843,7 +2849,7 @@ async function refreshAdminUsers() {
         el("td", {}, roleSel),
         el("td", {}, u.has_password ? "yes" : "no"),
         statusCell,
-        el("td", {}, linkBtn, document.createTextNode(" "), activeBtn, document.createTextNode(" "), botBtn),
+        el("td", {}, linkBtn, document.createTextNode(" "), activeBtn),
         avatarCell,
       )
     );
