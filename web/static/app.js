@@ -916,6 +916,8 @@ function renderAdminVisibility() {
   const isAdmin = state.me.role === "admin";
   const isMod = isAdmin || state.me.role === "moderator";
   $("#admin-btn").hidden = !isAdmin;
+  // The actions bar holds only the admin link now — hide its padding for non-admins.
+  $("#admin-btn").closest(".sidebar-actions").hidden = !isAdmin;
   $("#new-channel-btn").hidden = !isMod;
 }
 
@@ -1055,6 +1057,8 @@ async function refreshActiveMembers() {
 }
 
 async function selectChannel(id) {
+  // Picking a channel leaves the admin panel (the conversation reclaims the space).
+  $("#admin-panel").hidden = true;
   // Save the composer draft for the channel we're leaving.
   const leaving = state.activeChannelId;
   if (leaving && leaving !== id) {
@@ -2506,6 +2510,11 @@ function wireControls() {
     }
   };
 
+  // Clicking your own avatar (lower-left) is the avatar uploader — no separate button.
+  $("#me-avatar").onclick = () => $("#avatar-input").click();
+  $("#me-avatar").onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#avatar-input").click(); }
+  };
   $("#avatar-input").onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -2549,7 +2558,7 @@ function wireControls() {
   };
 
   $("#admin-btn").onclick = openAdmin;
-  $("#admin-close").onclick = () => ($("#admin-modal").hidden = true);
+  $("#admin-close").onclick = () => ($("#admin-panel").hidden = true);
 
   $("#about-btn").onclick = () => {
     closeDrawers(); // on mobile, get the sidebar drawer out from behind the modal
@@ -2608,7 +2617,10 @@ function wireControls() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const open = [...document.querySelectorAll(".modal")].filter((m) => !m.hidden);
-    if (open.length) closeModal(open[open.length - 1]);
+    if (open.length) { closeModal(open[open.length - 1]); return; }
+    // The admin panel is a full-screen surface (not a .modal); Esc closes it too.
+    const admin = $("#admin-panel");
+    if (!admin.hidden) admin.hidden = true;
   });
 
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
@@ -2840,8 +2852,8 @@ async function refreshAdminStats() {
 }
 
 async function openAdmin() {
-  closeDrawers(); // get the mobile drawer out from behind the modal
-  $("#admin-modal").hidden = false;
+  closeDrawers(); // get the mobile drawer out from behind the panel
+  $("#admin-panel").hidden = false;
   refreshAdminStats();
   await refreshAdminUsers();
   await refreshAdminEmojis();
@@ -3026,7 +3038,7 @@ async function refreshAdminEmojis() {
 }
 
 function refreshAdminEmojisIfOpen() {
-  if (!$("#admin-modal").hidden) refreshAdminEmojis();
+  if (!$("#admin-panel").hidden) refreshAdminEmojis();
 }
 
 // refreshDeletedChannels renders archived channels with restore / permanent-delete

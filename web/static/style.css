@@ -260,6 +260,9 @@ button.primary:hover { filter: brightness(1.08); }
   display: flex; align-items: center; justify-content: center;
   font-size: 0.72rem; font-weight: 700; color: #dce6ff; flex-shrink: 0;
 }
+/* Your own avatar (lower-left) is the avatar uploader — make it feel clickable. */
+.me-avatar { cursor: pointer; }
+.me-avatar:hover { box-shadow: 0 0 0 2px var(--accent); }
 
 .link { background: none; border: none; color: var(--text-dim); font-size: 0.8rem; padding: 0; cursor: pointer; }
 .link:hover { color: var(--accent); }
@@ -461,6 +464,25 @@ body.dm-active #members-toggle { display: none; }
 .admin-emoji img { height: 22px; width: 22px; object-fit: contain; }
 .admin-emoji code { font-family: var(--mono); color: var(--text-dim); }
 
+/* --- admin panel ---
+   Admin outgrew its modal: it's now a full-screen surface that takes over the
+   conversation area (sidebar stays visible on desktop so you can click back to a
+   channel, which dismisses it). Covers the whole viewport on mobile. */
+.admin-panel { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; }
+.admin-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 0.9rem 1.4rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.admin-panel-head h2 { margin: 0; font-size: 1.1rem; }
+.admin-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 1.4rem; }
+.admin-panel-body .admin-stats { max-width: 1100px; margin-left: auto; margin-right: auto; }
+/* Cards adapt to width: forms sit side-by-side on a wide screen, stack on narrow;
+   the big tables (.admin-section-wide) always span the full row. */
+.admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; max-width: 1100px; margin: 0 auto; align-items: start; }
+.admin-section { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem 1.3rem; min-width: 0; }
+.admin-section-wide { grid-column: 1 / -1; overflow-x: auto; }
+.admin-section h3 { margin: 0 0 0.7rem; font-size: 0.95rem; color: var(--text-dim); }
+/* On desktop the sidebar grid column stays put; the panel starts at its edge so
+   admin reads like a conversation devoted to settings rather than a hard takeover. */
+@media (min-width: 721px) { .admin-panel { left: 240px; } }
+
 /* Stacked modal forms (new channel, edit profile) reuse the shared
    `form label`/`form input` rules; only the private-toggle row needs its own
    (inline, non-stretched) layout. */
@@ -474,6 +496,9 @@ body.dm-active #members-toggle { display: none; }
 .modal-form .optional { color: var(--text-faint); }
 .modal-form .checkbox-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0 0.9rem; cursor: pointer; color: var(--text); }
 .modal-form .checkbox-row input { width: auto; margin: 0; }
+/* Sign-out lives in the profile drawer now, set off below the form. */
+.profile-foot { margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+.profile-foot .link { font-size: 0.85rem; }
 
 .invite-list { list-style: none; margin: 0.6rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
 .invite-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
