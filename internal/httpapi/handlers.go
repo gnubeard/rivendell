@@ -757,6 +757,28 @@ func (s *Server) handleCloseDM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
 }
 
+// handleGetChannel returns a single channel by id if the caller can access it.
+// Used by the client to resolve closed DMs that are absent from the initial
+// channel list (e.g. to label search results or reopen on a permalink click).
+func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return
+	}
+	writeJSON(w, http.StatusOK, ch)
+}
+
 // handleListChannelMembers lists the members of a channel the caller can access.
 func (s *Server) handleListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())

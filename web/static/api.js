@@ -93,6 +93,10 @@ export const api = {
   addChannelMember: (id, userId) => req("POST", `/api/channels/${id}/members`, { user_id: userId }),
   removeChannelMember: (id, userId) => req("DELETE", `/api/channels/${id}/members/${userId}`),
 
+  // fetch a single channel by id (works for closed DMs and private channels
+  // the caller belongs to; returns 403 for inaccessible channels).
+  getChannel: (id) => req("GET", `/api/channels/${id}`),
+
   // direct messages (create-or-find the two-member private channel); closeDM
   // hides it from the caller's sidebar (server-authoritative, per-user).
   createDM: (userId) => req("POST", "/api/dms", { user_id: userId }),

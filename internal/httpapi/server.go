@@ -106,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	// Channels.
 	mux.HandleFunc("GET /api/channels", s.auth(s.handleListChannels))
 	mux.HandleFunc("POST /api/channels", s.requireRole(store.RoleModerator, s.handleCreateChannel))
+	mux.HandleFunc("GET /api/channels/{id}", s.auth(s.handleGetChannel))
 	mux.HandleFunc("PATCH /api/channels/{id}", s.requireRole(store.RoleModerator, s.handleUpdateChannel))
 	mux.HandleFunc("DELETE /api/channels/{id}", s.requireRole(store.RoleModerator, s.handleArchiveChannel))
 

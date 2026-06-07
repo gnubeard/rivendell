@@ -1443,6 +1443,21 @@ function renderHistoryBanner() {
 }
 
 async function jumpToMessage(channelId, messageId) {
+  // If the channel isn't in local state (e.g. a closed DM), fetch it and, for
+  // DMs, reopen it server-side so it appears in the sidebar.
+  if (!state.channels[channelId]) {
+    let ch;
+    try { ch = await api.getChannel(channelId); } catch (_) {
+      flashNotice("That message is in a channel you can't access.");
+      return;
+    }
+    if (ch.is_dm) {
+      const [a, b] = S.dmParticipants(ch);
+      const otherId = a === state.me.id ? b : a;
+      try { ch = await api.createDM(otherId); } catch (_) { /* fall through with fetched ch */ }
+    }
+    state = S.upsertChannel(state, ch);
+  }
   // Switch channel header/state if needed without triggering a full loadChannel.
   if (state.activeChannelId !== channelId) {
     state = S.setActiveChannel(state, channelId);
@@ -2697,13 +2712,21 @@ async function runSearch(reset) {
     return;
   }
   if (seq !== searchSeq) return; // a newer search superseded us
+  // Fetch channel metadata for any result from a channel not in local state
+  // (e.g. a closed DM). Batch by unique id to avoid redundant fetches.
+  const unknownIds = [...new Set(results.map((m) => m.channel_id).filter((id) => !state.channels[id]))];
+  const fetchedChannels = {};
+  await Promise.all(unknownIds.map(async (id) => {
+    try { fetchedChannels[id] = await api.getChannel(id); } catch (_) {}
+  }));
+  if (seq !== searchSeq) return;
   if (reset) list.innerHTML = "";
   if (reset && !results.length) {
     list.append(el("li", { class: "notice" }, "No messages found."));
     return;
   }
   for (const m of results) {
-    const ch = state.channels[m.channel_id];
+    const ch = state.channels[m.channel_id] || fetchedChannels[m.channel_id];
     const author = state.users[m.user_id];
     list.append(
       el("li", { class: "pin-row search-row", onclick: () => { $("#search-modal").hidden = true; jumpToMessage(m.channel_id, m.id); } },
@@ -2742,11 +2765,7 @@ function wireControls() {
     const permalink = parsePermalink(u.hash);
     if (!permalink) return;
     e.preventDefault();
-    if (state.channels[permalink.channelId]) {
-      jumpToMessage(permalink.channelId, permalink.messageId);
-    } else {
-      flashNotice("That message is in a channel you can't access.");
-    }
+    jumpToMessage(permalink.channelId, permalink.messageId);
   });
 
   $("#history-latest-btn").onclick = () => {
