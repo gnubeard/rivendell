@@ -439,6 +439,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 		ToUserID    int64  `json:"to_user_id"`
 		Idle        bool   `json:"idle"`
 		Muted       bool   `json:"muted"`
+		VideoMuted  bool   `json:"video_muted"`
 		Accept      bool   `json:"accept"`
 	}
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -452,7 +453,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 		return
 	}
 	if strings.HasPrefix(msg.Type, "voice.") {
-		s.handleVoiceWSMessage(c, data, msg.Type, msg.ChannelID, msg.DMChannelID, msg.ToUserID, msg.Muted, msg.Accept)
+		s.handleVoiceWSMessage(c, data, msg.Type, msg.ChannelID, msg.DMChannelID, msg.ToUserID, msg.Muted, msg.VideoMuted, msg.Accept)
 		return
 	}
 	if strings.HasPrefix(msg.Type, "secret.") {
@@ -499,7 +500,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 // frames (offer/answer/ice/ring/ring_response) are relayed with from_user_id
 // injected; state-change frames (join/leave/mute) update in-memory voice state
 // and fan out voice.state to the channel audience.
-func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, channelID, dmChannelID, toUserID int64, muted, accept bool) {
+func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, channelID, dmChannelID, toUserID int64, muted, videoMuted, accept bool) {
 	userID := c.UserID()
 	ctx := context.Background()
 
@@ -597,7 +598,7 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		if err != nil || !canAccess(ch, userID) {
 			return
 		}
-		participants := s.hub.VoiceSetMute(channelID, userID, muted)
+		participants := s.hub.VoiceSetMute(channelID, userID, muted, videoMuted)
 		aud := s.audienceForChannel(ctx, ch)
 		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
 

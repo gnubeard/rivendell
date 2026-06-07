@@ -16,27 +16,42 @@ import assert from "node:assert/strict";
 const timeline = [];
 
 // A fake mic stream whose track.stop() records "mic-stop" on the timeline.
-function makeFakeStream() {
-  const track = {
+function makeFakeStream({ includeVideo = false } = {}) {
+  const audioTrack = {
     kind: "audio",
     enabled: true,
     stop() { timeline.push("mic-stop"); },
   };
+  const videoTrack = {
+    kind: "video",
+    enabled: true,
+    stop() { timeline.push("cam-stop"); },
+  };
+  const tracks = includeVideo ? [audioTrack, videoTrack] : [audioTrack];
   return {
-    getAudioTracks: () => [track],
-    getTracks: () => [track],
+    getAudioTracks: () => [audioTrack],
+    getVideoTracks: () => includeVideo ? [videoTrack] : [],
+    addTrack: () => {},
+    getTracks: () => tracks,
   };
 }
+
+// Configurable getUserMedia: by default audio-only; tests that need camera can
+// set getUserMediaVideo = true before joining.
+let getUserMediaVideo = false;
+let getUserMediaRejectWith = null;
 
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
   writable: true,
   value: {
     mediaDevices: {
-      // Resolving getUserMedia means the capture is open ("mic-open").
-      getUserMedia: async () => {
+      getUserMedia: async (constraints) => {
+        if (getUserMediaRejectWith) throw getUserMediaRejectWith;
+        const includeVideo = !!(constraints && constraints.video && getUserMediaVideo);
+        if (includeVideo) timeline.push("cam-open");
         timeline.push("mic-open");
-        return makeFakeStream();
+        return makeFakeStream({ includeVideo });
       },
     },
   },
@@ -48,6 +63,8 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function setup() {
   timeline.length = 0;
+  getUserMediaVideo = false;
+  getUserMediaRejectWith = null;
   voice.initVoice(
     1,                       // myUserId
     () => {},                // socketSend — irrelevant here
@@ -276,4 +293,64 @@ test("micErrorMessage falls back gracefully for unknown / missing errors", () =>
   assert.match(voice.micErrorMessage({ name: "WeirdError", message: "boom" }), /boom/);
   assert.match(voice.micErrorMessage(null), /Could not access the microphone/);
   assert.match(voice.micErrorMessage({}), /Could not access the microphone/);
+});
+
+// --- cameraErrorMessage -----------------------------------------------------
+
+test("cameraErrorMessage maps known getUserMedia errors to actionable text", () => {
+  assert.match(voice.cameraErrorMessage({ name: "NotAllowedError" }), /blocked/i);
+  assert.match(voice.cameraErrorMessage({ name: "SecurityError" }), /blocked/i);
+  assert.match(voice.cameraErrorMessage({ name: "NotFoundError" }), /no camera/i);
+  assert.match(voice.cameraErrorMessage({ name: "OverconstrainedError" }), /no camera/i);
+  assert.match(voice.cameraErrorMessage({ name: "NotReadableError" }), /in use|unavailable/i);
+});
+
+test("cameraErrorMessage falls back gracefully for unknown / missing errors", () => {
+  assert.match(voice.cameraErrorMessage({ name: "WeirdError", message: "kaboom" }), /kaboom/);
+  assert.match(voice.cameraErrorMessage(null), /Could not access the camera/);
+  assert.match(voice.cameraErrorMessage({}), /Could not access the camera/);
+});
+
+// --- camera toggle lifecycle ------------------------------------------------
+// When joining with camera off, track.enabled is not set for video. When camera
+// is toggled on later, the video track becomes enabled. This is the state
+// transition the onnegotiationneeded path relies on.
+
+test("joinVoiceChannel with camera off: no video track in stream", async () => {
+  setup();
+  await voice.joinVoiceChannel(42, { enableVideo: false });
+  assert.equal(voice.isCameraEnabled(), false);
+  await voice.leaveVoiceChannel();
+});
+
+test("joinVoiceChannel with camera on: cameraEnabled is true", async () => {
+  setup();
+  getUserMediaVideo = true;
+  await voice.joinVoiceChannel(42, { enableVideo: true });
+  assert.equal(voice.isCameraEnabled(), true);
+  await voice.leaveVoiceChannel();
+});
+
+test("camera failure on join falls back to audio-only, call still works", async () => {
+  setup();
+  // Simulate getUserMedia rejecting only for video (first call fails, second succeeds)
+  let callCount = 0;
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    callCount++;
+    if (callCount === 1 && constraints.video) {
+      const err = new Error("blocked"); err.name = "NotAllowedError"; throw err;
+    }
+    timeline.push("mic-open");
+    return makeFakeStream({ includeVideo: false });
+  };
+  await voice.joinVoiceChannel(42, { enableVideo: true });
+  // Camera failure should have fallen back: cameraEnabled is false, call is live
+  assert.equal(voice.isCameraEnabled(), false);
+  assert.ok(voice.isInCall());
+  await voice.leaveVoiceChannel();
+  // Restore mock
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    timeline.push("mic-open");
+    return makeFakeStream({ includeVideo: getUserMediaVideo && !!(constraints && constraints.video) });
+  };
 });

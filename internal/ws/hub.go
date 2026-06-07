@@ -9,9 +9,10 @@ import (
 
 // VoiceParticipant describes one user actively in a voice channel.
 type VoiceParticipant struct {
-	UserID   int64     `json:"user_id"`
-	JoinedAt time.Time `json:"joined_at"`
-	Muted    bool      `json:"muted"`
+	UserID     int64     `json:"user_id"`
+	JoinedAt   time.Time `json:"joined_at"`
+	Muted      bool      `json:"muted"`
+	VideoMuted bool      `json:"video_muted"`
 }
 
 // Hub tracks connected clients and fans out events. A user is "online" while
@@ -284,13 +285,14 @@ func (h *Hub) VoiceLeave(channelID, userID int64) []VoiceParticipant {
 	return voiceList(h.voiceChannels[channelID])
 }
 
-// VoiceSetMute updates a participant's muted flag, returning the updated list.
-func (h *Hub) VoiceSetMute(channelID, userID int64, muted bool) []VoiceParticipant {
+// VoiceSetMute updates a participant's muted and video-muted flags, returning the updated list.
+func (h *Hub) VoiceSetMute(channelID, userID int64, muted, videoMuted bool) []VoiceParticipant {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	if m := h.voiceChannels[channelID]; m != nil {
 		if p := m[userID]; p != nil {
 			p.Muted = muted
+			p.VideoMuted = videoMuted
 		}
 	}
 	return voiceList(h.voiceChannels[channelID])

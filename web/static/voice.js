@@ -15,14 +15,27 @@ let localStream = null;
 let peerConns = new Map();    // remoteUserId -> RTCPeerConnection
 let peerMeta = new Map();     // remoteUserId -> { restarts, timer } (reconnection bookkeeping)
 let audioEls = new Map();     // remoteUserId -> <audio> element
+let videoEls = new Map();     // remoteUserId -> <video> element
+let localVideoEl = null;      // local preview <video> (muted, created on first camera use)
+let cameraEnabled = false;    // camera state in current call
 let activeChannelId = null;
 let participants = [];         // latest voice.state roster for the active channel
 let myUserId = null;
 let muted = false;
 let deafened = false;
 let sendFn = null;            // (obj) -> void — socket.send wrapper
-let onStateChange = null;     // ({inCall, channelId, muted, deafened}) -> void
+let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMuted}) -> void
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
+
+// Camera preference: remembered across calls so "camera was on last time" auto-enables it.
+const CAMERA_PREF_KEY = "rivendell.cameraEnabled";
+function loadCameraPref() {
+  try { return localStorage.getItem(CAMERA_PREF_KEY) === "1"; } catch { return false; }
+}
+function saveCameraPref(on) {
+  try { localStorage.setItem(CAMERA_PREF_KEY, on ? "1" : "0"); } catch {}
+}
+export function loadCameraPreference() { return loadCameraPref(); }
 // Self join/leave tones are fired from these lifecycle hooks rather than from
 // onStateChange, but — crucially — they play INSIDE the live-capture window, in
 // the same steady state where remote-peer tones already play loud and clear.
@@ -101,24 +114,40 @@ export async function fetchIceServers() {
   return iceServers;
 }
 
-// joinVoiceChannel acquires the microphone, informs the server (voice.join),
-// and waits for voice.state updates to establish peer connections.
-export async function joinVoiceChannel(channelId) {
+// joinVoiceChannel acquires the microphone (and optionally the camera), informs
+// the server (voice.join), and waits for voice.state updates to establish peer
+// connections. Pass { enableVideo: true } to start with camera on; camera failure
+// never blocks the call — we fall back to audio-only and clear cameraEnabled.
+export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) {
   if (activeChannelId === channelId) return;
   if (activeChannelId !== null) await leaveVoiceChannel();
 
-  localStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-      channelCount: 1,
-      sampleRate: 48000,
-    },
-    video: false,
-  });
+  cameraEnabled = enableVideo;
+  const audioConstraints = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+    sampleRate: 48000,
+  };
+  const videoConstraint = cameraEnabled
+    ? { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } }
+    : false;
+
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: videoConstraint });
+  } catch (err) {
+    if (cameraEnabled) {
+      // Camera failed — fall back to audio-only without blocking the call.
+      cameraEnabled = false;
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
+    } else {
+      throw err;
+    }
+  }
 
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
+  if (cameraEnabled) setupLocalVideo();
 
   // Meter our own mic so our roster row pulses while we talk (a disabled/muted
   // track reads as silence, so muting naturally clears our own speaking ring).
@@ -152,6 +181,7 @@ export async function leaveVoiceChannel() {
   stopAllMeters();
   closeAllPeers();
   stopLocalStream();
+  videoEls.clear();
 }
 
 // endCallLocally tears down our side of a call without telling the server we
@@ -170,12 +200,13 @@ export async function endCallLocally() {
   stopAllMeters();
   closeAllPeers();
   stopLocalStream();
+  videoEls.clear();
 }
 
 export function setVoiceMuted(m) {
   muted = m;
   if (localStream) localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
-  if (activeChannelId !== null) sendFn({ type: "voice.mute", channel_id: activeChannelId, muted });
+  if (activeChannelId !== null) sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
   notifyState();
 }
 
@@ -239,6 +270,64 @@ export function setVolumeForUser(userId, vol) {
   if (audio) audio.volume = v;
 }
 
+// setCameraEnabled toggles the camera mid-call. When the video track already
+// exists (camera was on at join), it just flips track.enabled — no renegotiation
+// needed; we still send voice.mute so the server and peers know the new state.
+// When no video track exists yet (camera was off at join), we acquire the camera,
+// addTrack to all peers, which fires onnegotiationneeded on each (offerer handles
+// the re-offer transparently). Camera failure is silent — cameraEnabled stays false.
+export async function setCameraEnabled(on) {
+  if (!localStream || activeChannelId === null) return;
+  const videoTracks = localStream.getVideoTracks();
+
+  if (on && videoTracks.length === 0) {
+    // First time enabling camera this call: acquire device and add track.
+    let vt;
+    try {
+      const vs = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+      });
+      vt = vs.getVideoTracks()[0];
+    } catch {
+      notifyState();
+      return; // camera unavailable — stay audio-only
+    }
+    localStream.addTrack(vt);
+    for (const pc of peerConns.values()) pc.addTrack(vt, localStream);
+    cameraEnabled = true;
+    saveCameraPref(true);
+    setupLocalVideo();
+  } else if (videoTracks.length > 0) {
+    // Track already exists: flip .enabled (no renegotiation required).
+    videoTracks.forEach(t => { t.enabled = on; });
+    cameraEnabled = on;
+    saveCameraPref(on);
+    if (on) setupLocalVideo(); else teardownLocalVideo();
+  }
+
+  sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
+  notifyState();
+}
+
+export function isCameraEnabled() { return cameraEnabled; }
+export function getVideoEl(userId) { return videoEls.get(userId); }
+export function getLocalVideoEl() { return localVideoEl; }
+
+function setupLocalVideo() {
+  if (typeof document === "undefined") return;
+  if (!localVideoEl) {
+    localVideoEl = document.createElement("video");
+    localVideoEl.autoplay = true;
+    localVideoEl.setAttribute("playsinline", "");
+    localVideoEl.muted = true; // suppress audio echo from local preview
+  }
+  localVideoEl.srcObject = localStream;
+}
+
+function teardownLocalVideo() {
+  if (localVideoEl) localVideoEl.srcObject = null;
+}
+
 // setSpeakingCallback registers cb(userId, speaking) for speaking-indicator UI.
 export function setSpeakingCallback(cb) { onSpeaking = cb; }
 
@@ -293,6 +382,23 @@ export function micErrorMessage(err) {
     return "Your microphone is in use by another app (or unavailable). Close anything else using it and try again.";
   default:
     return "Could not access the microphone" + (err && err.message ? ": " + err.message : ".");
+  }
+}
+
+// cameraErrorMessage maps a getUserMedia camera rejection to a friendly sentence.
+// Mirrors micErrorMessage but for video; pure, unit-tested.
+export function cameraErrorMessage(err) {
+  switch (err && err.name) {
+  case "NotAllowedError":
+  case "SecurityError":
+    return "Camera access was blocked. Allow the camera for this site in your browser's settings.";
+  case "NotFoundError":
+  case "OverconstrainedError":
+    return "No camera was found. Plug one in (or check your input device) and try again.";
+  case "NotReadableError":
+    return "Your camera is in use by another app (or unavailable). Close anything else using it and try again.";
+  default:
+    return "Could not access the camera" + (err && err.message ? ": " + err.message : ".");
   }
 }
 
@@ -515,19 +621,43 @@ function createPC(remoteUserId) {
   };
 
   pc.ontrack = (e) => {
-    let audio = audioEls.get(remoteUserId);
-    if (!audio) {
-      audio = document.createElement("audio");
-      audio.autoplay = true;
-      audio.muted = deafened;
-      audio.volume = getVolumeForUser(remoteUserId); // restore any saved per-user level
-      document.body.appendChild(audio);
-      audioEls.set(remoteUserId, audio);
+    if (e.track.kind === "audio") {
+      let audio = audioEls.get(remoteUserId);
+      if (!audio) {
+        audio = document.createElement("audio");
+        audio.autoplay = true;
+        audio.muted = deafened;
+        audio.volume = getVolumeForUser(remoteUserId); // restore any saved per-user level
+        document.body.appendChild(audio);
+        audioEls.set(remoteUserId, audio);
+      }
+      if (e.streams[0]) {
+        audio.srcObject = e.streams[0];
+        addMeter(remoteUserId, e.streams[0]); // pulse their row while they talk
+      }
+    } else if (e.track.kind === "video") {
+      let video = videoEls.get(remoteUserId);
+      if (!video) {
+        video = document.createElement("video");
+        video.autoplay = true;
+        video.setAttribute("playsinline", "");
+        // NOT muted — remote video has no echo problem; the local preview is muted
+        videoEls.set(remoteUserId, video);
+      }
+      if (e.streams[0]) video.srcObject = e.streams[0];
+      notifyState(); // app.js re-renders the video grid
     }
-    if (e.streams[0]) {
-      audio.srcObject = e.streams[0];
-      addMeter(remoteUserId, e.streams[0]); // pulse their row while they talk
-    }
+  };
+
+  // Mid-call camera enable: addTrack fires onnegotiationneeded; offerer re-offers,
+  // answerer's existing onOffer path handles it transparently.
+  pc.onnegotiationneeded = async () => {
+    if (!isOfferer(remoteUserId) || activeChannelId === null) return;
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: offer.sdp });
+    } catch {}
   };
 
   // Reconnect rather than tear down on trouble: an ICE restart re-negotiates
@@ -555,6 +685,11 @@ function closePeer(userId) {
     audio.remove();
     audioEls.delete(userId);
   }
+  const video = videoEls.get(userId);
+  if (video) {
+    video.srcObject = null;
+    videoEls.delete(userId);
+  }
 }
 
 function closeAllPeers() {
@@ -566,6 +701,8 @@ function stopLocalStream() {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
   }
+  teardownLocalVideo();
+  cameraEnabled = false;
 }
 
 function notifyState() {
@@ -574,7 +711,8 @@ function notifyState() {
     channelId: activeChannelId,
     muted,
     deafened,
-    participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted })),
+    videoMuted: !cameraEnabled,
+    participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted, video_muted: !!p.video_muted })),
   });
 }
 

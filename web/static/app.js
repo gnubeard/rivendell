@@ -38,6 +38,12 @@ import {
   endCallLocally,
   setVoiceMuted,
   setVoiceDeafened,
+  setCameraEnabled,
+  isCameraEnabled,
+  cameraErrorMessage,
+  loadCameraPreference,
+  getVideoEl,
+  getLocalVideoEl,
   isVoiceMuted,
   isVoiceDeafened,
   isInCall,
@@ -166,7 +172,7 @@ let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUser
 // sends a secret.offer and we're showing the accept/decline banner.
 let secretRequestState = null; // { dmChannelId, fromUserId } | null
 // voiceCallState is the live state from voice.js (updated via callback).
-let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, participants: [] };
+let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, videoMuted: true, participants: [] };
 // voiceRosters tracks voice participants per channel (sidebar display).
 // channelId → [{user_id, joined_at, muted}]
 let voiceRosters = {};
@@ -1143,6 +1149,7 @@ async function selectChannel(id) {
   renderChannels();
   renderDMs();
   renderNotificationTotal();
+  renderVideoGrid();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
   // Restore any saved draft for this channel and resize the composer to fit.
@@ -3555,6 +3562,13 @@ function wireVoiceControls() {
   };
   $("#call-leave-btn").onclick = () => leaveVoiceChannel();
 
+  // Camera toggle (DM calls only — button is hidden in regular voice channels).
+  $("#call-camera-btn").onclick = async () => {
+    await setCameraEnabled(!isCameraEnabled());
+    renderCallStrip();
+    renderVideoGrid();
+  };
+
   // Ring banner (incoming call).
   $("#ring-accept-btn").onclick = async () => {
     if (!ringState) return;
@@ -3565,7 +3579,7 @@ function wireVoiceControls() {
     ringState = null;
     renderRingBanner();
     try {
-      await joinVoiceChannel(chId);
+      await joinVoiceChannel(chId, { enableVideo: loadCameraPreference() });
     } catch (e) {
       alert(micErrorMessage(e));
     }
@@ -3741,7 +3755,7 @@ async function onVoiceEvent(evt) {
     renderChannelHeader(state.channels[state.activeChannelId]);
     if (accepted) {
       try {
-        await joinVoiceChannel(chId);
+        await joinVoiceChannel(chId, { enableVideo: loadCameraPreference() });
       } catch (e) {
         alert(micErrorMessage(e));
       }
@@ -4080,6 +4094,7 @@ function onVoiceStateChange(vs) {
   }
   if (!vs.inCall && speakingIds.size) speakingIds.clear(); // call ended: drop stale rings
   renderCallStrip();
+  renderVideoGrid();
   renderChannelHeader(state.channels[state.activeChannelId]);
   renderMembers();
 }
@@ -4094,6 +4109,69 @@ function onSpeaking(userId, speaking) {
   else speakingIds.delete(userId);
   const li = document.querySelector(`#member-list li[data-user-id="${userId}"]`);
   if (li) li.classList.toggle("speaking", speaking);
+}
+
+// renderVideoGrid builds the 2-tile DM video layout (remote tile + optional local
+// PiP) inside #video-grid. Only shown when we're in a DM call AND viewing that DM.
+// Remote tile: video when camera is on, dark avatar tile when camera is off.
+// Local tile: only when our camera is on (decision: no preview when camera is off).
+function renderVideoGrid() {
+  const grid = $("#video-grid");
+  const ch = voiceCallState.inCall && voiceCallState.channelId !== null
+    ? state.channels[voiceCallState.channelId]
+    : null;
+
+  if (!ch || !ch.is_dm || voiceCallState.channelId !== state.activeChannelId) {
+    grid.hidden = true;
+    document.body.classList.remove("video-active");
+    return;
+  }
+
+  const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+  const otherP = voiceCallState.participants.find(p => p.user_id === otherId);
+  const remoteVideoMuted = !otherP || otherP.video_muted;
+  const remoteVideo = otherId != null ? getVideoEl(otherId) : null;
+
+  grid.innerHTML = "";
+
+  const remoteTile = el("div", { class: "video-tile" });
+  if (remoteVideo && !remoteVideoMuted) {
+    remoteTile.appendChild(remoteVideo);
+  } else {
+    const other = otherId != null ? state.users[otherId] : null;
+    const avatarDiv = el("div", { class: "video-avatar" });
+    if (other && other.has_avatar) {
+      avatarDiv.appendChild(el("img", { class: "video-avatar-img", src: avatarSrc(otherId), alt: "" }));
+    } else {
+      avatarDiv.appendChild(el("div", { class: "video-avatar-initials" }, initials((other || {}).display_name)));
+    }
+    avatarDiv.appendChild(el("span", { class: "video-avatar-name" }, (other || {}).display_name || ""));
+    remoteTile.appendChild(avatarDiv);
+  }
+  grid.appendChild(remoteTile);
+
+  // Local PiP only when camera is on
+  if (!voiceCallState.videoMuted) {
+    const localVid = getLocalVideoEl();
+    if (localVid) {
+      localVid.className = "video-tile-local";
+      grid.appendChild(localVid);
+    }
+  }
+
+  // Fullscreen button (covers mobile "replace" case too)
+  const fsBtn = el("button", { class: "video-fullscreen-btn", title: "Fullscreen" }, "⛶");
+  fsBtn.onclick = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      grid.requestFullscreen().catch(() => {});
+    }
+  };
+  grid.appendChild(fsBtn);
+
+  grid.hidden = false;
+  document.body.classList.add("video-active");
 }
 
 function renderCallStrip() {
@@ -4126,6 +4204,16 @@ function renderCallStrip() {
   deafBtn.textContent = voiceCallState.deafened ? "🔈" : "🔊";
   deafBtn.title = voiceCallState.deafened ? "Undeafen" : "Deafen";
   deafBtn.classList.toggle("active", voiceCallState.deafened);
+  // Camera button: only visible in DM calls
+  const camBtn = $("#call-camera-btn");
+  if (ch && ch.is_dm) {
+    camBtn.hidden = false;
+    camBtn.textContent = voiceCallState.videoMuted ? "📷" : "🎥";
+    camBtn.title = voiceCallState.videoMuted ? "Turn camera on" : "Turn camera off";
+    camBtn.classList.toggle("active", voiceCallState.videoMuted);
+  } else {
+    camBtn.hidden = true;
+  }
   strip.hidden = false;
 }
 
