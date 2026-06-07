@@ -54,6 +54,7 @@ export function replySnippet(content, max = 80) {
     .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "🖼 image") // image markdown → token
     .replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, "$1")      // [text](url) → text
     .replace(/`{1,3}/g, "")                            // drop code fences/backticks
+    .replace(/\|\|/g, "")                              // strip spoiler markers
     .replace(/\s+/g, " ")
     .trim();
   if (s.length > max) s = s.slice(0, max - 1).trimEnd() + "…";
@@ -322,6 +323,28 @@ function inlineWithBlobImages(seg, meLower, embedImages, hideUrl) {
   return out + inline(seg.slice(last), meLower, embedImages, hideUrl);
 }
 
+// SPOILER_RE matches ||text|| pairs. Uses a lazy quantifier so nested or
+// sequential spoilers each match their own nearest closing ||. Processes the
+// already-HTML-escaped string; | is not an HTML special character so it survives
+// escapeHtml unchanged.
+const SPOILER_RE = /\|\|([\s\S]*?)\|\|/g;
+
+// Render spoiler spans (||content||). Content is passed through the full inline
+// pipeline so images, links, and formatting inside spoilers render correctly.
+function inlineWithSpoiler(seg, meLower, emojis, embedImages, hideUrl) {
+  let out = "";
+  let last = 0;
+  let m;
+  SPOILER_RE.lastIndex = 0;
+  while ((m = SPOILER_RE.exec(seg)) !== null) {
+    out += inlineWithEmoji(seg.slice(last, m.index), meLower, emojis, embedImages, hideUrl);
+    const innerHtml = inlineWithEmoji(m[1], meLower, emojis, embedImages, hideUrl);
+    out += `<span class="spoiler" tabindex="0">${innerHtml}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + inlineWithEmoji(seg.slice(last), meLower, emojis, embedImages, hideUrl);
+}
+
 // Handle `inline code` spans, leaving their contents free of inline markdown.
 function inlineWithCode(escapedLine, meLower, emojis, embedImages, hideUrl) {
   const segs = escapedLine.split(/`/);
@@ -330,7 +353,7 @@ function inlineWithCode(escapedLine, meLower, emojis, embedImages, hideUrl) {
     if (i % 2 === 1) {
       out += `<code>${segs[i]}</code>`;
     } else {
-      out += inlineWithEmoji(segs[i], meLower, emojis, embedImages, hideUrl);
+      out += inlineWithSpoiler(segs[i], meLower, emojis, embedImages, hideUrl);
     }
   }
   return out;

@@ -2046,16 +2046,32 @@ function wireComposer() {
     tray.hidden = pendingUploads.length === 0;
     for (const u of pendingUploads) {
       const img = el("img", { src: u.objectUrl, alt: "" });
+      const cls = "attachment" +
+        (u.status === "uploading" ? " uploading" : "") +
+        (u.spoiler ? " spoiler-marked" : "");
       const tile = el(
         "div",
-        { class: "attachment" + (u.status === "uploading" ? " uploading" : ""), title: u.status === "done" ? "Click to copy image link" : "Uploading…" },
+        { class: cls, title: u.status === "done" ? "Click to copy image link" : "Uploading…" },
         img,
       );
       if (u.status === "uploading") {
         tile.append(el("div", { class: "attachment-spinner" }));
       } else {
         tile.addEventListener("click", () => copyAttachmentRef(u, tile));
+        const spoilerBtn = el("button", {
+          class: "attachment-spoiler-btn" + (u.spoiler ? " active" : ""),
+          type: "button",
+          title: u.spoiler ? "Remove spoiler" : "Mark as spoiler",
+          onclick: (e) => {
+            e.stopPropagation();
+            u.spoiler = !u.spoiler;
+            tile.classList.toggle("spoiler-marked", u.spoiler);
+            spoilerBtn.classList.toggle("active", u.spoiler);
+            spoilerBtn.title = u.spoiler ? "Remove spoiler" : "Mark as spoiler";
+          },
+        }, "SPOILER");
         tile.append(
+          spoilerBtn,
           el("button", {
             class: "attachment-remove",
             type: "button",
@@ -2079,7 +2095,8 @@ function wireComposer() {
 
   async function copyAttachmentRef(u, tile) {
     try {
-      await navigator.clipboard.writeText(u.markdown);
+      const text = u.spoiler ? `||${u.markdown}||` : u.markdown;
+      await navigator.clipboard.writeText(text);
       tile.classList.add("copied");
       setTimeout(() => tile.classList.remove("copied"), 900);
     } catch { /* clipboard blocked (insecure context); nothing useful to do */ }
@@ -2089,7 +2106,7 @@ function wireComposer() {
   // tile. The local file is previewed immediately (object URL) so the user sees
   // their image right away; the tile shows a spinner until the upload resolves.
   async function uploadAndInsert(file) {
-    const item = { id: ++uploadSeq, objectUrl: URL.createObjectURL(file), status: "uploading", markdown: "" };
+    const item = { id: ++uploadSeq, objectUrl: URL.createObjectURL(file), status: "uploading", markdown: "", spoiler: false };
     pendingUploads.push(item);
     renderAttachments();
     try {
@@ -2195,8 +2212,9 @@ function wireComposer() {
       }
       const done = pendingUploads.filter((u) => u.status === "done");
       // Message body = the typed text followed by each attachment's image markdown,
-      // one per line. Either part alone is enough to send.
-      const content = [text.trim() ? text : "", ...done.map((u) => u.markdown)].filter(Boolean).join("\n");
+      // one per line. Spoiler-marked images are wrapped in ||..||. Either part alone
+      // is enough to send.
+      const content = [text.trim() ? text : "", ...done.map((u) => u.spoiler ? `||${u.markdown}||` : u.markdown)].filter(Boolean).join("\n");
       if (!content.trim()) return;
       input.value = "";
       lastTypingSent = 0; // allow next keystroke to fire a fresh typing frame immediately
@@ -2757,6 +2775,14 @@ function wireControls() {
   // browser unchanged.
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // Spoiler reveal: clicking an unrevealed spoiler reveals it; eats the click so
+    // links inside the spoiler don't fire before the user has seen the content.
+    const spoiler = e.target.closest && e.target.closest(".spoiler");
+    if (spoiler && !spoiler.classList.contains("revealed")) {
+      e.preventDefault();
+      spoiler.classList.add("revealed");
+      return;
+    }
     const a = e.target.closest && e.target.closest("a[href]");
     if (!a) return;
     let u;

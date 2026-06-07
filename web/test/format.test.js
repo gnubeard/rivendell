@@ -416,6 +416,61 @@ test("blob image XSS: injected alt text is HTML-escaped before reaching the img"
   assert.ok(!out.includes("<script>"), "raw script tag must not survive");
 });
 
+// --- spoiler tag tests -------------------------------------------------------
+
+test("spoiler: ||text|| renders a spoiler span", () => {
+  const out = formatMessage("||secret||");
+  assert.ok(out.includes('<span class="spoiler"'), "spoiler span present");
+  assert.ok(out.includes("secret"), "content preserved");
+  assert.ok(!out.includes("||"), "markers consumed");
+});
+
+test("spoiler: inline formatting inside a spoiler still applies", () => {
+  const out = formatMessage("||**bold** secret||");
+  assert.ok(out.includes('<span class="spoiler"'), "spoiler span present");
+  assert.ok(out.includes("<strong>bold</strong>"), "bold inside spoiler rendered");
+});
+
+test("spoiler: unmatched || is rendered literally", () => {
+  const out = formatMessage("hello ||world");
+  assert.ok(!out.includes('<span class="spoiler"'), "no spoiler span without closing ||");
+  assert.ok(out.includes("||world"), "literal text preserved");
+});
+
+test("spoiler: multiple spoilers on one line", () => {
+  const out = formatMessage("||a|| and ||b||");
+  assert.equal(out.match(/<span class="spoiler"/g)?.length, 2, "two spoiler spans");
+});
+
+test("spoiler: blob image inside a spoiler wraps the image", () => {
+  const out = formatMessage(`||![photo](/api/blobs/${FAKE_HASH})||`);
+  assert.ok(out.includes('<span class="spoiler"'), "spoiler span present");
+  assert.ok(out.includes('<img class="msg-image"'), "image rendered inside");
+});
+
+test("spoiler: not rendered inside a code span", () => {
+  const out = formatMessage("`||not a spoiler||`");
+  assert.ok(out.includes("<code>||not a spoiler||</code>"), "inside code is literal");
+  assert.ok(!out.includes('<span class="spoiler"'), "no spoiler span inside code");
+});
+
+test("spoiler: XSS — HTML in content is escaped", () => {
+  const out = formatMessage('||<script>bad</script>||');
+  assert.ok(!out.includes("<script>"), "raw tag escaped");
+  assert.ok(out.includes("&lt;script&gt;"), "angle brackets escaped");
+});
+
+test("spoiler: replySnippet strips || markers", () => {
+  assert.equal(replySnippet("||secret text||"), "secret text");
+  assert.equal(replySnippet("before ||hidden|| after"), "before hidden after");
+});
+
+test("spoiler: spoiler with a link inside", () => {
+  const out = formatMessage("||see https://example.com/page||");
+  assert.ok(out.includes('<span class="spoiler"'), "spoiler span present");
+  assert.ok(out.includes('href="https://example.com/page"'), "link inside spoiler rendered");
+});
+
 test("parsePermalink rejects the old /m/ slash form and junk", () => {
   // Regression: hrefs once emitted `#c5/m/123`, which the parser must NOT accept
   // as that drift silently broke shared links on fresh load.

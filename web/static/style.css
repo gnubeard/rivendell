@@ -336,6 +336,10 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-body a.msg-image-link { display: inline-block; }
 .msg-body img.msg-image { display: block; max-width: min(360px, 100%); max-height: 280px; width: auto; height: auto; margin: 0.3rem 0; border-radius: var(--radius); background: var(--bg-3); object-fit: contain; }
 .msg-body code { background: var(--bg-3); padding: 0.05rem 0.3rem; border-radius: 4px; font-family: var(--mono); font-size: 0.85em; }
+.msg-body .spoiler { background: var(--text-faint); color: transparent; border-radius: 3px; padding: 0 3px; cursor: pointer; user-select: none; display: inline-block; transition: background 0.15s, color 0.15s; }
+.msg-body .spoiler.revealed { background: var(--bg-3); color: var(--text); user-select: auto; }
+.msg-body .spoiler:not(.revealed) img.msg-image { filter: blur(16px); }
+.msg-body .spoiler:not(.revealed) a { color: transparent; }
 .msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; position: relative; line-height: 1; }
 .msg-body pre.code-block code { background: none; padding: 0; }
 /* Language label shown top-right when a language hint is present. */
@@ -426,6 +430,10 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .attachment.copied::after { content: "Copied"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; color: #fff; background: rgba(0,0,0,.55); }
 .attachment-remove { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
 .attachment-remove:hover { background: rgba(0,0,0,.85); }
+.attachment-spoiler-btn { position: absolute; bottom: 2px; left: 2px; height: 18px; padding: 0 5px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 3px; background: rgba(0,0,0,.6); color: rgba(255,255,255,.7); font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em; line-height: 1; cursor: pointer; }
+.attachment-spoiler-btn:hover { background: rgba(0,0,0,.85); color: #fff; }
+.attachment-spoiler-btn.active { background: rgba(255,255,255,.25); color: #fff; }
+.attachment.spoiler-marked img { filter: blur(6px); }
 .attachment-spinner { position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: attachment-spin 0.7s linear infinite; }
 @keyframes attachment-spin { to { transform: rotate(360deg); } }
 .emoji-picker { position: absolute; bottom: 100%; right: 1.2rem; margin: 0 0 3px; padding: 0.4rem; width: 239px; max-height: 240px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 0.25rem; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.45); z-index: 10; }
