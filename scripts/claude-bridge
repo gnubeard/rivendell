@@ -160,7 +160,7 @@ trap on_shutdown INT TERM
 
 # handle_channel <channel_id> <mode>
 # mode = "normal"  → full Claude in $REPO_DIR with BRIDGE_PREAMBLE
-# mode = "dm"      → low-effort Claude in /tmp, no write tools, no preamble
+# mode = "dm"      → low-effort Claude in $REPO_DIR, write tools disallowed, no preamble
 handle_channel() {
     local channel_id="$1"
     local mode="$2"
@@ -208,9 +208,11 @@ handle_channel() {
 
         local claude_exit=0 claude_out
         if [ "$mode" = "dm" ]; then
-            # DM mode: low-effort, no file write tools, run outside the repo.
-            claude_out=$(cd /tmp && claude --print --effort low \
-                --disallowed-tools "Edit,Write,Bash" \
+            # DM mode: low-effort, no file write tools.
+            # -- terminates flag parsing so $content isn't consumed as a tool name
+            # by the greedy <tools...> nargs of --disallowed-tools.
+            claude_out=$(cd "$REPO_DIR" && claude --print --effort low \
+                --disallowed-tools "Edit,Write,Bash" -- \
                 "$content" 2>&1) || claude_exit=$?
         else
             claude_out=$(cd "$REPO_DIR" && claude --print "$BRIDGE_PREAMBLE$content" 2>&1) || claude_exit=$?
