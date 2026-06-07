@@ -203,7 +203,7 @@ $TRIMMED"
         fi
 
         # Update status to reflect the last run outcome.
-        RUN_TIME=$(date +%H:%M)
+        RUN_TIME=$(TZ=America/Chicago date +%H:%M)
         if [ "$CLAUDE_EXIT" -eq 0 ]; then
             set_status_text "last run: ✅ done at $RUN_TIME"
         else
