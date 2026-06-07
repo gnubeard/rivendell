@@ -662,6 +662,14 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		}
 		s.ringMu.Unlock()
 		relayToUser(otherID)
+		// Multi-login: every one of the responder's connections was rung
+		// (SendToUser fans out), but only this one answered/declined. Tell the
+		// others to stop ringing. This is a dismiss, NOT a relayed
+		// ring_response — echoing accept:true would make a second tab also join
+		// the call. The connection that answered already cleared its own ring
+		// locally, so it treats this as a harmless no-op.
+		dismiss, _ := json.Marshal(event{Type: "voice.ring_dismissed", Payload: map[string]int64{"dm_channel_id": dmChannelID}})
+		s.hub.SendToUser(userID, dismiss)
 	}
 }
 

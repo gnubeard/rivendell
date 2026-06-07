@@ -14,7 +14,7 @@ A self-hosted chat server for a small group of friends — a minimal, private
 alternative to Discord and Slack. Ships as a single Go binary backed by Postgres
 with a vanilla-JS web client and no frontend dependencies.
 
-- **Backend:** Go 1.22, stdlib only + `github.com/lib/pq` (one dependency, zero transitive)
+- **Backend:** Go 1.26, stdlib only + `github.com/lib/pq` (one dependency, zero transitive)
 - **Frontend:** Vanilla JS, no framework, no bundler, no npm packages
 - **Database:** PostgreSQL, embedded migrations, no migration tool dependency
 
@@ -32,7 +32,11 @@ with a vanilla-JS web client and no frontend dependencies.
 - Presence and status (online / away / do not disturb / invisible, with auto-idle)
 - Unread indicators with DM chime, per-channel/DM mute, and opt-in desktop notifications
 - Message permalinks — every timestamp links to that point in history
-- Avatars (PNG, JPEG, WebP, GIF)
+- Voice channels and 1:1 voice calls — P2P WebRTC mesh, no media server (STUN/TURN configurable)
+- Image and file uploads — content-addressed blob store, paste/drop/attach, inline rendering
+- Inline markdown links and image embeds, with link previews for select hosts
+- Avatars (PNG, JPEG, WebP, GIF) and per-user UI themes
+- Bot accounts with permanent Bearer tokens for scripting against the API
 - Magic-link onboarding — no email server required; admins mint single-use links
 - Soft-delete channels with admin restore or hard purge
 - Private-channel invites
@@ -42,7 +46,7 @@ with a vanilla-JS web client and no frontend dependencies.
 
 ## Requirements
 
-- **Go 1.22+** (only needed to build from source)
+- **Go 1.26+** (only needed to build from source)
 - **PostgreSQL 14+**
 - **Node.js** (only for running the frontend tests)
 
@@ -106,8 +110,13 @@ All configuration is via environment variables. All are optional except
 | `RIVENDELL_MAGIC_LINK_TTL` | `72h` | Set-password link lifetime. |
 | `RIVENDELL_MAX_MESSAGE_BYTES` | `8000` | Reject messages larger than this. |
 | `RIVENDELL_MAX_AVATAR_BYTES` | `524288` | Reject avatar uploads larger than this (bytes; 512 KiB). |
+| `RIVENDELL_MAX_IMAGE_BYTES` | `5242880` | Reject image/file uploads larger than this (bytes; 5 MiB). |
+| `RIVENDELL_BLOBS_DIR` | `blobs` | Directory for content-addressed uploaded blobs. |
 | `RIVENDELL_INSTANCE_NAME` | `rivendell` | Display name for this instance — shown as the page title and brand. |
 | `RIVENDELL_BOOTSTRAP_ADMIN` | `admin` | Username auto-created on first boot when no admins exist. |
+| `RIVENDELL_STUN_URL` | `stun:stun.l.google.com:19302` | STUN server for WebRTC voice. |
+| `RIVENDELL_TURN_URL` | _(none)_ | Comma-separated TURN endpoints (e.g. `turn:turn.example.com:3478`). Omit for STUN-only. |
+| `RIVENDELL_TURN_SECRET` | _(none)_ | Shared HMAC secret for time-limited coturn (TURN) credentials. |
 
 ---
 

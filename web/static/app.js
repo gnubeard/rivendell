@@ -3466,6 +3466,19 @@ async function onVoiceEvent(evt) {
     return;
   }
 
+  if (evt.type === "voice.ring_dismissed") {
+    // Another of our own sessions (tab/device) answered or declined this ring.
+    // Stop ringing here too, but do NOT join — that session handles the call.
+    if (ringState && ringState.channelId === p.dm_channel_id) {
+      stopRingSound();
+      stopPendingSound();
+      ringState = null;
+      renderRingBanner();
+      renderChannelHeader(state.channels[state.activeChannelId]);
+    }
+    return;
+  }
+
   if (evt.type === "voice.end") {
     // The other party in a DM hung up (or dropped): the call ends for both.
     // Tear down our side without echoing a voice.leave (the server already
