@@ -43,8 +43,12 @@ internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presenc
 internal/httpapi/             server.go (routes/middleware/realtime),
                               handlers.go (handler bodies)
 web/index.html                single-page shell (login / set-password / app views)
-web/static/                   app.js, api.js, ws.js, format.js, state.js, style.css
-web/test/                     format.test.js, state.test.js (node:test)
+web/static/                   app.js, api.js, ws.js, format.js, state.js,
+                              voice.js, secret.js, notify.js, syntax.js, style.css
+web/test/                     format.test.js, state.test.js, voice.test.js,
+                              secret.test.js, notify.test.js, reactions.test.js,
+                              ws.test.js (node:test)
+docs/                         otr.md, voice.md, video.md — design docs
 ```
 
 Module path is `rivendell`; Go 1.26. Imports are `rivendell/internal/...`.
@@ -225,12 +229,23 @@ Key design invariants per feature — preserve these when modifying related code
 
 **File / image uploads** (migration `0014`). Content-addressed blobs on a local volume (`blobs/<2-hex-prefix>/<sha256>`), metadata in Postgres (`blobs` table), behind the `blobs.BlobStore` interface (`FSStore` the only impl). `POST /api/uploads` takes a raw image body, bounds it with `http.MaxBytesReader` (`RIVENDELL_MAX_IMAGE_BYTES`) *before* reading, **sniffs** the content type with `http.DetectContentType` (never trusts the header) and allowlists png/jpeg/webp/gif, then stores + dedups by hash; returns `{hash, url, content_type, size}`. `GET /api/blobs/{hash}` serves it **gated behind the session** (images stay as private as the channels they're in), validates the hash is 64-char lowercase hex (path-traversal immunity — the filename is never user input), and sets `Cache-Control: private, max-age=31536000, immutable` (blobs are immutable). Writes are atomic (tmp + rename). Uploads are idempotent — same bytes → same hash → one file. If the blob store can't be created at boot, uploads are disabled (503), not fatal. No thumbnails (CSS `max-width` handles display); no EXIF stripping yet (would have to happen *before* hashing). `TestBlobUploadAndServe` covers the lifecycle. No new dependencies — all stdlib. *Composer UX:* uploads (paste / drop / 📎) surface as preview tiles in a tray above the textarea (`#composer-attachments`), **not** as text in the box. Each tile shows a spinner while uploading and an × to remove once done; **send is blocked while any upload is in flight** (the Enter handler checks `uploadsPending()`). On send the done tiles' `![image](url)` markdown is appended to the typed text (one per line) and the tray clears; a send error puts both the text and the tiles back. Clicking a finished tile copies its blob markdown to the clipboard, so the same upload can be re-pasted freely (the store dedups by hash). State lives in `pendingUploads` in `wireComposer`; object URLs are revoked on remove and on successful send.
 
+**Secret chat / OTR-style E2E encryption** (migration `0015`). Ephemeral, session-scoped end-to-end encryption for DMs. Defends against passive server/DB compromise and authenticated MITM when the safety number is verified. Does **not** hide metadata, provide cryptographic deniability, work offline, or survive a page reload. See `docs/otr.md` for the full design. Key invariants — don't break these:
+- **All crypto is SubtleCrypto. We compose, never implement.** Ed25519 (identity signing), X25519 (ephemeral ECDH), HKDF-SHA-256 (key derivation), AES-256-GCM (AEAD message encryption), SHA-256 (fingerprinting).
+- **Identity key: non-extractable private key in IndexedDB.** `users.identity_key` holds the SPKI-encoded public key so peers can fetch it before chatting. `PUT /api/me/identity-key` publishes it. The private key never leaves the browser; even an XSS bug can't exfiltrate it. `secret.js` — `ensureIdentityKey`, `getMyPubKeyB64`.
+- **Offerer = lower user_id.** Same deterministic glare rule as voice. If both click 🔒 at once, the lower user_id's offer wins; the higher user_id's `secret.offer` is dropped.
+- **Handshake: authenticated ephemeral ECDH (SIGMA-lite).** Each party signs their ephemeral X25519 public key with their Ed25519 identity key, binding it to the session nonce, sender, and recipient. A verified peer can't be MITM'd without access to the identity private key.
+- **Message crypto: symmetric hash ratchet (HKDF chain).** Per-message keys via `ratchetStep`; per-message random 96-bit nonce; AEAD AAD binds sender, counter, channel, and session nonce — prevents replay and cross-context reuse. Receiver enforces strict counter monotonicity (`replayOk`).
+- **Sessions are in JS memory only.** Reloading the page ends the session — no ciphertext or keys are ever persisted server-side. The server relays `secret.*` WS frames as opaque blobs exactly like voice signaling (`handleSecretWSMessage`), with the same DM-membership validation.
+- **Feature-detected at load.** `isSecretSupported()` probes for Ed25519 + X25519 WebCrypto; the 🔒 button is disabled with a tooltip on older browsers. No fallback to weaker primitives — ever.
+- **Verified vs. unverified is loud in the UI.** A session where the safety number hasn't been compared out-of-band shows as yellow (encrypted but unauthenticated); green means verified. A peer key change revokes verification loudly — never silently.
+- **Pure helpers are all unit-tested in secret.test.js:** `formatSafetyNumber`, `buildAAD`, `replayOk`, `canonicalPubKeyOrder`, `ratchetStep`, `encryptMessage`, `decryptMessage`.
+- **Multi-tab sibling dismiss.** When a peer's tab accepts a request, the server sends `secret.dismiss` to the peer's other connections so their request banners clear — identical to the `voice.ring_dismissed` pattern. The one tab that completed the handshake holds the session; others have no matching pending state and ignore the accept.
+- **Session ends on peer disconnect.** `terminateSessionForPeer` ends any active session when presence signals the peer went offline; `sendEndAllOnUnload` fires `secret.end` best-effort on page unload.
+
 When in doubt on UI, favor clarity over polish — aesthetics are secondary to "it works." Keep changes small and tested. Commit a baseline before large changes so diffs and rollbacks are clean.
 
 ## Backlog
 
 **Deferred / future:**
-- **[XL] OTR / end-to-end encrypted messaging.** Different security model entirely:
-  client-side crypto, key generation/exchange, key+trust management (multi-device),
-  server stores only ciphertext, verification UI. Signal/OMEMO class — needs its own
-  design pass before any implementation.
+- **[XL] OMEMO-class E2E (not OTR).** OTR-style ephemeral secret chat is implemented (see above). What remains deferred is the fundamentally different product: ciphertext at rest, async delivery, multi-device key sync, encrypted scrollback/search. That's a separate design pass — see `docs/otr.md` "Non-goals for v1.3" for the scope fence.
+- **EXIF stripping on uploaded images.** Would have to happen before hashing (so it affects the stored blob). Currently no-op; no new deps.
