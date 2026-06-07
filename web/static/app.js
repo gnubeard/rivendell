@@ -20,6 +20,9 @@ import {
   acceptSecret,
   declineSecret,
   endSecret,
+  clearEndedSession,
+  terminateSessionForPeer,
+  sendEndAllOnUnload,
   sendSecretMessage,
   handleSecretEvent,
   getPendingOffer,
@@ -515,6 +518,9 @@ async function enterApp() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) onWindowFocus();
   });
+  // Best-effort: notify the peer that this session is ending when the page unloads.
+  // The presence-based fallback handles cases where this send doesn't make it.
+  window.addEventListener("beforeunload", () => { sendEndAllOnUnload(); });
   try {
     startRealtime();
   } catch (e) {
@@ -1220,7 +1226,7 @@ function renderChannelHeader(ch) {
     // Secret chat button: visible on DMs if browser supports WebCrypto.
     const supported = secretBtn.dataset.supported !== "0";
     const sess = getSession(ch.id);
-    secretBtn.className = "icon-btn" + (sess ? " secret-btn-active" : "");
+    secretBtn.className = "icon-btn" + ((sess && sess.phase === "active") ? " secret-btn-active" : "");
     if (sess && sess.phase === "active") {
       secretBtn.textContent = "🔒";
       secretBtn.title = sess.verified ? "Secret session — verified (click to view safety number)" : "Secret session — unverified (click to view safety number)";
@@ -1584,20 +1590,27 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
   // Secret session mode: render the in-memory encrypted message list instead
   // of the server-backed history. The notice at top makes the context clear.
-  // Hide the image attach button in a secret session — uploads aren't supported.
+  // Hide the image attach button in an active or ended secret session.
   const attachBtn = $("#attach-btn");
-  if (attachBtn) attachBtn.hidden = !!(secretSess && secretSess.phase === "active");
+  const inSecretView = !!(secretSess && (secretSess.phase === "active" || secretSess.phase === "ended"));
+  if (attachBtn) attachBtn.hidden = inSecretView;
+  // Reset the composer if we're not in a secret view (e.g. switching channels).
+  if (!inSecretView) {
+    const inp = $("#compose-input");
+    if (inp && inp.disabled) { inp.disabled = false; inp.placeholder = "Message…"; }
+  }
 
-  if (secretSess && secretSess.phase === "active") {
-    const notice = el("div", {
-      class: "secret-header" + (secretSess.verified ? " verified" : ""),
-      title: "View safety number",
-      onclick: () => openSafetyModal(state.activeChannelId, secretSess),
-    },
-      secretSess.verified
-        ? "🔒 End-to-end encrypted · verified — messages are not saved"
-        : "🔒 End-to-end encrypted — messages are not saved · safety number unverified");
-    wrap.append(notice);
+  if (inSecretView) {
+    if (secretSess.phase === "active") {
+      wrap.append(el("div", {
+        class: "secret-header" + (secretSess.verified ? " verified" : ""),
+        title: "View safety number",
+        onclick: () => openSafetyModal(state.activeChannelId, secretSess),
+      },
+        secretSess.verified
+          ? "🔒 End-to-end encrypted · verified — messages are not saved"
+          : "🔒 End-to-end encrypted — messages are not saved · safety number unverified"));
+    }
     for (const m of secretSess.messages) {
       const u = state.users[m.fromUserId];
       const avatar = u && u.has_avatar
@@ -1613,6 +1626,29 @@ function renderMessages(forceBottom = false, holdPosition = false) {
               el("span", { class: "msg-author" }, u ? (u.display_name || u.username) : "?"),
               el("span", { class: "msg-time" }, new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
             body)));
+    }
+    if (secretSess.phase === "ended") {
+      const activeCh = state.channels[state.activeChannelId];
+      const otherId = activeCh && S.otherDMParticipant(activeCh, state.me && state.me.id);
+      const peer = otherId && state.users[otherId];
+      const peerName = peer ? (peer.display_name || peer.username) : "The other person";
+      wrap.append(el("div", { class: "secret-ended-notice" },
+        el("span", {}, "🔒 " + peerName + " has left this session — messages were not saved"),
+        el("button", {
+          class: "link small",
+          onclick: () => {
+            clearEndedSession(state.activeChannelId);
+            renderMessages(true);
+            renderChannelHeader(state.channels[state.activeChannelId]);
+            const inp = $("#compose-input");
+            if (inp) { inp.disabled = false; inp.placeholder = "Message…"; }
+          },
+        }, "Return to chat")));
+    }
+    const inp = $("#compose-input");
+    if (inp) {
+      inp.disabled = secretSess.phase === "ended";
+      inp.placeholder = secretSess.phase === "ended" ? "Session ended" : "Message…";
     }
     if (atBottom) wrap.scrollTop = wrap.scrollHeight;
     else wrap.scrollTop = prevTop;
@@ -3437,10 +3473,14 @@ function applyPresence(evt) {
   renderMembers();
   renderMe();
   renderDMs();
-  // Repaint the DM header dot if we're in a DM (DMs never have a topic-edit input,
-  // so this call is always safe — no risk of blowing an in-progress topic edit).
+  // Repaint the DM header dot if we're in a DM.
   const ch = state.channels[state.activeChannelId];
   if (ch && ch.is_dm) renderChannelHeader(ch);
+  // If a peer just went offline and we have an active secret session with them,
+  // end it gracefully — they can't receive or send anymore.
+  if (!evt.payload.online) {
+    terminateSessionForPeer(evt.payload.user_id);
+  }
 }
 
 function schedulePresenceUpdate(evt) {
@@ -3916,6 +3956,7 @@ function wireSecretControls() {
 
     // No active session → initiate one.
     if (sess && sess.phase === "offered") return; // already pending, wait
+    if (sess && sess.phase === "ended") clearEndedSession(ch.id); // stale view — clear it first
 
     const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
     const peer = otherId && state.users[otherId];

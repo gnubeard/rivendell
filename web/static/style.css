@@ -563,6 +563,7 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
 .secret-btn-unverified { color: var(--text-dim); }
 .secret-btn-verified { color: #4caf50; }
 .secret-req-badge { display: inline-block; margin-left: 4px; line-height: 1; animation: lock-jiggle 0.45s ease-in-out infinite alternate; transform-origin: center bottom; }
+.secret-ended-notice { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1rem; margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-dim); border-top: 1px solid var(--border); text-align: center; }
 @keyframes lock-jiggle { 0% { transform: rotate(-18deg); } 100% { transform: rotate(18deg); } }
 
 /* Safety number modal */

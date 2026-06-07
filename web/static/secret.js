@@ -488,6 +488,35 @@ export function endSecret(dmChannelId) {
   emit({ type: "session-ended", dmChannelId });
 }
 
+// clearEndedSession removes an "ended" session from the map so the UI can
+// return to the normal channel view. Called when the user clicks "Return to chat".
+export function clearEndedSession(dmChannelId) {
+  const sess = sessions.get(dmChannelId);
+  if (sess && sess.phase === "ended") sessions.delete(dmChannelId);
+}
+
+// terminateSessionForPeer ends any active session with peerUserId in-place,
+// without sending a WS message (the peer is already gone). Used when presence
+// signals the peer went offline.
+export function terminateSessionForPeer(peerUserId) {
+  for (const [dmChannelId, sess] of sessions) {
+    if (sess.peerUserId === peerUserId && (sess.phase === "active" || sess.phase === "offered" || sess.phase === "incoming")) {
+      sess.phase = "ended";
+      emit({ type: "session-ended", dmChannelId });
+    }
+  }
+}
+
+// sendEndAllOnUnload sends secret.end for every active session before page
+// unload. Best-effort only — the WS may already be closing.
+export function sendEndAllOnUnload() {
+  for (const [dmChannelId, sess] of sessions) {
+    if (sess.phase === "active" || sess.phase === "offered") {
+      try { _sendFn({ type: "secret.end", dm_channel_id: dmChannelId }); } catch {}
+    }
+  }
+}
+
 // sendSecretMessage encrypts `text` and sends it to the peer via secret.msg.
 export async function sendSecretMessage(dmChannelId, text) {
   const sess = sessions.get(dmChannelId);
@@ -523,9 +552,17 @@ export async function handleSecretEvent(evt, peerIdKeyResolver) {
   }
 
   if (evt.type === "secret.end") {
-    const had = sessions.has(dmChannelId);
-    sessions.delete(dmChannelId);
-    if (had) emit({ type: "session-ended", dmChannelId });
+    const sess = sessions.get(dmChannelId);
+    if (!sess) return;
+    if (sess.phase === "active") {
+      // Peer explicitly ended an active session — keep history, show "ended" state.
+      sess.phase = "ended";
+      emit({ type: "session-ended", dmChannelId });
+    } else {
+      // Peer declined/cancelled a pending offer — just clean up.
+      sessions.delete(dmChannelId);
+      emit({ type: "session-ended", dmChannelId });
+    }
     return;
   }
 
