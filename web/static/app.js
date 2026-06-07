@@ -1506,9 +1506,9 @@ function scrollToBottom(wrap) {
     wrap.scrollTop = wrap.scrollHeight;
     requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
   });
-  // Images and iframes (e.g. YouTube embeds) load asynchronously and expand
-  // the container after the rAF pass. Re-pin when each one finishes, but only
-  // if the reader hasn't manually scrolled away since we pinned.
+  // Images load asynchronously and expand the container after the rAF pass.
+  // Re-pin when each one finishes, but only if the reader hasn't manually
+  // scrolled away since we pinned.
   // We capture the target scrollTop now (= scrollHeight − clientHeight, the max
   // possible value). After the pin, wrap.scrollTop == targetTop. When the image
   // loads, wrap.scrollHeight grows but scrollTop stays put — so checking
@@ -1516,8 +1516,8 @@ function scrollToBottom(wrap) {
   // scrolled away (vs. checking distance-from-new-bottom, which would be the
   // image height and could easily exceed any fixed pixel threshold).
   const targetTop = wrap.scrollHeight - wrap.clientHeight;
-  wrap.querySelectorAll("img, iframe").forEach(media => {
-    if (media.tagName === "IMG" && media.complete) return;
+  wrap.querySelectorAll("img").forEach(media => {
+    if (media.complete) return;
     media.addEventListener("load", () => {
       if (wrap.scrollTop >= targetTop - 5)
         wrap.scrollTop = wrap.scrollHeight;
@@ -2349,12 +2349,15 @@ function buildLinkPreview(content) {
 }
 
 function renderYouTubeEmbed(videoID) {
-  const iframe = document.createElement("iframe");
-  iframe.src = `https://www.youtube-nocookie.com/embed/${videoID}`;
-  iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-  iframe.allowFullscreen = true;
-  iframe.loading = "lazy";
-  return el("div", { class: "yt-embed" }, iframe);
+  return el("a", {
+    class: "yt-thumb",
+    href: `https://www.youtube.com/watch?v=${videoID}`,
+    target: "_blank",
+    rel: "noopener noreferrer",
+  },
+    el("img", { src: `https://i.ytimg.com/vi/${videoID}/hqdefault.jpg`, alt: "YouTube video", loading: "lazy" }),
+    el("span", { class: "yt-play" }, "▶"),
+  );
 }
 
 function renderLinkPreviewCard(url, p) {
