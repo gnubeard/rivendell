@@ -836,11 +836,13 @@ function renderDMs() {
     const otherId = S.otherDMParticipant(ch, state.me.id);
     const other = otherId != null ? state.users[otherId] : null;
     const unread = state.unread[id] || 0;
+    const hasSecretReq = !!(secretRequestState && secretRequestState.dmChannelId === id);
     const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
         el("span", { class: "ch-name" }, other ? other.display_name : ch.name),
+        hasSecretReq ? el("span", { class: "secret-req-badge", title: "Secret chat request" }, "🔒") : null,
         unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
         el("span", { class: "ch-controls" },
           muteToggle(id),
@@ -3837,19 +3839,20 @@ function renderSecretBanner() {
     $("#secret-accept-btn").hidden = false;
     $("#secret-decline-btn").textContent = "Decline";
     banner.hidden = false;
-    return;
+  } else {
+    // Outgoing offer: we sent a request and are waiting for acceptance.
+    const activeCh = state.channels[state.activeChannelId];
+    const sess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+    if (sess && sess.phase === "offered") {
+      $("#secret-banner-text").textContent = "Secret chat request sent — waiting for the other person to accept…";
+      $("#secret-accept-btn").hidden = true;
+      $("#secret-decline-btn").textContent = "Cancel";
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
   }
-  // Outgoing offer: we sent a request and are waiting for acceptance.
-  const activeCh = state.channels[state.activeChannelId];
-  const sess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
-  if (sess && sess.phase === "offered") {
-    $("#secret-banner-text").textContent = "Secret chat request sent — waiting for the other person to accept…";
-    $("#secret-accept-btn").hidden = true;
-    $("#secret-decline-btn").textContent = "Cancel";
-    banner.hidden = false;
-    return;
-  }
-  banner.hidden = true;
+  renderDMs();
 }
 
 // wireSecretControls attaches click handlers to secret-related UI elements.
@@ -3873,6 +3876,7 @@ function wireSecretControls() {
     }
     try {
       await acceptSecret(dmChannelId, fromUserId, offer);
+      selectChannel(dmChannelId);
     } catch (e) {
       alert("Secret chat setup failed: " + (e && e.message));
     }

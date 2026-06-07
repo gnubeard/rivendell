@@ -557,6 +557,8 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 .secret-btn-active { opacity: 1; }
 .secret-btn-unverified { color: var(--text-dim); }
 .secret-btn-verified { color: #4caf50; }
+.secret-req-badge { display: inline-block; margin-left: 4px; line-height: 1; animation: lock-jiggle 0.45s ease-in-out infinite alternate; transform-origin: center bottom; }
+@keyframes lock-jiggle { 0% { transform: rotate(-18deg); } 100% { transform: rotate(18deg); } }
 
 /* Safety number modal */
 .safety-body { padding: 0.6rem 0; }
