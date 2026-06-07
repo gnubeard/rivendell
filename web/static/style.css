@@ -542,7 +542,24 @@ body.dm-active #members-toggle { display: none; }
   flex-shrink: 0;
 }
 .ring-banner #ring-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ring-banner #secret-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secret-banner { background: color-mix(in srgb, var(--accent) 8%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
 button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
+
+/* Secret session styles */
+.secret-header { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.6rem 1rem; font-size: 0.82rem; color: var(--text-dim); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.secret-header.verified { color: #4caf50; }
+.msg.secret { opacity: 0.96; }
+.secret-btn-active { opacity: 1; }
+.secret-btn-unverified { color: var(--text-dim); }
+.secret-btn-verified { color: #4caf50; }
+
+/* Safety number modal */
+.safety-body { padding: 0.6rem 0; }
+.safety-number { font-family: monospace; font-size: 1.05rem; letter-spacing: 0.08em; text-align: center; padding: 0.9rem 0; color: var(--text); line-height: 1.9; word-break: break-all; }
+.safety-status { text-align: center; font-size: 0.9rem; margin: 0.3rem 0 0.6rem; }
+.safety-status.verified { color: #4caf50; }
+.safety-meta { margin-top: 1rem; font-size: 0.8rem; }
 
 .call-strip {
   display: flex; align-items: center; gap: 0.3rem;

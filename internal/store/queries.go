@@ -14,13 +14,14 @@ var ErrNotFound = errors.New("store: not found")
 // userCols is the canonical projection used by scanUser.
 const userCols = `id, username, display_name, role, status, status_text, theme,
 	(avatar IS NOT NULL) AS has_avatar, (password_hash IS NOT NULL) AS has_password,
-	is_active, is_bot, created_at, last_seen_at`
+	is_active, is_bot, created_at, last_seen_at, identity_key`
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var lastSeen sql.NullTime
+	var identityKey sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.Status,
-		&u.StatusText, &u.Theme, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.IsBot, &u.CreatedAt, &lastSeen)
+		&u.StatusText, &u.Theme, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.IsBot, &u.CreatedAt, &lastSeen, &identityKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -29,6 +30,9 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	}
 	if lastSeen.Valid {
 		u.LastSeenAt = &lastSeen.Time
+	}
+	if identityKey.Valid {
+		u.IdentityKey = &identityKey.String
 	}
 	return u, nil
 }
@@ -100,6 +104,10 @@ func (s *Store) SetActive(ctx context.Context, id int64, active bool) error {
 
 func (s *Store) SetBot(ctx context.Context, id int64, bot bool) error {
 	return s.exec(ctx, `UPDATE users SET is_bot = $2, updated_at = now() WHERE id = $1`, id, bot)
+}
+
+func (s *Store) SetIdentityKey(ctx context.Context, id int64, key string) error {
+	return s.exec(ctx, `UPDATE users SET identity_key = $2, identity_key_updated_at = now(), updated_at = now() WHERE id = $1`, id, key)
 }
 
 func (s *Store) TouchLastSeen(ctx context.Context, id int64) error {

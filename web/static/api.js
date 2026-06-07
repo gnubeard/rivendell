@@ -40,6 +40,7 @@ export const api = {
   me: () => req("GET", "/api/me"),
   updateMe: (patch) => req("PATCH", "/api/me", patch),
   setStatus: (status) => req("PUT", "/api/me/status", { status }),
+  publishIdentityKey: (key) => req("PUT", "/api/me/identity-key", { key }),
   uploadAvatar: async (file) => {
     const res = await fetch("/api/me/avatar", {
       method: "POST",

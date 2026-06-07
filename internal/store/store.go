@@ -128,6 +128,7 @@ type User struct {
 	IsBot       bool       `json:"is_bot"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
+	IdentityKey *string    `json:"identity_key,omitempty"`
 }
 
 type Channel struct {

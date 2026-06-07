@@ -109,6 +109,7 @@
           <span id="channel-topic" class="channel-topic"></span>
         </div>
         <button id="call-btn" class="icon-btn" title="Call" aria-label="Start voice call" hidden>📞</button>
+        <button id="secret-btn" class="icon-btn" title="Start secret chat" aria-label="Start secret chat" hidden>🔒</button>
         <button id="search-btn" class="icon-btn" title="Search messages" aria-label="Search messages">🔍</button>
         <button id="pins-btn" class="icon-btn" title="Pinned messages" aria-label="Pinned messages">📌</button>
         <button id="members-toggle" class="icon-btn" title="Members" aria-label="Members">👥</button>
@@ -117,6 +118,11 @@
         <span id="ring-banner-text"></span>
         <button id="ring-accept-btn" class="primary small">Accept</button>
         <button id="ring-decline-btn" class="link danger">Decline</button>
+      </div>
+      <div id="secret-banner" class="ring-banner secret-banner" hidden>
+        <span id="secret-banner-text"></span>
+        <button id="secret-accept-btn" class="primary small">Accept</button>
+        <button id="secret-decline-btn" class="link danger">Decline</button>
       </div>
       <div id="history-banner" class="history-banner" hidden>
         Viewing history —
@@ -256,6 +262,24 @@
       </form>
       <div class="profile-foot">
         <button type="button" id="logout-btn" class="link danger">Sign out</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SAFETY NUMBER MODAL -->
+  <div id="safety-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2 id="safety-title">Safety number</h2>
+        <button id="safety-close" class="icon-btn">×</button>
+      </header>
+      <div class="safety-body">
+        <p class="hint">Compare this number with <span id="safety-peer-name">your contact</span> over another channel. If it matches on both sides, your conversation is protected from interception.</p>
+        <div id="safety-number" class="safety-number"></div>
+        <p id="safety-status" class="safety-status"></p>
+        <button id="safety-verify-btn" class="primary small">Mark as verified</button>
+        <button id="safety-end-btn" class="link danger small">End session</button>
+        <p class="hint safety-meta">Secret sessions are ephemeral — not saved, not searchable. Reload the page and this session is gone.</p>
       </div>
     </div>
   </div>

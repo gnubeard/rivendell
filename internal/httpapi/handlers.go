@@ -247,6 +247,36 @@ func (s *Server) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})
 }
 
+func (s *Server) handlePublishIdentityKey(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Key) == 0 {
+		writeErr(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	if _, err := base64.StdEncoding.DecodeString(req.Key); err != nil {
+		writeErr(w, http.StatusBadRequest, "key must be valid base64")
+		return
+	}
+	if err := s.st.SetIdentityKey(r.Context(), u.ID, req.Key); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not store identity key")
+		return
+	}
+	updated, err := s.st.GetUserByID(r.Context(), u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load user")
+		return
+	}
+	s.broadcast("user.update", updated, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"key": req.Key})
+}
+
 func (s *Server) handleUploadAvatar(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	ct := r.Header.Get("Content-Type")

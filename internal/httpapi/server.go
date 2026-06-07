@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/me", s.auth(s.handleUpdateMe))
 	mux.HandleFunc("PUT /api/me/status", s.auth(s.handleSetStatus))
 	mux.HandleFunc("POST /api/me/avatar", s.auth(s.handleUploadAvatar))
+	mux.HandleFunc("PUT /api/me/identity-key", s.auth(s.handlePublishIdentityKey))
 
 	// Users + presence.
 	mux.HandleFunc("GET /api/users", s.auth(s.handleListUsers))
@@ -444,6 +445,10 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 		s.handleVoiceWSMessage(c, data, msg.Type, msg.ChannelID, msg.DMChannelID, msg.ToUserID, msg.Muted, msg.Accept)
 		return
 	}
+	if strings.HasPrefix(msg.Type, "secret.") {
+		s.handleSecretWSMessage(c, data, msg.Type, msg.DMChannelID)
+		return
+	}
 	if msg.Type != "typing" || msg.ChannelID == 0 {
 		return
 	}
@@ -669,6 +674,64 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		// the call. The connection that answered already cleared its own ring
 		// locally, so it treats this as a harmless no-op.
 		dismiss, _ := json.Marshal(event{Type: "voice.ring_dismissed", Payload: map[string]int64{"dm_channel_id": dmChannelID}})
+		s.hub.SendToUser(userID, dismiss)
+	}
+}
+
+// handleSecretWSMessage routes secret.* frames from clients. All frames are
+// relayed opaquely between the two DM members — the server never sees plaintext
+// or keys. secret.accept additionally dismisses the acceptor's sibling sessions
+// (same pattern as voice.ring_response / voice.ring_dismissed).
+func (s *Server) handleSecretWSMessage(c *ws.Client, raw []byte, msgType string, dmChannelID int64) {
+	if dmChannelID == 0 {
+		return
+	}
+	userID := c.UserID()
+	ctx := context.Background()
+
+	ch, err := s.st.GetChannel(ctx, dmChannelID)
+	if err != nil || !ch.IsDM {
+		return
+	}
+	ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
+	if err != nil || len(ids) != 2 {
+		return
+	}
+	var otherID int64
+	selfOK := false
+	for _, id := range ids {
+		if id == userID {
+			selfOK = true
+		} else {
+			otherID = id
+		}
+	}
+	if !selfOK || otherID == 0 {
+		return
+	}
+
+	relayToUser := func(targetID int64) {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return
+		}
+		delete(payload, "type")
+		fromBytes, _ := json.Marshal(userID)
+		payload["from_user_id"] = fromBytes
+		out, err := json.Marshal(event{Type: msgType, Payload: payload})
+		if err != nil {
+			return
+		}
+		s.hub.SendToUser(targetID, out)
+	}
+
+	switch msgType {
+	case "secret.offer", "secret.msg", "secret.end":
+		relayToUser(otherID)
+	case "secret.accept":
+		relayToUser(otherID)
+		// Dismiss the acceptor's other open tabs so they don't stay in request state.
+		dismiss, _ := json.Marshal(event{Type: "secret.dismiss", Payload: map[string]int64{"dm_channel_id": dmChannelID}})
 		s.hub.SendToUser(userID, dismiss)
 	}
 }

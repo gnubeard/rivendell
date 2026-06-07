@@ -13,6 +13,21 @@ import {
   notificationsSupported,
 } from "./notify.js";
 import {
+  initSecret,
+  isSecretSupported,
+  getSession,
+  initiateSecret,
+  acceptSecret,
+  declineSecret,
+  endSecret,
+  sendSecretMessage,
+  handleSecretEvent,
+  getPendingOffer,
+  getMyPubKeyB64,
+  markVerified,
+  computeSafetyNumber,
+} from "./secret.js?v=__RIVENDELL_VERSION__";
+import {
   initVoice,
   fetchIceServers,
   joinVoiceChannel,
@@ -136,6 +151,10 @@ let replyingToId = null;      // id of the message the composer is replying to, 
 // Voice call state. ringState is set while a ring is in progress (either an
 // outgoing ring we sent, or an incoming ring we're showing the banner for).
 let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUserId }
+
+// Secret session state for the banner. secretRequestState is set when a peer
+// sends a secret.offer and we're showing the accept/decline banner.
+let secretRequestState = null; // { dmChannelId, fromUserId } | null
 // voiceCallState is the live state from voice.js (updated via callback).
 let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, participants: [] };
 // voiceRosters tracks voice participants per channel (sidebar display).
@@ -470,6 +489,14 @@ async function enterApp() {
   setSpeakingCallback(onSpeaking);
   fetchIceServers(); // best-effort; falls back to public STUN on error
   wireVoiceControls();
+  // Secret chat: init module, wire controls, check browser support.
+  initSecret(state.me.id, (msg) => socket && socket.send(msg), onSecretEvent);
+  wireSecretControls();
+  isSecretSupported().then((ok) => {
+    const btn = $("#secret-btn");
+    if (!ok) btn.title = "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
+    btn.dataset.supported = ok ? "1" : "0";
+  });
   // Wire interactive controls BEFORE realtime, so a transport problem can never
   // leave the composer/admin/avatar handlers unattached.
   wireComposer();
@@ -583,6 +610,12 @@ function startRealtime() {
       }
       if (evt.type.startsWith("voice.")) {
         onVoiceEvent(evt);
+      }
+      if (evt.type.startsWith("secret.")) {
+        handleSecretEvent(evt, (userId) => {
+          const u = state.users[userId];
+          return u ? u.identity_key || null : null;
+        }).catch((e) => console.warn("secret: event handler error:", e && e.message));
       }
       if (evt.type.startsWith("message")) {
         // A delete seen live earns a tombstone (unlike already-deleted history).
@@ -1134,6 +1167,7 @@ function renderChannelHeader(ch) {
   const dmDot = $("#channel-dm-dot");
   const dmCall = $("#channel-dm-call");
   const callBtn = $("#call-btn");
+  const secretBtn = $("#secret-btn");
   if (ch && ch.is_dm) {
     $("#channel-title").textContent = "@ " + dmDisplayName(ch);
     topicEl.textContent = "";
@@ -1174,10 +1208,24 @@ function renderChannelHeader(ch) {
       callBtn.title = "Start voice call";
     }
     callBtn.hidden = false;
+    // Secret chat button: visible on DMs if browser supports WebCrypto.
+    const supported = secretBtn.dataset.supported !== "0";
+    const sess = getSession(ch.id);
+    secretBtn.className = "icon-btn" + (sess ? " secret-btn-active" : "");
+    if (sess && sess.phase === "active") {
+      secretBtn.textContent = "🔒";
+      secretBtn.title = sess.verified ? "Secret session — verified (click to view safety number)" : "Secret session — unverified (click to view safety number)";
+      secretBtn.classList.add(sess.verified ? "secret-btn-verified" : "secret-btn-unverified");
+    } else {
+      secretBtn.textContent = "🔒";
+      secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
+    }
+    secretBtn.hidden = !supported;
     return;
   }
   dmDot.hidden = true;
   dmCall.hidden = true;
+  secretBtn.hidden = true;
   $("#dm-volume").hidden = true;
   dmVolumeChannelId = null; dmVolumeOpen = false;
   if (ch && !ch.is_dm) {
@@ -1519,11 +1567,39 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }
   }
   wrap.innerHTML = "";
+  const activeCh = state.channels[state.activeChannelId];
+  const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+  // Secret session mode: render the in-memory encrypted message list instead
+  // of the server-backed history. The notice at top makes the context clear.
+  if (secretSess && secretSess.phase === "active") {
+    const notice = el("div", { class: "secret-header" + (secretSess.verified ? " verified" : "") },
+      secretSess.verified
+        ? "🔒 End-to-end encrypted · verified — messages are not saved"
+        : "🔒 End-to-end encrypted — messages are not saved · safety number unverified");
+    wrap.append(notice);
+    for (const m of secretSess.messages) {
+      const u = state.users[m.fromUserId];
+      const name = u ? (u.display_name || u.username) : "?";
+      const isMine = m.fromUserId === state.me.id;
+      const body = el("div", { class: "msg-body" });
+      body.innerHTML = formatMessage(m.text, { embedImages: true });
+      wrap.append(
+        el("div", { class: "msg secret" },
+          el("div", { class: "msg-gutter" }, !isMine ? el("span", { class: "msg-avatar" }, name[0].toUpperCase()) : ""),
+          el("div", { class: "msg-main" },
+            el("div", { class: "msg-header" },
+              el("span", { class: "msg-user" }, isMine ? "You" : name),
+              el("span", { class: "msg-time" }, new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
+            body)));
+    }
+    if (atBottom) wrap.scrollTop = wrap.scrollHeight;
+    else wrap.scrollTop = prevTop;
+    return;
+  }
   const msgs = state.messages[state.activeChannelId] || [];
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
   // In a DM, either participant may pin (mirrors the server rule); elsewhere
   // pinning is moderator+.
-  const activeCh = state.channels[state.activeChannelId];
   const canPin = isMod || !!(activeCh && activeCh.is_dm);
   let lastUser = null;
   let lastTime = 0;
@@ -1993,6 +2069,24 @@ function wireComposer() {
       e.preventDefault();
       if (uploadsPending()) return; // an image is still uploading — don't send a half-baked message
       const text = input.value;
+      // Secret session: send encrypted via WS; no attachments, replies, or API call.
+      const activeCh = state.channels[state.activeChannelId];
+      const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+      if (secretSess && secretSess.phase === "active") {
+        if (!text.trim()) return;
+        input.value = "";
+        lastTypingSent = 0;
+        autoGrow();
+        try {
+          await sendSecretMessage(state.activeChannelId, text.trim());
+          renderMessages(false);
+        } catch (ex) {
+          input.value = text;
+          autoGrow();
+          alert("Secret message failed: " + ex.message);
+        }
+        return;
+      }
       const done = pendingUploads.filter((u) => u.status === "done");
       // Message body = the typed text followed by each attachment's image markdown,
       // one per line. Either part alone is enough to send.
@@ -3619,6 +3713,213 @@ function renderRingBanner() {
     $("#ring-decline-btn").textContent = "Cancel";
   }
   banner.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// Secret chat event handling
+// ---------------------------------------------------------------------------
+
+// onSecretEvent is the callback from secret.js for all session lifecycle events.
+async function onSecretEvent(evt) {
+  const { dmChannelId } = evt;
+
+  if (evt.type === "secret-request") {
+    // Peer sent a secret.offer. Show the accept/decline banner.
+    secretRequestState = { dmChannelId, fromUserId: evt.fromUserId };
+    renderSecretBanner();
+    return;
+  }
+
+  if (evt.type === "session-active") {
+    secretRequestState = null;
+    renderSecretBanner();
+    renderChannelHeader(state.channels[state.activeChannelId]);
+    if (state.activeChannelId === dmChannelId) renderMessages(true);
+    // Ensure our identity key is published so future handshakes can use it.
+    // Do it here rather than at initSecret time so we don't bother if the user
+    // never uses secret chat.
+    try {
+      const myKeyB64 = await getMyPubKeyB64();
+      if (state.me && state.me.identity_key !== myKeyB64) {
+        await api.publishIdentityKey(myKeyB64);
+      }
+    } catch (e) {
+      console.warn("secret: could not publish identity key:", e && e.message);
+    }
+    return;
+  }
+
+  if (evt.type === "session-ended") {
+    if (secretRequestState && secretRequestState.dmChannelId === dmChannelId) {
+      secretRequestState = null;
+    }
+    renderSecretBanner();
+    renderChannelHeader(state.channels[state.activeChannelId]);
+    if (state.activeChannelId === dmChannelId) renderMessages(true);
+    return;
+  }
+
+  if (evt.type === "message-received") {
+    if (state.activeChannelId === dmChannelId) {
+      renderMessages(false);
+    }
+    return;
+  }
+
+  if (evt.type === "dismiss") {
+    // Another of our tabs accepted/declined; clear the banner here too.
+    if (secretRequestState && secretRequestState.dmChannelId === dmChannelId) {
+      secretRequestState = null;
+      renderSecretBanner();
+    }
+    return;
+  }
+}
+
+function renderSecretBanner() {
+  const banner = $("#secret-banner");
+  if (!secretRequestState) {
+    banner.hidden = true;
+    return;
+  }
+  const { fromUserId } = secretRequestState;
+  const sender = state.users[fromUserId];
+  const name = sender ? (sender.display_name || sender.username) : "Someone";
+  $("#secret-banner-text").textContent = name + " wants to start a secret chat";
+  banner.hidden = false;
+}
+
+// wireSecretControls attaches click handlers to secret-related UI elements.
+function wireSecretControls() {
+  // Accept button on the secret request banner.
+  $("#secret-accept-btn").addEventListener("click", async () => {
+    if (!secretRequestState) return;
+    const { dmChannelId, fromUserId } = secretRequestState;
+    const offer = getPendingOffer(dmChannelId);
+    if (!offer) return;
+    secretRequestState = null;
+    renderSecretBanner();
+    // Ensure our identity key is published before accepting.
+    try {
+      const myKeyB64 = await getMyPubKeyB64();
+      if (state.me && state.me.identity_key !== myKeyB64) {
+        await api.publishIdentityKey(myKeyB64);
+      }
+    } catch (e) {
+      console.warn("secret: could not publish identity key:", e && e.message);
+    }
+    try {
+      await acceptSecret(dmChannelId, fromUserId, offer);
+    } catch (e) {
+      alert("Secret chat setup failed: " + (e && e.message));
+    }
+  });
+
+  // Decline button on the secret request banner.
+  $("#secret-decline-btn").addEventListener("click", () => {
+    if (!secretRequestState) return;
+    const { dmChannelId } = secretRequestState;
+    secretRequestState = null;
+    renderSecretBanner();
+    declineSecret(dmChannelId);
+  });
+
+  // The 🔒 button in the DM header.
+  $("#secret-btn").addEventListener("click", async () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    const sess = getSession(ch.id);
+
+    if (sess && sess.phase === "active") {
+      // Session active → show safety number modal.
+      openSafetyModal(ch.id, sess);
+      return;
+    }
+
+    // No active session → initiate one.
+    if (sess && sess.phase === "offered") return; // already pending, wait
+
+    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+    const peer = otherId && state.users[otherId];
+    const peerKey = peer && peer.identity_key;
+
+    // Ensure our own key is published before offering.
+    try {
+      const myKeyB64 = await getMyPubKeyB64();
+      if (state.me && state.me.identity_key !== myKeyB64) {
+        await api.publishIdentityKey(myKeyB64);
+      }
+    } catch (e) {
+      console.warn("secret: could not publish identity key:", e && e.message);
+    }
+
+    try {
+      await initiateSecret(ch.id, otherId, peerKey);
+    } catch (e) {
+      alert("Secret chat: " + (e && e.message));
+    }
+  });
+
+  // Safety number modal.
+  $("#safety-close").addEventListener("click", () => { $("#safety-modal").hidden = true; });
+  $("#safety-modal").addEventListener("click", (e) => {
+    if (e.target === $("#safety-modal")) $("#safety-modal").hidden = true;
+  });
+
+  // End session button inside the safety number modal.
+  $("#safety-end-btn").addEventListener("click", () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    $("#safety-modal").hidden = true;
+    endSecret(ch.id);
+  });
+
+  // Mark-as-verified button inside the safety number modal.
+  $("#safety-verify-btn").addEventListener("click", async () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    const sess = getSession(ch.id);
+    if (!sess) return;
+    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+    await markVerified(otherId, sess.peerIdKeyB64);
+    sess.verified = true;
+    renderChannelHeader(ch);
+    renderMessages();
+    // Update modal display.
+    const statusEl = $("#safety-status");
+    statusEl.textContent = "Verified";
+    statusEl.className = "safety-status verified";
+    $("#safety-verify-btn").hidden = true;
+  });
+}
+
+async function openSafetyModal(dmChannelId, sess) {
+  const ch = state.channels[dmChannelId];
+  const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+  const peer = otherId && state.users[otherId];
+  const peerName = peer ? (peer.display_name || peer.username) : "them";
+  $("#safety-title").textContent = "Safety number with " + peerName;
+  $("#safety-peer-name").textContent = peerName;
+  $("#safety-number").textContent = "Computing…";
+  const modal = $("#safety-modal");
+  modal.hidden = false;
+  try {
+    const myKeyB64 = await getMyPubKeyB64();
+    const number = await computeSafetyNumber(state.me.id, myKeyB64, otherId, sess.peerIdKeyB64);
+    $("#safety-number").textContent = number;
+  } catch (e) {
+    $("#safety-number").textContent = "(unavailable)";
+  }
+  const statusEl = $("#safety-status");
+  if (sess.verified) {
+    statusEl.textContent = "Verified";
+    statusEl.className = "safety-status verified";
+    $("#safety-verify-btn").hidden = true;
+  } else {
+    statusEl.textContent = "Not verified";
+    statusEl.className = "safety-status";
+    $("#safety-verify-btn").hidden = false;
+  }
 }
 
 // onVoiceStateChange folds a fresh state push from voice.js into the UI: it
