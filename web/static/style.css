@@ -367,6 +367,18 @@ button.primary:hover { filter: brightness(1.08); }
 .emoji-btn { position: absolute; right: 1.5rem; bottom: 1.15rem; width: 30px; height: 30px; padding: 0; border: none; background: transparent; cursor: pointer; font-size: 1.1rem; line-height: 1; opacity: 0.65; }
 #attach-btn { right: 3.4rem; }
 .emoji-btn:hover { opacity: 1; }
+/* Pending-upload tray: image previews sit above the textarea. Each tile shows the
+   image with an X to remove; a spinner overlays it until the upload resolves. */
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0 0 0.55rem; }
+.attachment { position: relative; width: 72px; height: 72px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--bg-3); cursor: pointer; }
+.attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attachment.uploading { cursor: default; }
+.attachment.uploading img { opacity: 0.45; }
+.attachment.copied::after { content: "Copied"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; color: #fff; background: rgba(0,0,0,.55); }
+.attachment-remove { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: rgba(0,0,0,.6); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
+.attachment-remove:hover { background: rgba(0,0,0,.85); }
+.attachment-spinner { position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: attachment-spin 0.7s linear infinite; }
+@keyframes attachment-spin { to { transform: rotate(360deg); } }
 .emoji-picker { position: absolute; bottom: 100%; right: 1.2rem; margin: 0 0 3px; padding: 0.4rem; width: 239px; max-height: 240px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 0.25rem; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.45); z-index: 10; }
 .emoji-choice { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 3px; border: none; border-radius: 6px; background: transparent; cursor: pointer; }
 .emoji-choice:hover { background: var(--bg-hover); }

@@ -1769,28 +1769,83 @@ function wireComposer() {
     setTimeout(() => { popup.hidden = true; completion = null; }, 200);
   });
 
-  // uploadAndInsert: POST a File to /api/uploads and insert the result as a blob
-  // image markdown token. A placeholder is inserted synchronously so the user can
-  // see something happening; it's replaced (or removed on failure) when the upload
-  // resolves. The placeholder uses a timestamp suffix to be unique within the
-  // composer text, so string-replace lands on the right spot even if the user typed
-  // more in the meantime.
+  // --- pending image attachments ----------------------------------------
+  // Uploads are modeled as attachment tiles in a tray above the textarea rather
+  // than as a cryptic text placeholder in the composer. Each pending upload is
+  // { id, objectUrl, status: "uploading"|"done", markdown }. While anything is
+  // still uploading, send is blocked (see the Enter handler). On send, the
+  // markdown for every done attachment is appended to the message; the tray then
+  // clears. The blob reference is still grabbable — clicking a finished tile copies
+  // its `![image](url)` markdown to the clipboard so the same upload can be re-pasted
+  // (the content-addressed store dedups, so spamming an image costs nothing).
+  let pendingUploads = [];
+  let uploadSeq = 0;
+  const tray = $("#composer-attachments");
+
+  // Any upload still in flight blocks send — guards against hitting Enter early.
+  const uploadsPending = () => pendingUploads.some((u) => u.status === "uploading");
+
+  function renderAttachments() {
+    tray.innerHTML = "";
+    tray.hidden = pendingUploads.length === 0;
+    for (const u of pendingUploads) {
+      const img = el("img", { src: u.objectUrl, alt: "" });
+      const tile = el(
+        "div",
+        { class: "attachment" + (u.status === "uploading" ? " uploading" : ""), title: u.status === "done" ? "Click to copy image link" : "Uploading…" },
+        img,
+      );
+      if (u.status === "uploading") {
+        tile.append(el("div", { class: "attachment-spinner" }));
+      } else {
+        tile.addEventListener("click", () => copyAttachmentRef(u, tile));
+        tile.append(
+          el("button", {
+            class: "attachment-remove",
+            type: "button",
+            title: "Remove image",
+            "aria-label": "Remove image",
+            onclick: (e) => { e.stopPropagation(); removeUpload(u.id); },
+          }, "×"),
+        );
+      }
+      tray.append(tile);
+    }
+  }
+
+  function removeUpload(id) {
+    const idx = pendingUploads.findIndex((u) => u.id === id);
+    if (idx === -1) return;
+    const [u] = pendingUploads.splice(idx, 1);
+    if (u.objectUrl) URL.revokeObjectURL(u.objectUrl);
+    renderAttachments();
+  }
+
+  async function copyAttachmentRef(u, tile) {
+    try {
+      await navigator.clipboard.writeText(u.markdown);
+      tile.classList.add("copied");
+      setTimeout(() => tile.classList.remove("copied"), 900);
+    } catch { /* clipboard blocked (insecure context); nothing useful to do */ }
+  }
+
+  // uploadAndInsert: POST a File to /api/uploads and surface it as an attachment
+  // tile. The local file is previewed immediately (object URL) so the user sees
+  // their image right away; the tile shows a spinner until the upload resolves.
   async function uploadAndInsert(file) {
-    const placeholder = `![uploading-${Date.now()}]()`;
-    const pos = input.selectionStart;
-    const sep = (pos > 0 && input.value[pos - 1] !== "\n" && input.value[pos - 1] !== " ") ? " " : "";
-    const insertion = sep + placeholder;
-    input.value = input.value.slice(0, pos) + insertion + input.value.slice(pos);
-    input.setSelectionRange(pos + insertion.length, pos + insertion.length);
-    autoGrow();
+    const item = { id: ++uploadSeq, objectUrl: URL.createObjectURL(file), status: "uploading", markdown: "" };
+    pendingUploads.push(item);
+    renderAttachments();
     try {
       const result = await api.uploadBlob(file);
-      input.value = input.value.replace(placeholder, `![image](${result.url})`);
+      item.status = "done";
+      item.markdown = `![image](${result.url})`;
     } catch (ex) {
-      input.value = input.value.replace(placeholder, "");
+      removeUpload(item.id);
       alert("Image upload failed: " + ex.message);
+      return;
     }
-    autoGrow();
+    renderAttachments();
   }
 
   // Paste handler: intercept image files from the clipboard (e.g. a screenshot),
@@ -1852,15 +1907,26 @@ function wireComposer() {
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      const content = input.value;
+      if (uploadsPending()) return; // an image is still uploading — don't send a half-baked message
+      const text = input.value;
+      const done = pendingUploads.filter((u) => u.status === "done");
+      // Message body = the typed text followed by each attachment's image markdown,
+      // one per line. Either part alone is enough to send.
+      const content = [text.trim() ? text : "", ...done.map((u) => u.markdown)].filter(Boolean).join("\n");
       if (!content.trim()) return;
       input.value = "";
       lastTypingSent = 0; // allow next keystroke to fire a fresh typing frame immediately
       autoGrow(); // collapse back to a single line after sending
+      const sent = pendingUploads;
+      pendingUploads = [];
+      renderAttachments();
       try {
         await api.sendMessage(state.activeChannelId, content);
+        sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
-        input.value = content;
+        input.value = text;
+        pendingUploads = sent; // put the attachments back so the send can be retried
+        renderAttachments();
         autoGrow(); // restore the box to fit the put-back text
         alert(ex.message);
       }
