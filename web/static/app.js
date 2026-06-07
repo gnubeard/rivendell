@@ -2309,6 +2309,10 @@ function cancelEdit() {
   editDraft = "";
   editFocusPending = false;
   renderMessages();
+  if (!window.matchMedia("(hover: none)").matches) {
+    const input = $("#composer-input");
+    if (input) input.focus();
+  }
 }
 
 // --- link previews -------------------------------------------------------
