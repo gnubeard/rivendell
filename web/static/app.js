@@ -1254,11 +1254,22 @@ function renderChannelHeader(ch) {
       secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
     }
     secretBtn.hidden = !supported;
+    // Camera button: visible in the header during an active DM call so it's
+    // reachable on mobile without opening the sidebar drawer.
+    const headerCamBtn = $("#header-camera-btn");
+    if (isInCall() && voiceCallState.channelId === ch.id) {
+      headerCamBtn.textContent = voiceCallState.videoMuted ? "🎥" : "📷";
+      headerCamBtn.title = voiceCallState.videoMuted ? "Turn camera on" : "Turn camera off";
+      headerCamBtn.hidden = false;
+    } else {
+      headerCamBtn.hidden = true;
+    }
     return;
   }
   dmDot.hidden = true;
   dmCall.hidden = true;
   secretBtn.hidden = true;
+  $("#header-camera-btn").hidden = true;
   $("#dm-volume").hidden = true;
   dmVolumeChannelId = null; dmVolumeOpen = false;
   if (ch && !ch.is_dm) {
@@ -3568,6 +3579,12 @@ function wireVoiceControls() {
     renderCallStrip();
     renderVideoGrid();
   };
+  // Same toggle surfaced in the channel header for mobile accessibility.
+  $("#header-camera-btn").onclick = async () => {
+    await setCameraEnabled(!isCameraEnabled());
+    renderCallStrip();
+    renderVideoGrid();
+  };
 
   // Ring banner (incoming call).
   $("#ring-accept-btn").onclick = async () => {
@@ -4130,6 +4147,13 @@ function renderVideoGrid() {
   const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
   const otherP = voiceCallState.participants.find(p => p.user_id === otherId);
   const remoteVideoMuted = !otherP || otherP.video_muted;
+
+  // Only take over the screen when there's actual video to show.
+  if (voiceCallState.videoMuted && remoteVideoMuted) {
+    grid.hidden = true;
+    document.body.classList.remove("video-active");
+    return;
+  }
   const remoteVideo = otherId != null ? getVideoEl(otherId) : null;
 
   grid.innerHTML = "";
