@@ -1301,6 +1301,7 @@ function beginTopicEdit() {
 async function loadChannel(id) {
   const ch = state.channels[id];
   renderChannelHeader(ch);
+  renderSecretBanner();
   // Invite + leave affordances only make sense for a real private channel
   // (not DMs/public).
   const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
@@ -1571,8 +1572,16 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
   // Secret session mode: render the in-memory encrypted message list instead
   // of the server-backed history. The notice at top makes the context clear.
+  // Hide the image attach button in a secret session — uploads aren't supported.
+  const attachBtn = $("#attach-btn");
+  if (attachBtn) attachBtn.hidden = !!(secretSess && secretSess.phase === "active");
+
   if (secretSess && secretSess.phase === "active") {
-    const notice = el("div", { class: "secret-header" + (secretSess.verified ? " verified" : "") },
+    const notice = el("div", {
+      class: "secret-header" + (secretSess.verified ? " verified" : ""),
+      title: "View safety number",
+      onclick: () => openSafetyModal(state.activeChannelId, secretSess),
+    },
       secretSess.verified
         ? "🔒 End-to-end encrypted · verified — messages are not saved"
         : "🔒 End-to-end encrypted — messages are not saved · safety number unverified");
@@ -1587,8 +1596,8 @@ function renderMessages(forceBottom = false, holdPosition = false) {
         el("div", { class: "msg secret" },
           el("div", { class: "msg-gutter" }, !isMine ? el("span", { class: "msg-avatar" }, name[0].toUpperCase()) : ""),
           el("div", { class: "msg-main" },
-            el("div", { class: "msg-header" },
-              el("span", { class: "msg-user" }, isMine ? "You" : name),
+            el("div", { class: "msg-head" },
+              el("span", { class: "msg-author" }, isMine ? "You" : name),
               el("span", { class: "msg-time" }, new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
             body)));
     }
@@ -2008,6 +2017,10 @@ function wireComposer() {
     const items = Array.from((e.clipboardData || window.clipboardData)?.items || []);
     const imageItem = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
     if (imageItem) {
+      // Images can't be sent in a secret session — suppress silently.
+      const activeCh = state.channels[state.activeChannelId];
+      const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+      if (secretSess && secretSess.phase === "active") { e.preventDefault(); return; }
       e.preventDefault();
       const file = imageItem.getAsFile();
       if (file) uploadAndInsert(file);
@@ -2140,6 +2153,9 @@ function wireComposer() {
     composerEl.addEventListener("drop", (e) => {
       const file = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/"));
       if (file) {
+        const activeCh = state.channels[state.activeChannelId];
+        const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+        if (secretSess && secretSess.phase === "active") { e.preventDefault(); return; }
         e.preventDefault();
         uploadAndInsert(file);
       }
@@ -3778,15 +3794,28 @@ async function onSecretEvent(evt) {
 
 function renderSecretBanner() {
   const banner = $("#secret-banner");
-  if (!secretRequestState) {
-    banner.hidden = true;
+  if (secretRequestState) {
+    // Incoming request from peer.
+    const { fromUserId } = secretRequestState;
+    const sender = state.users[fromUserId];
+    const name = sender ? (sender.display_name || sender.username) : "Someone";
+    $("#secret-banner-text").textContent = name + " wants to start a secret chat";
+    $("#secret-accept-btn").hidden = false;
+    $("#secret-decline-btn").textContent = "Decline";
+    banner.hidden = false;
     return;
   }
-  const { fromUserId } = secretRequestState;
-  const sender = state.users[fromUserId];
-  const name = sender ? (sender.display_name || sender.username) : "Someone";
-  $("#secret-banner-text").textContent = name + " wants to start a secret chat";
-  banner.hidden = false;
+  // Outgoing offer: we sent a request and are waiting for acceptance.
+  const activeCh = state.channels[state.activeChannelId];
+  const sess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+  if (sess && sess.phase === "offered") {
+    $("#secret-banner-text").textContent = "Secret chat request sent — waiting for the other person to accept…";
+    $("#secret-accept-btn").hidden = true;
+    $("#secret-decline-btn").textContent = "Cancel";
+    banner.hidden = false;
+    return;
+  }
+  banner.hidden = true;
 }
 
 // wireSecretControls attaches click handlers to secret-related UI elements.
@@ -3815,13 +3844,24 @@ function wireSecretControls() {
     }
   });
 
-  // Decline button on the secret request banner.
+  // Decline (incoming) / Cancel (outgoing) button on the secret request banner.
   $("#secret-decline-btn").addEventListener("click", () => {
-    if (!secretRequestState) return;
-    const { dmChannelId } = secretRequestState;
-    secretRequestState = null;
+    if (secretRequestState) {
+      // Declining an incoming request.
+      const { dmChannelId } = secretRequestState;
+      secretRequestState = null;
+      renderSecretBanner();
+      declineSecret(dmChannelId);
+      return;
+    }
+    // Canceling our own outgoing offer.
+    const activeCh = state.channels[state.activeChannelId];
+    if (!activeCh || !activeCh.is_dm) return;
+    const sess = getSession(activeCh.id);
+    if (!sess || sess.phase !== "offered") return;
+    declineSecret(activeCh.id);
     renderSecretBanner();
-    declineSecret(dmChannelId);
+    renderChannelHeader(activeCh);
   });
 
   // The 🔒 button in the DM header.
@@ -3855,6 +3895,7 @@ function wireSecretControls() {
 
     try {
       await initiateSecret(ch.id, otherId, peerKey);
+      renderSecretBanner();
     } catch (e) {
       alert("Secret chat: " + (e && e.message));
     }

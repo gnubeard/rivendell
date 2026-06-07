@@ -547,8 +547,10 @@ body.dm-active #members-toggle { display: none; }
 button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 
 /* Secret session styles */
-.secret-header { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.6rem 1rem; font-size: 0.82rem; color: var(--text-dim); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.secret-header { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.6rem 1rem; font-size: 0.82rem; color: var(--text-dim); border-bottom: 1px solid var(--border); flex-shrink: 0; cursor: pointer; }
+.secret-header:hover { color: var(--text); }
 .secret-header.verified { color: #4caf50; }
+.secret-header.verified:hover { color: #81c784; }
 .msg.secret { opacity: 0.96; }
 .secret-btn-active { opacity: 1; }
 .secret-btn-unverified { color: var(--text-dim); }
