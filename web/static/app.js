@@ -2366,12 +2366,28 @@ function renderLinkPreviewCard(url, p) {
   return card;
 }
 
-// commitEdit saves the inline edit. An empty or unchanged draft just cancels (use
-// delete to remove a message). On failure the editor stays open so the draft isn't
-// lost; on success the message.update broadcast re-renders with the new content.
+// commitEdit saves the inline edit. An empty draft on the most recent own message
+// deletes it; empty on any other message just cancels. Unchanged draft cancels.
+// On failure the editor stays open so the draft isn't lost; on success the
+// message.update broadcast re-renders with the new content.
 async function commitEdit(m) {
   const next = editDraft.trim();
-  if (!next || next === m.content.trim()) { cancelEdit(); return; }
+  if (!next) {
+    const msgs = state.messages[state.activeChannelId] || [];
+    const own = msgs.filter((msg) => msg.user_id === state.me.id && !msg.deleted_at);
+    if (own.length && own[own.length - 1].id === m.id) {
+      cancelEdit();
+      try {
+        await api.deleteMessage(m.id);
+      } catch (ex) {
+        alert(ex.message);
+      }
+    } else {
+      cancelEdit();
+    }
+    return;
+  }
+  if (next === m.content.trim()) { cancelEdit(); return; }
   try {
     await api.editMessage(m.id, next);
     editingMessageId = null;
