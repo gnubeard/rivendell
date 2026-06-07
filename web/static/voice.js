@@ -27,6 +27,16 @@ let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMuted}) -> void
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 
+// pendingIceCandidates buffers remote ICE candidates that arrive before
+// setRemoteDescription has been called on a peer connection. This is a real
+// race: onOffer/onAnswer are async (each await yields to the event loop), and
+// trickle-ICE candidates from the remote can arrive during those gaps. Without
+// the buffer the candidates are silently dropped, forcing the connection to
+// rely on STUN retransmits to settle on a working path — which explains
+// intermittent fragility on a network where the direct path would have worked.
+// Drained immediately after setRemoteDescription; cleaned up in closePeer.
+const pendingIceCandidates = new Map(); // remoteUserId -> RTCIceCandidateInit[]
+
 // Camera preference: remembered across calls so "camera was on last time" auto-enables it.
 const CAMERA_PREF_KEY = "rivendell.cameraEnabled";
 function loadCameraPref() {
@@ -60,6 +70,12 @@ let onSelfLeaveTone = null;   // () -> void — fired before teardown, then we w
 const SELF_TONE_SETTLE_MS = 250;
 const SELF_TONE_FINISH_MS = 400;
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Maximum video sender bitrate in kbps. At 640×360 this is comfortably above
+// the per-frame budget while preventing the encoder from blasting 5+ Mbps at
+// an uncooperative link and triggering the congestion-control oscillation that
+// causes the "2 seconds of smooth then back to a slideshow" pattern.
+const VIDEO_MAX_KBPS = 1000;
 
 // Ring-sound state. The incoming-call ringtone (callee) and the call-pending
 // tone (caller waiting for pickup) are independent so they never share an
@@ -131,7 +147,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
     sampleRate: 48000,
   };
   const videoConstraint = cameraEnabled
-    ? { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } }
+    ? { width: { ideal: 640, max: 1280 }, height: { ideal: 360, max: 720 }, frameRate: { ideal: 24, max: 30 } }
     : false;
 
   try {
@@ -145,6 +161,10 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
       throw err;
     }
   }
+
+  // contentHint "motion" tells the encoder to prefer frame rate over detail,
+  // which is the right trade-off for a camera video call.
+  localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
 
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
   if (cameraEnabled) setupLocalVideo();
@@ -285,9 +305,10 @@ export async function setCameraEnabled(on) {
     let vt;
     try {
       const vs = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+        video: { width: { ideal: 640, max: 1280 }, height: { ideal: 360, max: 720 }, frameRate: { ideal: 24, max: 30 } },
       });
       vt = vs.getVideoTracks()[0];
+      if (vt) vt.contentHint = "motion";
     } catch {
       notifyState();
       return; // camera unavailable — stay audio-only
@@ -512,7 +533,10 @@ function applyReconnectPlan(remoteUserId, pc) {
   case "drop":
     armTimer(meta, plan.delayMs, () => {
       const p = peerConns.get(remoteUserId);
-      if (p && (p.connectionState === "failed" || p.connectionState === "disconnected")) closePeer(remoteUserId);
+      if (p && (p.connectionState === "failed" || p.connectionState === "disconnected")) {
+        closePeer(remoteUserId);
+        if (activeChannelId !== null) sendFn({ type: "voice.join", channel_id: activeChannelId });
+      }
     });
     break;
   // "none": leave any existing timer running
@@ -529,7 +553,15 @@ async function doIceRestart(remoteUserId) {
   const inRoster = participants.some(p => p.user_id === remoteUserId);
   const outcome = restartOutcome(pc.connectionState, meta.restarts, MAX_ICE_RESTARTS, inRoster);
   if (outcome === "recovered") { meta.restarts = 0; return; }
-  if (outcome === "gone" || outcome === "give-up") { closePeer(remoteUserId); return; }
+  if (outcome === "gone") { closePeer(remoteUserId); return; }
+  if (outcome === "give-up") {
+    closePeer(remoteUserId);
+    // Re-announce our presence so the server broadcasts a fresh voice.state.
+    // Both sides are still in the channel; onVoiceState will re-create the peer
+    // connection from scratch, which is exactly what a manual "refresh" would do.
+    if (activeChannelId !== null) sendFn({ type: "voice.join", channel_id: activeChannelId });
+    return;
+  }
   // outcome === "restart": only the offerer re-offers (answerer waits for it).
   meta.restarts++;
   if (isOfferer(remoteUserId)) {
@@ -543,6 +575,38 @@ async function doIceRestart(remoteUserId) {
 }
 
 // --- peer connection lifecycle --------------------------------------------
+
+// drainPendingCandidates replays any ICE candidates that arrived before
+// setRemoteDescription was called. Must be called immediately after every
+// setRemoteDescription so the connection gets the full candidate set.
+async function drainPendingCandidates(remoteUserId) {
+  const q = pendingIceCandidates.get(remoteUserId);
+  if (!q || q.length === 0) return;
+  pendingIceCandidates.delete(remoteUserId);
+  const pc = peerConns.get(remoteUserId);
+  if (!pc) return;
+  for (const c of q) {
+    try { await pc.addIceCandidate(c); } catch {}
+  }
+}
+
+// applyVideoSenderLimits caps the outgoing video bitrate at VIDEO_MAX_KBPS.
+// Called when a connection reaches "connected" and after every renegotiation
+// that may have added a video sender (mid-call camera enable). Without a cap
+// the encoder will probe as high as the congestion controller allows, which on
+// a busy WiFi link drives the link into oscillation: brief good quality,
+// congestion, drop to a single keyframe, cycle repeats.
+async function applyVideoSenderLimits(pc) {
+  for (const sender of pc.getSenders()) {
+    if (!sender.track || sender.track.kind !== "video") continue;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) continue;
+      params.encodings[0].maxBitrate = VIDEO_MAX_KBPS * 1000;
+      await sender.setParameters(params);
+    } catch { /* best-effort; not all browsers support setParameters */ }
+  }
+}
 
 async function onVoiceState(payload) {
   if (payload.channel_id !== activeChannelId) return;
@@ -586,9 +650,11 @@ async function onOffer(payload) {
     try { await pc.setLocalDescription({ type: "rollback" }); } catch {}
   }
   await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
+  await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: answer.sdp });
+  applyVideoSenderLimits(pc); // cap our outgoing video bitrate (answerer side)
 }
 
 async function onAnswer(payload) {
@@ -596,12 +662,23 @@ async function onAnswer(payload) {
   const pc = peerConns.get(fromId);
   if (!pc || pc.signalingState !== "have-local-offer") return;
   await pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
+  await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
+  applyVideoSenderLimits(pc); // cap our outgoing video bitrate (offerer side)
 }
 
 async function onICE(payload) {
   const fromId = payload.from_user_id;
   const pc = peerConns.get(fromId);
   if (!pc || !payload.candidate) return;
+  if (!pc.remoteDescription) {
+    // onOffer/onAnswer are async: they yield during setRemoteDescription, and
+    // trickle-ICE candidates from the peer arrive during that window. Buffer
+    // them here and drain immediately after setRemoteDescription resolves.
+    let q = pendingIceCandidates.get(fromId);
+    if (!q) { q = []; pendingIceCandidates.set(fromId, q); }
+    q.push(payload.candidate);
+    return;
+  }
   try { await pc.addIceCandidate(payload.candidate); } catch {}
 }
 
@@ -653,6 +730,10 @@ function createPC(remoteUserId) {
   // answerer's existing onOffer path handles it transparently.
   pc.onnegotiationneeded = async () => {
     if (!isOfferer(remoteUserId) || activeChannelId === null) return;
+    // Guard: don't re-offer while already mid-negotiation. The event can fire
+    // at the wrong time (e.g. during a parallel ICE restart); skipping here is
+    // safe — the browser will re-fire once we're back to stable if still needed.
+    if (pc.signalingState !== "stable") return;
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -662,12 +743,18 @@ function createPC(remoteUserId) {
 
   // Reconnect rather than tear down on trouble: an ICE restart re-negotiates
   // transport on this same connection. See the reconnection section above.
-  pc.onconnectionstatechange = () => applyReconnectPlan(remoteUserId, pc);
+  pc.onconnectionstatechange = () => {
+    applyReconnectPlan(remoteUserId, pc);
+    // Apply bitrate cap as soon as media starts flowing; also catches the case
+    // where the connection briefly dropped and reconnected via ICE restart.
+    if (pc.connectionState === "connected") applyVideoSenderLimits(pc);
+  };
 
   return pc;
 }
 
 function closePeer(userId) {
+  pendingIceCandidates.delete(userId);
   removeMeter(userId);
   const meta = peerMeta.get(userId);
   if (meta) { clearReconnectTimer(meta); peerMeta.delete(userId); }
