@@ -55,6 +55,7 @@ import {
   isInCall,
   voiceChannelId,
   setSpeakingCallback,
+  setCameraErrorCallback,
   setVolumeForUser,
   getVolumeForUser,
   handleVoiceSignal,
@@ -509,6 +510,7 @@ async function enterApp() {
   // are fetched in the background — they'll be ready well before any call starts.
   initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
   setSpeakingCallback(onSpeaking);
+  setCameraErrorCallback((err) => alert(cameraErrorMessage(err)));
   fetchIceServers(); // best-effort; falls back to public STUN on error
   wireVoiceControls();
   // Secret chat: init module, wire controls, check browser support.

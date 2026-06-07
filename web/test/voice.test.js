@@ -311,6 +311,23 @@ test("cameraErrorMessage falls back gracefully for unknown / missing errors", ()
   assert.match(voice.cameraErrorMessage({}), /Could not access the camera/);
 });
 
+// --- shouldRetryRelaxed -----------------------------------------------------
+
+test("shouldRetryRelaxed retries everything except a permission denial", () => {
+  // A permission denial won't be fixed by relaxing constraints.
+  assert.equal(voice.shouldRetryRelaxed({ name: "NotAllowedError" }), false);
+  assert.equal(voice.shouldRetryRelaxed({ name: "SecurityError" }), false);
+  // Constraint/transient failures are worth a relaxed `video: true` retry —
+  // this is the Android OverconstrainedError case that was failing silently.
+  assert.equal(voice.shouldRetryRelaxed({ name: "OverconstrainedError" }), true);
+  assert.equal(voice.shouldRetryRelaxed({ name: "NotReadableError" }), true);
+  assert.equal(voice.shouldRetryRelaxed({ name: "NotFoundError" }), true);
+  // Unknown / missing error names default to retrying (best-effort).
+  assert.equal(voice.shouldRetryRelaxed({ name: "WeirdError" }), true);
+  assert.equal(voice.shouldRetryRelaxed(null), true);
+  assert.equal(voice.shouldRetryRelaxed({}), true);
+});
+
 // --- camera toggle lifecycle ------------------------------------------------
 // When joining with camera off, track.enabled is not set for video. When camera
 // is toggled on later, the video track becomes enabled. This is the state

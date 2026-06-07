@@ -26,6 +26,7 @@ let deafened = false;
 let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMuted}) -> void
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
+let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedia failure to the UI
 
 const diagnosedPeers = new Set(); // remoteUserId -> diagnostics attached (attach once)
 export function attachCallDiagnostics(remoteUserId) {
@@ -104,6 +105,17 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 // causes the "2 seconds of smooth then back to a slideshow" pattern.
 const VIDEO_MAX_KBPS = 1000;
 
+// Camera capture constraints. These are deliberately ideal-ONLY (advisory): an
+// ideal constraint is best-effort and never rejects, whereas a `max` (mandatory
+// ceiling) can make getUserMedia throw OverconstrainedError on cameras whose
+// native capture modes can't satisfy the width/height/frameRate ceilings in
+// combination — common on Android front cameras. Bandwidth is bounded by
+// applyVideoSenderLimits (sender maxBitrate) + contentHint, NOT by capture
+// resolution, so capping resolution here only risks a silent camera failure for
+// no bandwidth gain. (A `max` ceiling here was the v1.3.18 regression that broke
+// Android video preview — getUserMedia rejected and the failure was swallowed.)
+const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
+
 // Ring-sound state. The incoming-call ringtone (callee) and the call-pending
 // tone (caller waiting for pickup) are independent so they never share an
 // interval — a single client is only ever one side of a ring, but keeping them
@@ -173,15 +185,24 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
     channelCount: 1,
     sampleRate: 48000,
   };
-  const videoConstraint = cameraEnabled
-    ? { width: { ideal: 640, max: 1280 }, height: { ideal: 360, max: 720 }, frameRate: { ideal: 24, max: 30 } }
-    : false;
+  const videoConstraint = cameraEnabled ? VIDEO_CONSTRAINTS : false;
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: videoConstraint });
   } catch (err) {
-    if (cameraEnabled) {
-      // Camera failed — fall back to audio-only without blocking the call.
+    if (cameraEnabled && shouldRetryRelaxed(err)) {
+      // Camera couldn't satisfy our ideal constraints (common on Android) — retry
+      // with the camera unconstrained before giving up on video. Mic + relaxed
+      // video together; only if that also fails do we drop to audio-only.
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+      } catch {
+        cameraEnabled = false;
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
+      }
+    } else if (cameraEnabled) {
+      // Permission denied for the camera — fall back to audio-only (relaxing
+      // constraints wouldn't help) without blocking the call.
       cameraEnabled = false;
       localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
     } else {
@@ -331,14 +352,16 @@ export async function setCameraEnabled(on) {
     // First time enabling camera this call: acquire device and add track.
     let vt;
     try {
-      const vs = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640, max: 1280 }, height: { ideal: 360, max: 720 }, frameRate: { ideal: 24, max: 30 } },
-      });
+      const vs = await acquireCamera();
       vt = vs.getVideoTracks()[0];
       if (vt) vt.contentHint = "motion";
-    } catch {
+    } catch (err) {
+      // Camera unavailable — stay audio-only, but surface why instead of failing
+      // silently (the old silent return is exactly what made a broken camera look
+      // like "nothing happens" on Android).
+      if (onCameraError) onCameraError(err);
       notifyState();
-      return; // camera unavailable — stay audio-only
+      return;
     }
     localStream.addTrack(vt);
     for (const pc of peerConns.values()) pc.addTrack(vt, localStream);
@@ -378,6 +401,10 @@ function teardownLocalVideo() {
 
 // setSpeakingCallback registers cb(userId, speaking) for speaking-indicator UI.
 export function setSpeakingCallback(cb) { onSpeaking = cb; }
+
+// setCameraErrorCallback registers cb(err) to surface a camera getUserMedia
+// failure to the user (mid-call camera enable). Without it the failure is silent.
+export function setCameraErrorCallback(cb) { onCameraError = cb; }
 
 export function isVoiceMuted() { return muted; }
 export function isVoiceDeafened() { return deafened; }
@@ -447,6 +474,29 @@ export function cameraErrorMessage(err) {
     return "Your camera is in use by another app (or unavailable). Close anything else using it and try again.";
   default:
     return "Could not access the camera" + (err && err.message ? ": " + err.message : ".");
+  }
+}
+
+// shouldRetryRelaxed decides whether a failed camera getUserMedia is worth
+// retrying with relaxed (unconstrained) settings. A permission denial won't be
+// fixed by relaxing constraints, but an OverconstrainedError (the device can't
+// satisfy our ideal width/height/frameRate) or a transient NotReadableError can
+// resolve with a bare `video: true`. Pure; unit-tested.
+export function shouldRetryRelaxed(err) {
+  const name = err && err.name;
+  return name !== "NotAllowedError" && name !== "SecurityError";
+}
+
+// acquireCamera gets a camera-only MediaStream, falling back to an unconstrained
+// `video: true` request if the constrained one fails for a reason relaxing might
+// fix (see shouldRetryRelaxed). Throws the original error if even the relaxed
+// request fails (or if the failure was a permission denial). Internal.
+async function acquireCamera() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
+  } catch (err) {
+    if (!shouldRetryRelaxed(err)) throw err;
+    return await navigator.mediaDevices.getUserMedia({ video: true });
   }
 }
 
