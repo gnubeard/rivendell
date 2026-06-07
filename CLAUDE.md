@@ -197,3 +197,25 @@ Key design invariants per feature — preserve these when modifying related code
 **Markdown links + inline images.** `format.js` extracts links from each escaped run *before* the markdown pass: `inlineMarkup` runs only on the gaps between links, so a URL never feeds through the italic rule — this fixes underscores mangling URLs (don't refactor it back to a single regex sweep that linkifies last). `LINK_RE` matches `[text](url)` (https only) or bare http(s) URLs; a bare URL whose path ends in an image extension renders as `<img class=msg-image>` wrapped in a link. The escape-first XSS invariant is preserved. `formatMessage(..., {embedImages:false})` is used for search rows only (the whole row is click-to-jump). Composer: pasting a single URL onto a non-empty selection wraps it `[selection](url)`.
 
 When in doubt on UI, favor clarity over polish — aesthetics are secondary to "it works." Keep changes small and tested. Commit a baseline before large changes so diffs and rollbacks are clean.
+
+## Backlog
+
+Effort tags: XS = a few lines / one-shot · S = small, one layer · M = a session,
+multiple layers · L = full feature (DB+API+realtime+UI) · XL = major project / new
+security model. Sorted by effort, lowest first.
+
+- **[M] Voice phase 3 — voice channels (multi-party mesh).** Extend voice.js to manage
+  N peer connections, voice-channel sidebar UI (participant list + join/leave), speaking
+  indicators (AnalyserNode RMS), per-participant volume sliders, soft cap (warn at 8,
+  block at 12). See `docs/voice.md §Phase 3`.
+- **[S→M] TURN server (coturn)** so calls work across symmetric NAT / CGNAT. Ops, not
+  code: coturn container + `use-auth-secret = RIVENDELL_TURN_SECRET`, open UDP 3478 +
+  the relay port range on firewalld AND the Oracle Cloud security list, set
+  `RIVENDELL_TURN_URL`. STUN-only works on a LAN / real-IP network; TURN is the relay
+  fallback for symmetric NAT / CGNAT.
+
+**Deferred / future:**
+- **[XL] OTR / end-to-end encrypted messaging.** Different security model entirely:
+  client-side crypto, key generation/exchange, key+trust management (multi-device),
+  server stores only ciphertext, verification UI. Signal/OMEMO class — needs its own
+  design pass before any implementation.
