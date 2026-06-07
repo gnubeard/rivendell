@@ -452,7 +452,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 	if t, ok := s.typingTimers[key]; ok {
 		t.Stop()
 	}
-	s.typingTimers[key] = time.AfterFunc(15*time.Second, func() {
+	s.typingTimers[key] = time.AfterFunc(2*time.Second, func() {
 		s.typingMu.Lock()
 		delete(s.typingTimers, key)
 		s.typingMu.Unlock()

@@ -1651,7 +1651,7 @@ function wireComposer() {
   // shortcode strings); both share this one popup and the keyboard navigation
   // below. null when no completion is active.
   let completion = null; // { kind, query: { start, partial }, items, index }
-  const TYPING_INTERVAL_MS = 3000;
+  const TYPING_INTERVAL_MS = 1500;
   let lastTypingSent = 0;
 
   const autoGrow = () => {
