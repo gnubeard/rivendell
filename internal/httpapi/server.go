@@ -37,6 +37,11 @@ const sessionCookie = "rivendell_session"
 
 type typingKey struct{ channelID, userID int64 }
 
+type previewCacheEntry struct {
+	preview linkPreview
+	exp     time.Time
+}
+
 type Server struct {
 	cfg          config.Config
 	st           *store.Store
@@ -46,6 +51,8 @@ type Server struct {
 	typingTimers map[typingKey]*time.Timer
 	ringMu       sync.Mutex
 	rings        map[int64]*activeRing // DM channelID → pending ring
+	previewMu    sync.Mutex
+	previewCache map[string]previewCacheEntry
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
@@ -54,6 +61,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 		st:           st,
 		typingTimers: make(map[typingKey]*time.Timer),
 		rings:        make(map[int64]*activeRing),
+		previewCache: make(map[string]previewCacheEntry),
 	}
 	s.hub = ws.NewHub(s.onPresenceChange, s.onWSMessage)
 	if cfg.BlobsDir != "" {

@@ -1973,6 +1973,8 @@ var previewClient = &http.Client{
 	},
 }
 
+const previewCacheTTL = time.Hour
+
 func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 	rawURL := r.URL.Query().Get("url")
 	if rawURL == "" {
@@ -1988,6 +1990,16 @@ func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "unsupported host")
 		return
 	}
+
+	s.previewMu.Lock()
+	if e, ok := s.previewCache[rawURL]; ok && time.Now().Before(e.exp) {
+		p := e.preview
+		s.previewMu.Unlock()
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+		writeJSON(w, http.StatusOK, p)
+		return
+	}
+	s.previewMu.Unlock()
 
 	req, err := http.NewRequestWithContext(r.Context(), "GET", rawURL, nil)
 	if err != nil {
@@ -2009,7 +2021,14 @@ func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	writeJSON(w, http.StatusOK, parseOGTags(body))
+	p := parseOGTags(body)
+
+	s.previewMu.Lock()
+	s.previewCache[rawURL] = previewCacheEntry{preview: p, exp: time.Now().Add(previewCacheTTL)}
+	s.previewMu.Unlock()
+
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	writeJSON(w, http.StatusOK, p)
 }
 
 // parseOGTags extracts Open Graph / Twitter card meta values from HTML.
