@@ -39,6 +39,7 @@ var (
 	validThemes = map[string]bool{
 		"default": true, "light": true, "forest": true,
 		"hotpink": true, "contrast": true, "vermillion": true,
+		"cool-blue": true,
 	}
 )
 

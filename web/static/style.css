@@ -113,6 +113,23 @@ html[data-theme="vermillion"] {
   --danger: #ff5d5d;
 }
 
+html[data-theme="cool-blue"] {
+  --bg: #0d1117;
+  --bg-2: #131c2b;
+  --bg-3: #192336;
+  --bg-hover: #1f2d45;
+  --border: #253550;
+  --text: #cce0ff;
+  --text-dim: #7ea8d8;
+  --text-faint: #4a6a9a;
+  --accent: #38bdf8;
+  --accent-dim: #0c4a6e;
+  --online: #34d399;
+  --away: #fbbf24;
+  --dnd: #f87171;
+  --danger: #f87171;
+}
+
 * { box-sizing: border-box; }
 
 /* The `hidden` attribute must win over class-level `display` rules (.modal,

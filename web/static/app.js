@@ -758,7 +758,7 @@ async function resync() {
 
 // THEMES mirrors the <select> in index.html and validThemes on the server.
 // "default" is the built-in dark look (no overrides).
-const THEMES = ["default", "light", "forest", "hotpink", "contrast", "vermillion"];
+const THEMES = ["default", "light", "forest", "hotpink", "contrast", "vermillion", "cool-blue"];
 
 // applyTheme paints the chosen UI theme by setting data-theme on <html>; the CSS
 // re-points its color variables for that theme (style.css). Unknown/empty falls
