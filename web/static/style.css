@@ -319,8 +319,24 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-body a.msg-image-link { display: inline-block; }
 .msg-body img.msg-image { display: block; max-width: min(360px, 100%); max-height: 280px; width: auto; height: auto; margin: 0.3rem 0; border-radius: var(--radius); background: var(--bg-3); object-fit: contain; }
 .msg-body code { background: var(--bg-3); padding: 0.05rem 0.3rem; border-radius: 4px; font-family: var(--mono); font-size: 0.85em; }
-.msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; }
+.msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; position: relative; }
 .msg-body pre.code-block code { background: none; padding: 0; }
+/* Language label shown top-right when a language hint is present. */
+.msg-body pre.code-block[data-lang]::after { content: attr(data-lang); position: absolute; top: 0.3rem; right: 0.6rem; font-size: 0.68rem; color: var(--text-faint); font-family: var(--mono); pointer-events: none; }
+/* Syntax highlight token colors — dark themes share One Dark–inspired palette. */
+.msg-body pre.code-block .hl-kw { color: #c678dd; }
+.msg-body pre.code-block .hl-str { color: #98c379; }
+.msg-body pre.code-block .hl-cm { color: #6b7280; font-style: italic; }
+.msg-body pre.code-block .hl-num { color: #d19a66; }
+.msg-body pre.code-block .hl-fn  { color: #61afef; }
+.msg-body pre.code-block .hl-bi  { color: #e5c07b; }
+/* Light theme overrides. */
+html[data-theme="light"] .msg-body pre.code-block .hl-kw { color: #7c3aed; }
+html[data-theme="light"] .msg-body pre.code-block .hl-str { color: #16a34a; }
+html[data-theme="light"] .msg-body pre.code-block .hl-cm { color: #6b7280; }
+html[data-theme="light"] .msg-body pre.code-block .hl-num { color: #c2410c; }
+html[data-theme="light"] .msg-body pre.code-block .hl-fn  { color: #1d4ed8; }
+html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg-body blockquote { border-left: 3px solid var(--border); margin: 0.2rem 0; padding-left: 0.7rem; color: var(--text-dim); }
 .msg-body h3, .msg-body h4, .msg-body h5 { margin: 0.15rem 0; font-weight: 700; line-height: 1.4; }
 .msg-body h3 { font-size: 1.15em; }

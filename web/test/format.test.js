@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, replySnippet } from "../static/format.js";
+import { highlight } from "../static/syntax.js";
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');
@@ -30,13 +31,39 @@ test("inline code is not further formatted", () => {
 
 test("fenced code block preserved verbatim", () => {
   const out = formatMessage("```\nline1\nline2\n```");
-  assert.ok(out.includes("<pre class=\"code-block\"><code>line1\nline2</code></pre>"));
+  assert.ok(out.includes('<pre class="code-block">'), "pre element present");
+  assert.ok(out.includes("line1"), "code content preserved");
+  assert.ok(out.includes("line2"), "code content preserved");
 });
 
-test("fenced code block strips language hint", () => {
+test("fenced code block strips language hint and adds data-lang", () => {
   const out = formatMessage("```go\nx := 1\n```");
-  assert.ok(out.includes("<code>x := 1</code>"));
-  assert.ok(!out.includes("go\n"));
+  assert.ok(!out.includes("go\n"), "language hint not in output content");
+  assert.ok(out.includes('data-lang="go"'), "lang stored as data-lang attribute");
+  assert.ok(out.includes("x"), "code body present");
+});
+
+test("highlight returns escaped HTML for unknown language", () => {
+  assert.equal(highlight("<div>", ""), "&lt;div&gt;");
+  assert.equal(highlight("<div>", "unknownlang"), "&lt;div&gt;");
+});
+
+test("highlight keywords in Go", () => {
+  const out = highlight("func main() {}", "go");
+  assert.ok(out.includes('class="hl-kw"'), "keyword span present");
+  assert.ok(out.includes("func"), "keyword text preserved");
+});
+
+test("highlight strings in JavaScript", () => {
+  const out = highlight('const x = "hello";', "js");
+  assert.ok(out.includes('class="hl-str"'), "string span present");
+  assert.ok(out.includes("hello"), "string content preserved");
+});
+
+test("highlight XSS-safe: code block with HTML tags", () => {
+  const out = formatMessage("```\n<script>alert(1)</script>\n```");
+  assert.ok(!out.includes("<script>"), "raw script tag escaped");
+  assert.ok(out.includes("&lt;script&gt;"), "angle brackets escaped");
 });
 
 test("autolinks http and https only", () => {

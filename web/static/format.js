@@ -3,13 +3,17 @@
 // Security model: the input is UNTRUSTED. We escape all HTML first, then apply a
 // small, fixed set of inline markdown rules to the *escaped* string. Because the
 // raw text can no longer contain real tags after escaping, the markdown pass can
-// only ever introduce the specific tags we add ourselves.
+// only ever introduce the specific tags we add ourselves. Code blocks are the one
+// exception: we split on ``` before escaping so the raw content can be passed to
+// the syntax highlighter, which escapes it internally.
 //
 // Supported: ```fenced code```, `inline code`, **bold**, *italic*, _italic_,
 // ~~strike~~, > blockquote, [text](url) links, autolinked http(s) URLs, inline
 // images (a bare URL pointing at an image renders the image), and newlines.
 //
 // This module is pure (no DOM, no globals) so it can be unit-tested under Node.
+
+import { highlight } from "./syntax.js";
 
 export function escapeHtml(s) {
   return s
@@ -254,21 +258,25 @@ export function formatMessage(text, me, emojis, opts) {
   const embedImages = !opts || opts.embedImages !== false;
   const hideUrl = opts && opts.hideUrl ? escapeHtml(String(opts.hideUrl)) : null;
   const meLower = me ? String(me).toLowerCase() : null;
-  const escaped = escapeHtml(String(text));
 
-  // Split on fenced code blocks first so their contents are left verbatim.
-  // The fence is ``` on its own logical run; we accept ```lang\n...\n```.
-  const parts = escaped.split(/```/);
+  // Split on ``` BEFORE escaping: raw code content goes to the syntax highlighter
+  // (which escapes it internally); non-code parts are escaped below as before.
+  const parts = String(text).split(/```/);
   let html = "";
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 1) {
-      // Inside a fence: drop an optional leading language token + newline.
-      let code = parts[i].replace(/^[a-zA-Z0-9_-]*\n/, "");
+      // Inside a fence: capture optional language hint, then highlight raw content.
+      const raw = parts[i];
+      const langM = raw.match(/^([a-zA-Z0-9+_-]+)\n/);
+      const lang = langM ? langM[1].toLowerCase() : "";
+      let code = raw.replace(/^[a-zA-Z0-9+_-]*\n/, "");
       code = code.replace(/^\n/, "").replace(/\n$/, "");
-      html += `<pre class="code-block"><code>${code}</code></pre>`;
+      const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
+      html += `<pre class="code-block"${langAttr}><code>${highlight(code, lang)}</code></pre>`;
     } else {
-      // Outside a fence: handle inline code, blockquotes, headers, line breaks.
-      const lines = parts[i].split("\n");
+      // Outside a fence: escape then handle inline code, blockquotes, headers, line breaks.
+      const escaped = escapeHtml(parts[i]);
+      const lines = escaped.split("\n");
       const rendered = lines.map((line) => {
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
