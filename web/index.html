@@ -90,6 +90,7 @@
       </div>
       <div id="call-strip" class="call-strip" hidden>
         <span id="call-strip-label" class="call-strip-label"></span>
+        <span id="call-ptt" class="call-ptt" hidden></span>
         <button id="call-mute-btn" class="call-ctl" title="Mute">🎙</button>
         <button id="call-deafen-btn" class="call-ctl" title="Deafen">🔊</button>
         <button id="call-leave-btn" class="call-ctl danger" title="Leave call">✕</button>
@@ -228,6 +229,15 @@
           Desktop notifications
         </label>
         <p id="notif-status" class="hint"></p>
+        <label class="checkbox-row">
+          <input type="checkbox" id="ptt-enable">
+          Push-to-talk (voice)
+        </label>
+        <div id="ptt-keyrow" class="ptt-keyrow" hidden>
+          <span>Key</span>
+          <button type="button" id="ptt-key-btn" class="ptt-key">`</button>
+        </div>
+        <p id="ptt-status" class="hint"></p>
         <button type="submit" class="primary">Save</button>
         <p id="profile-error" class="error" role="alert"></p>
       </form>

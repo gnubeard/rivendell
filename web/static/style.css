@@ -416,6 +416,24 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 .call-ctl.danger { color: var(--red, #e74c3c); }
 .call-ctl.danger:hover { background: rgba(231,76,60,0.12); }
 .call-ctl.active { color: var(--text); opacity: 0.55; }
+/* Push-to-talk pill in the call strip (shown in place of the mute button when
+   PTT is on); lights green while the key is held and the mic is transmitting. */
+.call-ptt {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em;
+  padding: 0.18rem 0.45rem; border-radius: var(--radius);
+  background: var(--surface-3, rgba(127,127,127,0.15)); color: var(--text-dim);
+  white-space: nowrap; user-select: none;
+}
+.call-ptt.active { background: rgba(80,180,80,0.30); color: var(--text); }
+/* Push-to-talk key-rebind row in the profile modal. */
+.ptt-keyrow { display: flex; align-items: center; gap: 0.6rem; }
+.ptt-key {
+  min-width: 4rem; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-1, var(--bg-2)); color: var(--text);
+  cursor: pointer; font: inherit;
+}
+.ptt-key:hover { border-color: var(--accent-dim); }
 
 /* On-call cue in the member list: a 🔊 badge plus a faint green wash on the row
    so it reads as "in the call" at a glance. */

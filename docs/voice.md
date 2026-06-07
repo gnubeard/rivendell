@@ -325,11 +325,16 @@ config is unchanged.
 - Soft participant cap (warn at 8, block at 12)
 
 ### Phase 4 — polish
-- Push-to-talk
-- Reconnection on peer connection failure (ICE restart)
-- Graceful handling of getUserMedia denial (mic permission)
+- ✅ Push-to-talk (profile-modal opt-in + rebindable key, default backtick;
+  holds the mic muted in a call until the key is held — `pttShouldFire` /
+  `pttKeyLabel` in voice.js, wiring in app.js `wirePushToTalk`)
+- ✅ Reconnection on peer connection failure (ICE restart)
+- ✅ Graceful handling of getUserMedia denial (mic permission) — `micErrorMessage`
+  maps NotAllowed/NotFound/NotReadable to a friendly, actionable line
 - ✅ Per-user volume knob persistence (localStorage)
-- Mobile: test that the call strip doesn't obscure the composer
+- ✅ Mobile: the call strip can't obscure the composer — it lives in the sidebar,
+  which is an off-canvas slide-in drawer on mobile (≤720px), so it's never over
+  the conversation/composer; call controls are reached via the ☰ sidebar toggle.
 
 ---
 

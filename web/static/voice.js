@@ -247,6 +247,55 @@ export function isVoiceDeafened() { return deafened; }
 export function voiceChannelId() { return activeChannelId; }
 export function isInCall() { return activeChannelId !== null; }
 
+// --- push-to-talk + mic-error helpers (pure) -------------------------------
+//
+// Push-to-talk itself (the keyboard wiring and the mute toggle) lives in
+// app.js, because it ties keyboard input to setVoiceMuted; these two pure
+// helpers are the parts worth unit-testing. See wirePushToTalk in app.js.
+
+// pttShouldFire decides whether a keyboard event should drive push-to-talk:
+// only when PTT is enabled, we're in a call, the event's *physical* key matches
+// the bound code (KeyboardEvent.code, layout-independent), and the event did
+// NOT originate from an editable element. The editable guard is what lets the
+// bound key — backtick by default — still type normally in the message box:
+// you transmit with it everywhere else, but in a text field it inserts a char.
+export function pttShouldFire({ enabled, inCall, code, boundCode, editable }) {
+  return !!(enabled && inCall && !editable && code && code === boundCode);
+}
+
+// pttKeyLabel turns a KeyboardEvent.code into a short human label for the UI
+// ("Backquote" -> "`", "Space" -> "Space", "KeyT" -> "T", "Digit5" -> "5",
+// "F8" -> "F8"). Unknown codes fall through verbatim. Pure; unit-tested.
+export function pttKeyLabel(code) {
+  if (!code) return "—";
+  if (code === "Backquote") return "`";
+  if (code === "Space") return "Space";
+  if (code.startsWith("Key")) return code.slice(3);
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Numpad")) return "Num " + code.slice(6);
+  if (code.startsWith("Arrow")) return code.slice(5) + " arrow";
+  return code;
+}
+
+// micErrorMessage maps a getUserMedia rejection to a friendly, specific,
+// actionable sentence (instead of dumping the raw exception text at the user).
+// The error's .name is the stable cross-browser discriminator; we fall back to
+// a generic line for anything unrecognized. Pure; unit-tested.
+export function micErrorMessage(err) {
+  switch (err && err.name) {
+  case "NotAllowedError":      // permission denied (prompt dismissed or blocked)
+  case "SecurityError":
+    return "Microphone access was blocked. Allow the mic for this site in your browser's settings, then try again.";
+  case "NotFoundError":        // no input device at all
+  case "OverconstrainedError":
+    return "No microphone was found. Plug one in (or check your input device) and try again.";
+  case "NotReadableError":     // device held by another app / OS-level error
+    return "Your microphone is in use by another app (or unavailable). Close anything else using it and try again.";
+  default:
+    return "Could not access the microphone" + (err && err.message ? ": " + err.message : ".");
+  }
+}
+
 // handleVoiceSignal dispatches an incoming voice.* event received over the WS.
 export async function handleVoiceSignal(evt) {
   const p = evt.payload || {};

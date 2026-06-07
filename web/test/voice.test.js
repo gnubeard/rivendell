@@ -208,3 +208,72 @@ test("restartOutcome: restarts are bounded, then we give up", () => {
   assert.equal(voice.restartOutcome("failed", 4, 4, true), "give-up");
   assert.equal(voice.restartOutcome("disconnected", 5, 4, true), "give-up");
 });
+
+// --- push-to-talk gating (pttShouldFire) ------------------------------------
+// PTT fires only when enabled, in a call, the physical key matches, AND the
+// event isn't from a text field — the editable guard is what keeps the bound
+// key (backtick by default) usable for typing in the composer.
+
+test("pttShouldFire: fires on the bound key when enabled, in a call, outside a field", () => {
+  assert.equal(
+    voice.pttShouldFire({ enabled: true, inCall: true, code: "Backquote", boundCode: "Backquote", editable: false }),
+    true,
+  );
+});
+
+test("pttShouldFire: off unless PTT is enabled and we're in a call", () => {
+  const base = { code: "Backquote", boundCode: "Backquote", editable: false };
+  assert.equal(voice.pttShouldFire({ ...base, enabled: false, inCall: true }), false);
+  assert.equal(voice.pttShouldFire({ ...base, enabled: true, inCall: false }), false);
+});
+
+test("pttShouldFire: a non-matching key never fires", () => {
+  assert.equal(
+    voice.pttShouldFire({ enabled: true, inCall: true, code: "KeyT", boundCode: "Backquote", editable: false }),
+    false,
+  );
+});
+
+test("pttShouldFire: never fires from inside a text field (key still types there)", () => {
+  assert.equal(
+    voice.pttShouldFire({ enabled: true, inCall: true, code: "Backquote", boundCode: "Backquote", editable: true }),
+    false,
+  );
+});
+
+test("pttShouldFire: a missing code never fires", () => {
+  assert.equal(
+    voice.pttShouldFire({ enabled: true, inCall: true, code: "", boundCode: "", editable: false }),
+    false,
+  );
+});
+
+// --- pttKeyLabel ------------------------------------------------------------
+
+test("pttKeyLabel maps common codes to short human labels", () => {
+  assert.equal(voice.pttKeyLabel("Backquote"), "`");
+  assert.equal(voice.pttKeyLabel("Space"), "Space");
+  assert.equal(voice.pttKeyLabel("KeyT"), "T");
+  assert.equal(voice.pttKeyLabel("Digit5"), "5");
+  assert.equal(voice.pttKeyLabel("Numpad0"), "Num 0");
+  assert.equal(voice.pttKeyLabel("ArrowUp"), "Up arrow");
+  assert.equal(voice.pttKeyLabel("F8"), "F8"); // unknown -> verbatim
+  assert.equal(voice.pttKeyLabel(""), "—");
+});
+
+// --- micErrorMessage --------------------------------------------------------
+// getUserMedia rejections must surface a friendly, specific line keyed off the
+// stable .name, never the raw exception text.
+
+test("micErrorMessage maps known getUserMedia errors to actionable text", () => {
+  assert.match(voice.micErrorMessage({ name: "NotAllowedError" }), /blocked/i);
+  assert.match(voice.micErrorMessage({ name: "SecurityError" }), /blocked/i);
+  assert.match(voice.micErrorMessage({ name: "NotFoundError" }), /no microphone/i);
+  assert.match(voice.micErrorMessage({ name: "NotReadableError" }), /in use|unavailable/i);
+});
+
+test("micErrorMessage falls back gracefully for unknown / missing errors", () => {
+  assert.match(voice.micErrorMessage({ name: "WeirdError", message: "boom" }), /boom/);
+  assert.match(voice.micErrorMessage(null), /Could not access the microphone/);
+  assert.match(voice.micErrorMessage({}), /Could not access the microphone/);
+});

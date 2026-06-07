@@ -32,6 +32,9 @@ import {
   stopRingSound,
   startPendingSound,
   stopPendingSound,
+  pttShouldFire,
+  pttKeyLabel,
+  micErrorMessage,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
@@ -72,6 +75,33 @@ function loadNotifPref() {
 function saveNotifPref() {
   try {
     localStorage.setItem("rivendell.notifications", notifEnabled ? "1" : "0");
+  } catch (e) {
+    /* best-effort: persistence is non-fatal */
+  }
+}
+
+// Push-to-talk (per browser, like the notification preference). When enabled,
+// the mic stays muted in a call until you hold the bound key — see
+// wirePushToTalk. pttKeyCode is a layout-independent KeyboardEvent.code
+// (default backtick); pttTransmitting is true only while the key is held;
+// pttCapturing is true while the profile-modal rebind UI awaits a keypress.
+let pttEnabled = loadPttEnabled();
+let pttKeyCode = loadPttKeyCode();
+let pttTransmitting = false;
+let pttCapturing = false;
+
+function loadPttEnabled() {
+  try { return localStorage.getItem("rivendell.ptt") === "1"; } catch (e) { return false; }
+}
+
+function loadPttKeyCode() {
+  try { return localStorage.getItem("rivendell.pttKey") || "Backquote"; } catch (e) { return "Backquote"; }
+}
+
+function savePttPref() {
+  try {
+    localStorage.setItem("rivendell.ptt", pttEnabled ? "1" : "0");
+    localStorage.setItem("rivendell.pttKey", pttKeyCode);
   } catch (e) {
     /* best-effort: persistence is non-fatal */
   }
@@ -2585,6 +2615,8 @@ function openProfileModal() {
   $("#profile-display").value = me.display_name || "";
   $("#profile-status-text").value = me.status_text || "";
   renderNotifControl();
+  pttCapturing = false; // never reopen mid-rebind
+  renderPttControl();
   $("#profile-modal").hidden = false;
   $("#profile-display").focus();
 }
@@ -2926,6 +2958,23 @@ function renderNotifControl() {
   else status.textContent = "Off — turn on to get desktop alerts for DMs and @-mentions.";
 }
 
+// renderPttControl reflects the push-to-talk preference into the profile modal:
+// the enable checkbox, the (only-when-enabled) key-rebind button, and a hint.
+// While rebinding, the button reads "press a key…" until the next keypress.
+function renderPttControl() {
+  const cb = $("#ptt-enable");
+  if (!cb) return;
+  cb.checked = pttEnabled;
+  const keyrow = $("#ptt-keyrow");
+  const keyBtn = $("#ptt-key-btn");
+  const status = $("#ptt-status");
+  if (keyrow) keyrow.hidden = !pttEnabled;
+  if (keyBtn) keyBtn.textContent = pttCapturing ? "press a key…" : pttKeyLabel(pttKeyCode);
+  if (status) status.textContent = pttEnabled
+    ? "Your mic stays muted in a call until you hold the key. It still types normally in the message box."
+    : "Off — your mic is open the whole time you're in a call.";
+}
+
 // Presence debounce: hold an incoming presence.update for PRESENCE_DEBOUNCE_MS
 // before applying it, keyed per user. A newer update for the same user replaces
 // the pending one; if the latest value already matches what's displayed, the
@@ -3021,7 +3070,7 @@ function wireVoiceControls() {
     try {
       await joinVoiceChannel(chId);
     } catch (e) {
-      alert("Could not access microphone: " + (e && e.message));
+      alert(micErrorMessage(e));
     }
   };
   $("#ring-decline-btn").onclick = () => {
@@ -3047,7 +3096,7 @@ function wireVoiceControls() {
         try {
           await joinVoiceChannel(ch.id);
         } catch (e) {
-          alert("Could not access microphone: " + (e && e.message));
+          alert(micErrorMessage(e));
         }
       }
       return;
@@ -3072,6 +3121,81 @@ function wireVoiceControls() {
     renderRingBanner();
     startPendingSound(audioCtx); // caller-side "waiting for pickup" tone
   };
+
+  wirePushToTalk();
+}
+
+// --- push-to-talk --------------------------------------------------------
+//
+// When PTT is enabled, the mic is held muted in a call (set on join, see
+// onVoiceStateChange) and only opens while the bound key is held. We listen in
+// the capture phase so the rebind UI can intercept a keypress before anything
+// else, and so a held PTT key is seen even when focus is elsewhere. The bound
+// key still types normally inside a text field — pttShouldFire's editable guard
+// is what makes the default backtick usable for code in the composer.
+function wirePushToTalk() {
+  window.addEventListener("keydown", onPttKeyDown, true);
+  window.addEventListener("keyup", onPttKeyUp, true);
+  // A held key whose keyup we'd otherwise miss (tab/window blur) must not leave
+  // the mic stuck open — release PTT defensively when we lose focus.
+  window.addEventListener("blur", () => { if (pttTransmitting) releasePtt(); });
+
+  // Profile-modal controls: the enable checkbox and the key-rebind button.
+  const cb = $("#ptt-enable");
+  if (cb) {
+    cb.onchange = () => {
+      pttEnabled = cb.checked;
+      pttCapturing = false;
+      savePttPref();
+      // Apply immediately if we're already in a call: enabling holds the mic
+      // muted at rest; disabling opens it back up.
+      if (isInCall()) { pttTransmitting = false; setVoiceMuted(pttEnabled); }
+      renderPttControl();
+      renderCallStrip();
+    };
+  }
+  const keyBtn = $("#ptt-key-btn");
+  if (keyBtn) {
+    keyBtn.onclick = () => { pttCapturing = true; renderPttControl(); };
+  }
+}
+
+function isEditableTarget(t) {
+  if (!t) return false;
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
+}
+
+function onPttKeyDown(e) {
+  // Rebind capture: the next keypress (Escape cancels) becomes the PTT key. We
+  // swallow it so it neither toggles PTT nor closes the open profile modal.
+  if (pttCapturing) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.code !== "Escape") { pttKeyCode = e.code; savePttPref(); }
+    pttCapturing = false;
+    renderPttControl();
+    renderCallStrip();
+    return;
+  }
+  if (e.repeat) return; // auto-repeat while the key is held — already transmitting
+  if (pttTransmitting) return;
+  if (!pttShouldFire({ enabled: pttEnabled, inCall: isInCall(), code: e.code, boundCode: pttKeyCode, editable: isEditableTarget(e.target) })) return;
+  pttTransmitting = true;
+  setVoiceMuted(false);
+  renderCallStrip();
+}
+
+function onPttKeyUp(e) {
+  if (!pttTransmitting || e.code !== pttKeyCode) return;
+  releasePtt();
+}
+
+// releasePtt closes the PTT mic gate (re-mutes) and repaints the strip.
+function releasePtt() {
+  pttTransmitting = false;
+  if (isInCall()) setVoiceMuted(true);
+  renderCallStrip();
 }
 
 // onVoiceEvent handles incoming voice.* events from the server.
@@ -3101,7 +3225,7 @@ async function onVoiceEvent(evt) {
       try {
         await joinVoiceChannel(chId);
       } catch (e) {
-        alert("Could not access microphone: " + (e && e.message));
+        alert(micErrorMessage(e));
       }
     }
     return;
@@ -3176,6 +3300,11 @@ function onVoiceStateChange(vs) {
   const prevRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
   voiceCallState = vs;
   callParticipantIds = new Set((vs.participants || []).map((p) => p.user_id));
+  // Entering a call with push-to-talk on: hold the mic muted at rest (the key
+  // opens it). The !prevInCall guard fires this only on the join transition;
+  // setVoiceMuted re-enters here with prevInCall now true, so it won't recurse.
+  if (!prevInCall && vs.inCall && pttEnabled && !pttTransmitting && !isVoiceMuted()) setVoiceMuted(true);
+  if (!vs.inCall) pttTransmitting = false; // call ended: drop any stuck PTT gate
   if (prevInCall && vs.inCall) {
     // Already in call: chime for remote peers joining/leaving. (Self join/leave
     // tones are handled by the voice.js lifecycle hooks, not here.)
@@ -3210,10 +3339,23 @@ function renderCallStrip() {
   const ch = voiceCallState.channelId !== null ? state.channels[voiceCallState.channelId] : null;
   const label = ch ? (ch.is_dm ? "📞 " + dmDisplayName(ch) : "🔊 #" + ch.name) : "In call";
   $("#call-strip-label").textContent = label;
+  // In PTT mode the mic is key-driven, so the mute toggle is replaced by a PTT
+  // pill that lights up while you're holding the key (transmitting).
   const muteBtn = $("#call-mute-btn");
-  muteBtn.textContent = voiceCallState.muted ? "🔇" : "🎙";
-  muteBtn.title = voiceCallState.muted ? "Unmute" : "Mute";
-  muteBtn.classList.toggle("active", voiceCallState.muted);
+  const pttPill = $("#call-ptt");
+  if (pttEnabled) {
+    muteBtn.hidden = true;
+    pttPill.hidden = false;
+    pttPill.textContent = "PTT " + pttKeyLabel(pttKeyCode);
+    pttPill.title = "Push-to-talk — hold " + pttKeyLabel(pttKeyCode) + " to talk";
+    pttPill.classList.toggle("active", pttTransmitting);
+  } else {
+    pttPill.hidden = true;
+    muteBtn.hidden = false;
+    muteBtn.textContent = voiceCallState.muted ? "🔇" : "🎙";
+    muteBtn.title = voiceCallState.muted ? "Unmute" : "Mute";
+    muteBtn.classList.toggle("active", voiceCallState.muted);
+  }
   const deafBtn = $("#call-deafen-btn");
   deafBtn.textContent = voiceCallState.deafened ? "🔈" : "🔊";
   deafBtn.title = voiceCallState.deafened ? "Undeafen" : "Deafen";
