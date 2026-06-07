@@ -1588,16 +1588,18 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     wrap.append(notice);
     for (const m of secretSess.messages) {
       const u = state.users[m.fromUserId];
-      const name = u ? (u.display_name || u.username) : "?";
       const isMine = m.fromUserId === state.me.id;
+      const avatar = u && u.has_avatar
+        ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(m.fromUserId)})` })
+        : el("div", { class: "msg-avatar" }, initials(u ? u.display_name : "?"));
       const body = el("div", { class: "msg-body" });
       body.innerHTML = formatMessage(m.text, { embedImages: true });
       wrap.append(
         el("div", { class: "msg secret" },
-          el("div", { class: "msg-gutter" }, !isMine ? el("span", { class: "msg-avatar" }, name[0].toUpperCase()) : ""),
+          el("div", { class: "msg-gutter" }, !isMine ? avatar : ""),
           el("div", { class: "msg-main" },
             el("div", { class: "msg-head" },
-              el("span", { class: "msg-author" }, isMine ? "You" : name),
+              el("span", { class: "msg-author" }, isMine ? "You" : (u ? (u.display_name || u.username) : "?")),
               el("span", { class: "msg-time" }, new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
             body)));
     }
