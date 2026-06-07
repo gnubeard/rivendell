@@ -221,9 +221,7 @@ handle_channel() {
         local trimmed reply
         trimmed=$(trim_output "$claude_out")
         if [ "$claude_exit" -eq 0 ]; then
-            reply="✅ Done.
-
-$trimmed"
+            reply="${trimmed:-✅ Done.}"
         else
             reply="❌ Error (exit $claude_exit).
 
