@@ -996,8 +996,6 @@ function renderAdminVisibility() {
   const isAdmin = state.me.role === "admin";
   const isMod = isAdmin || state.me.role === "moderator";
   $("#admin-btn").hidden = !isAdmin;
-  // The actions bar holds only the admin link now — hide its padding for non-admins.
-  $("#admin-btn").closest(".sidebar-actions").hidden = !isAdmin;
   $("#new-channel-btn").hidden = !isMod;
 }
 

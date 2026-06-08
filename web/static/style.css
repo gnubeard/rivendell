@@ -269,7 +269,6 @@ button.primary:hover { filter: brightness(1.08); }
 .me-status-text { color: var(--text-dim); font-size: 0.78rem; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .me-status-text:hover { color: var(--text); }
 .status-select { width: auto; margin: 0; padding: 0.2rem; font-size: 0.72rem; }
-.sidebar-actions { display: flex; gap: 0.8rem; padding: 0.4rem 0.9rem 0.9rem; }
 
 .avatar {
   width: 34px; height: 34px; border-radius: 50%;
