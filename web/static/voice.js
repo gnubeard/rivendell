@@ -138,16 +138,27 @@ export function attachCallDiagnostics(remoteUserId) {
       const inPli = fmtDelta(inV?.pliCount, prev.pli);
       const outEnc = fmtDelta(outV?.framesEncoded, prev.enc);
       const outBytes = fmtDelta(outV?.bytesSent, prev.btx);
+      const outSent = fmtDelta(outV?.framesSent, prev.sent);
       hudPrev.set(remoteUserId, {
         dec: inV?.framesDecoded, recv: inV?.framesReceived, kf: inV?.keyFramesDecoded,
         brx: inV?.bytesReceived, pli: inV?.pliCount,
-        enc: outV?.framesEncoded, btx: outV?.bytesSent,
+        enc: outV?.framesEncoded, btx: outV?.bytesSent, sent: outV?.framesSent,
       });
+      // Second out line isolates the FF-Android encoder wedge. impl = which encoder
+      // Firefox actually bound (libvpx software vs a hardware MediaCodec VP8) — a
+      // hardware path that emits one GOP then freezes is the prime suspect now that
+      // setParameters is exonerated. WxH = the resolution actually FED to the encoder
+      // (vs the capture WxH on the local: line) — if it reads 360x360 we're encoding
+      // the odd square profile. encT = cumulative encode time: if it stays frozen in
+      // lockstep with enc, the encoder isn't being invoked at all (wedged upstream of
+      // encode), not merely producing-and-not-sending.
+      const encT = typeof outV?.totalEncodeTime === "number" ? outV.totalEncodeTime.toFixed(2) : outV?.totalEncodeTime;
       hudStats.set(remoteUserId,
         `peer ${remoteUserId} ${pc.iceConnectionState}/${pc.connectionState} ${lc?.candidateType}->${rc?.candidateType}\n` +
         `  in  ${inCodec} fps=${inV?.framesPerSecond} dec=${inDec} recv=${inRecv} kf=${inKf}\n` +
         `       bytes=${inBytes} pli=${inPli} lost=${inV?.packetsLost}\n` +
         `  out ${outCodec} enc=${outEnc} bytes=${outBytes} limit=${outV?.qualityLimitationReason}\n` +
+        `       impl=${outV?.encoderImplementation} pe=${outV?.powerEfficientEncoder} ${outV?.frameWidth}x${outV?.frameHeight} sent=${outSent} encT=${encT}\n` +
         elLine);
       updateRtcHud();
     }
