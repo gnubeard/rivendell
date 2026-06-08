@@ -244,19 +244,19 @@ const VIDEO_MAX_KBPS = 1000;
 // no bandwidth gain. (A `max` ceiling here was the v1.3.18 regression that broke
 // Android video preview — getUserMedia rejected and the failure was swallowed.)
 //
-// We deliberately do NOT constrain aspectRatio. The Pixel 7 Pro (and any other
-// 4:3-native sensor) exposes only 4:3 (and 1:1) capture modes — there is no real
-// 16:9 mode to select, only a crop of the 4:3 frame. An earlier
-// `aspectRatio: {ideal: 16/9}` here didn't widen the picture; it fought the 4:3
-// sensor and collapsed FF-Android to a *square* 360x360 capture (the RTC HUD
-// caught that square frame feeding a wedged VP8 encoder: enc frozen, 0x0). Asking
-// only for a landscape-oriented size (width > height) with no aspect term lets
-// each camera settle on its own native landscape mode: ~640x360 (16:9) on a 16:9
-// webcam, ~480x360 (4:3) on the Pixel. Both are even-dimensioned and the VP8
-// encoder drives them cleanly; the video tiles render whatever aspect arrives
-// (object-fit: contain / cover, see style.css), so a 4:3 frame is handled
-// gracefully rather than coerced into a mode the hardware doesn't have.
-const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
+// We request the sensor's NATIVE 4:3 aspect, not a 16:9-ish size. The Pixel 7
+// (and any other 4:3-native sensor) exposes only 4:3 capture modes — there is no
+// real 16:9 mode, only a crop of the 4:3 frame. Asking for a 16:9-ish ideal
+// (the old `640x360`) backfired: FF-Android couldn't find that mode and cropped
+// BOTH dimensions down toward the smaller, collapsing to a *square* 360x360
+// capture — and FF-Android's sender-side scaler wedges on a 1:1 frame, feeding
+// the encoder 0x0 after ~3 frames (the freeze, confirmed codec-agnostic across
+// VP8/VP9/H.264; the RTC HUD showed enc frozen, 0x0, while the raw track stayed
+// live at 24fps). A 4:3 ideal (640x480) matches a real native mode, so the camera
+// opens it cleanly — landscape, even-dimensioned, no crop, no square. The video
+// tiles render whatever aspect arrives (object-fit, see style.css), so a 4:3
+// frame is handled gracefully rather than forced into a mode the hardware lacks.
+const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } };
 
 // The built-in default, exposed so the admin video console can show/restore it.
 export const DEFAULT_VIDEO_CONSTRAINTS = VIDEO_CONSTRAINTS;
