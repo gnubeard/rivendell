@@ -335,44 +335,6 @@ test("shouldRetryRelaxed retries everything except a permission denial", () => {
   assert.equal(voice.shouldRetryRelaxed({}), true);
 });
 
-// --- needsLandscapeCoercion / landscapeConstraintLadder ---------------------
-// Safety net for cameras that open square/portrait. These pure helpers decide
-// when to intervene and what to try; coerceLandscapeCapture (effectful, not
-// unit-tested) walks them. The ladder leads with 4:3 because a 4:3-native sensor
-// (e.g. the Pixel 7 Pro) has no 16:9 mode to coerce to.
-
-test("needsLandscapeCoercion flags square and portrait, passes landscape", () => {
-  assert.equal(voice.needsLandscapeCoercion({ width: 360, height: 360 }), true);  // square
-  assert.equal(voice.needsLandscapeCoercion({ width: 480, height: 640 }), true);  // portrait
-  assert.equal(voice.needsLandscapeCoercion({ width: 640, height: 360 }), false); // already landscape
-  assert.equal(voice.needsLandscapeCoercion({ width: 480, height: 360 }), false); // 4:3 landscape (Pixel native)
-  assert.equal(voice.needsLandscapeCoercion({ width: 1280, height: 720 }), false);
-});
-
-test("needsLandscapeCoercion doesn't gamble on unknown dimensions", () => {
-  // No getSettings support / missing dims → leave the track alone (don't churn
-  // applyConstraints on a track we can't measure).
-  assert.equal(voice.needsLandscapeCoercion({}), false);
-  assert.equal(voice.needsLandscapeCoercion(null), false);
-  assert.equal(voice.needsLandscapeCoercion({ width: 640 }), false);
-  assert.equal(voice.needsLandscapeCoercion({ height: 360 }), false);
-});
-
-test("landscapeConstraintLadder is exact, landscape, and even-dimensioned throughout", () => {
-  const ladder = voice.landscapeConstraintLadder();
-  assert.ok(ladder.length >= 1);
-  // 4:3 is tried first — it's the only family a 4:3-native sensor (Pixel) has.
-  assert.deepEqual(ladder[0], { width: { exact: 480 }, height: { exact: 360 } });
-  for (const c of ladder) {
-    const w = c.width.exact, h = c.height.exact;
-    assert.ok(w > h, "every rung is landscape (the whole point — escape the square)");
-    // VP8 requires even dimensions; macroblock padding handles non-multiples of 16
-    // (360p is the canonical WebRTC profile), so even — not 16-aligned — is the bar.
-    assert.equal(w % 2, 0, "width is even");
-    assert.equal(h % 2, 0, "height is even");
-  }
-});
-
 // --- camera toggle lifecycle ------------------------------------------------
 // When joining with camera off, track.enabled is not set for video. When camera
 // is toggled on later, the video track becomes enabled. This is the state

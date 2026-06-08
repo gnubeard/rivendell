@@ -311,58 +311,6 @@ export function getLocalVideoTrack() {
   return localStream.getVideoTracks()[0] || null;
 }
 
-// needsLandscapeCoercion reports whether a live video track opened square or
-// portrait (height >= width). With the aspectRatio constraint gone (see
-// VIDEO_CONSTRAINTS) most cameras — including the 4:3-only Pixel — now settle on a
-// landscape mode on their own, so this is a safety net for the cameras that still
-// open rotated/portrait. A frame wider than it is tall is already landscape and
-// needs no coercion. Unknown dims (no getSettings support) return false — we don't
-// gamble an applyConstraints churn on a track we can't measure. Pure; unit-tested.
-export function needsLandscapeCoercion(settings) {
-  const w = settings && settings.width;
-  const h = settings && settings.height;
-  if (!w || !h) return false;
-  return w <= h;
-}
-
-// landscapeConstraintLadder is the ordered list of EXACT capture profiles tried,
-// via track.applyConstraints(), to flip a square/portrait capture into a landscape
-// mode the VP8 encoder will drive. applyConstraints re-runs the camera's mode
-// selection AFTER the track is live, where the open-time ideals failed. Order leads
-// with 4:3 (480x360, then 640x480) because that's the only family a 4:3-native
-// sensor like the Pixel 7 Pro actually has — forcing 16:9 first just wastes a rung
-// on a mode the hardware can't produce. The 16:9 rungs follow for cameras that do
-// support them. All are exact so a rung the camera can't honour REJECTS (leaving
-// the track untouched) rather than silently resolving back to portrait. Pure;
-// unit-tested.
-export function landscapeConstraintLadder() {
-  return [
-    { width: { exact: 480 }, height: { exact: 360 } },
-    { width: { exact: 640 }, height: { exact: 480 } },
-    { width: { exact: 640 }, height: { exact: 360 } },
-    { width: { exact: 1280 }, height: { exact: 720 } },
-  ];
-}
-
-// coerceLandscapeCapture is the portrait→landscape safety net (see
-// needsLandscapeCoercion). If the camera opened square/portrait, it walks
-// landscapeConstraintLadder via applyConstraints() and stops at the first rung that
-// lands a landscape frame. Best-effort: a track with no applyConstraints, an
-// already-landscape capture, or a camera that rejects every rung all leave the
-// track exactly as-is — this can only help, never break the capture we already have.
-async function coerceLandscapeCapture(track) {
-  if (!track || typeof track.applyConstraints !== "function") return;
-  if (!needsLandscapeCoercion(track.getSettings ? track.getSettings() : {})) return;
-  for (const constraints of landscapeConstraintLadder()) {
-    try {
-      await track.applyConstraints(constraints);
-    } catch {
-      continue; // camera can't honour this exact profile — try the next rung
-    }
-    if (!needsLandscapeCoercion(track.getSettings ? track.getSettings() : {})) return;
-  }
-}
-
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
 // acquireCameraStream) and must request the mic identically to the join path.
@@ -467,7 +415,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
 
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
-  if (cameraEnabled) { setupLocalVideo(); startCanvasPipe(); }
+  if (cameraEnabled) setupLocalVideo();
 
   // Meter our own mic so our roster row pulses while we talk (a disabled/muted
   // track reads as silence, so muting naturally clears our own speaking ring).
@@ -656,30 +604,28 @@ export async function setCameraEnabled(on) {
     // Swap each peer's audio sender to the new session's mic track (replaceTrack
     // is transparent — same m-line, no renegotiation), then add the video track
     // (this fires onnegotiationneeded; the offerer re-offers).
-    // Adopt the new session's tracks into localStream first (the original audio was
-    // already removed and stopped above), so the preview — and the canvas pipe that
-    // draws from it — sees the new camera frames before we publish.
-    if (newAudio) localStream.addTrack(newAudio);
-    if (vt) localStream.addTrack(vt);
-    cameraEnabled = true;
-    saveCameraPref(true);
-    setupLocalVideo();
-    // Publish the canvas-sourced track, not the raw camera track (FF-Android wedge).
-    const sendVideo = vt ? (startCanvasPipe() || vt) : null;
-
-    // Swap each peer's audio sender to the new mic track (replaceTrack is
-    // transparent — same m-line, no renegotiation), then add our video track (fires
-    // onnegotiationneeded; the offerer re-offers).
+    // Swap each peer's audio sender to the new session's mic track (replaceTrack
+    // is transparent — same m-line, no renegotiation), then add the video track
+    // (this fires onnegotiationneeded; the offerer re-offers).
     for (const pc of peerConns.values()) {
       if (newAudio) {
         const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
         if (audioSender) { try { await audioSender.replaceTrack(newAudio); } catch {} }
       }
-      if (sendVideo) pc.addTrack(sendVideo, localStream);
+      if (vt) pc.addTrack(vt, localStream);
     }
+
+    // Adopt the new session's tracks into localStream (the original audio was
+    // already removed and stopped above, before the acquire).
+    if (newAudio) localStream.addTrack(newAudio);
+    if (vt) localStream.addTrack(vt);
 
     // Re-meter our mic: the old analyser source pointed at the now-stopped track.
     addMeter(myUserId, localStream);
+
+    cameraEnabled = true;
+    saveCameraPref(true);
+    setupLocalVideo();
   } else if (videoTracks.length > 0) {
     // Track already exists: flip .enabled (no renegotiation required).
     videoTracks.forEach(t => { t.enabled = on; });
@@ -709,71 +655,6 @@ function setupLocalVideo() {
 
 function teardownLocalVideo() {
   if (localVideoEl) localVideoEl.srcObject = null;
-}
-
-// --- Canvas send pipeline (FF-Android camera->encoder wedge workaround) --------
-//
-// On Firefox-Android the camera->encoder feed wedges: the encoder is never invoked
-// (getStats totalEncodeTime + framesEncoded freeze at ~3-7, frameWidth/Height=0x0)
-// even though the camera MediaStreamTrack stays live at full fps and the local
-// preview renders perfectly. Confirmed NOT the codec (identical on VP8/VP9/H.264)
-// and NOT transport (reproduces on a healthy connected/connected WiFi path, inbound
-// decoding fine) — it is FF-Android's capture->encoder path specifically.
-//
-// Escape hatch: don't hand the raw camera track to the RTCRtpSender at all. Draw
-// the live preview frames into a <canvas> and publish canvas.captureStream()'s
-// track instead. The encoder then pulls from a canvas source — a different pipeline
-// that sidesteps the wedged capture path — fed fixed, even dimensions. The camera
-// track keeps a single sink (the preview <video>), which the canvas reads via
-// drawImage; the sender never touches the camera track. Best-effort: a platform
-// without canvas.captureStream falls back to publishing the raw camera track.
-const CANVAS_SEND_FPS = 24;
-let canvasPipe = null; // { track, stop() } | null
-
-function startCanvasPipe() {
-  stopCanvasPipe();
-  if (typeof document === "undefined" || !localVideoEl) return null;
-  const cam = localStream && localStream.getVideoTracks ? localStream.getVideoTracks()[0] : null;
-  const set = cam && cam.getSettings ? cam.getSettings() : {};
-  const even = (n) => n - (n % 2); // encoders want even dimensions
-  const canvas = document.createElement("canvas");
-  // Placeholder size until the preview decodes; the draw loop then adopts the
-  // ACTUAL decoded dimensions. getSettings() can disagree with the real frame on
-  // Android (sensor reports 640x480 while frames arrive rotated 480x640), so we
-  // trust videoWidth/videoHeight, drawn 1:1 — no transpose, no stretch.
-  canvas.width = even(set.width || 640); canvas.height = even(set.height || 480);
-  const ctx = canvas.getContext ? canvas.getContext("2d", { alpha: false }) : null;
-  if (!ctx || typeof canvas.captureStream !== "function") return null; // unsupported
-  let raf = 0, stopped = false;
-  const draw = () => {
-    if (stopped) return;
-    const vw = localVideoEl ? localVideoEl.videoWidth : 0;
-    const vh = localVideoEl ? localVideoEl.videoHeight : 0;
-    if (vw && vh) {
-      const w = even(vw), h = even(vh);
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-      ctx.drawImage(localVideoEl, 0, 0, w, h);
-    }
-    raf = requestAnimationFrame(draw);
-  };
-  raf = requestAnimationFrame(draw);
-  const track = canvas.captureStream(CANVAS_SEND_FPS).getVideoTracks()[0];
-  if (track) track.contentHint = "motion";
-  canvasPipe = {
-    track,
-    stop() { stopped = true; if (raf) cancelAnimationFrame(raf); try { track && track.stop(); } catch {} },
-  };
-  return track;
-}
-
-function stopCanvasPipe() {
-  if (canvasPipe) { canvasPipe.stop(); canvasPipe = null; }
-}
-
-// videoSendTrack returns the track to publish for our camera: the canvas pipe's
-// track when active, else the raw camera track (non-FF / canvas unsupported).
-function videoSendTrack(cameraTrack) {
-  return (canvasPipe && canvasPipe.track) || cameraTrack;
 }
 
 // setSpeakingCallback registers cb(userId, speaking) for speaking-indicator UI.
@@ -1229,12 +1110,7 @@ function createPC(remoteUserId) {
   peerMeta.set(remoteUserId, { restarts: 0, timer: null });
 
   if (localStream) {
-    // Publish the canvas-sourced video track (FF-Android wedge workaround), not the
-    // raw camera track; audio is published as-is.
-    for (const track of localStream.getTracks()) {
-      const t = track.kind === "video" ? videoSendTrack(track) : track;
-      if (t) pc.addTrack(t, localStream);
-    }
+    for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
   }
   // Prefer VP8 on any video transceiver addTrack just created (offerer side).
   preferVideoCodec(pc);
@@ -1358,7 +1234,6 @@ function closeAllPeers() {
 }
 
 function stopLocalStream() {
-  stopCanvasPipe();
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
