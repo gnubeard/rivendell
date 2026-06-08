@@ -326,6 +326,13 @@
     </div>
   </div>
 
+  <!-- IMAGE LIGHTBOX — clicking an inline image opens it large here instead of a
+       new tab. Reuses .modal so Esc and backdrop-tap dismiss it for free. -->
+  <div id="lightbox" class="modal lightbox" hidden>
+    <button id="lightbox-close" class="lightbox-close icon-btn" title="Close (Esc)" aria-label="Close">×</button>
+    <img id="lightbox-img" class="lightbox-img" alt="">
+  </div>
+
   <!-- ADMIN PANEL — a full-screen settings surface, not a modal. -->
   <section id="admin-panel" class="admin-panel" hidden>
     <header class="admin-panel-head">

@@ -546,6 +546,12 @@ body.dm-active #members-toggle { display: none; }
    `form label`/`form input` rules; only the private-toggle row needs its own
    (inline, non-stretched) layout. */
 .modal-card.narrow { max-width: 380px; }
+/* Image lightbox: the picked image fills most of the viewport, centred on the
+   dark .modal backdrop. The image itself doesn't dismiss (only backdrop/Esc/×),
+   so the cursor is a zoom-out hint over the backdrop only. */
+.lightbox { padding: 2.5rem; cursor: zoom-out; }
+.lightbox-img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: var(--radius); cursor: default; box-shadow: 0 8px 40px rgba(0,0,0,0.6); }
+.lightbox-close { position: fixed; top: 1rem; right: 1rem; width: 36px; height: 36px; font-size: 1.4rem; cursor: pointer; }
 /* The pinned-messages list is cramped at the narrow width; give it more room on
    wider screens (.modal-card is width:100%, so phones are unaffected). */
 #pins-modal .modal-card { max-width: 560px; }

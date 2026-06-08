@@ -2854,6 +2854,15 @@ async function runSearch(reset) {
 
 // --- controls: status, avatar, new channel, admin, logout ---------------
 
+// openLightbox shows an inline image large, centred on a dark backdrop, instead
+// of opening it in a new tab. Dismissed by the × button, Esc, or a backdrop tap
+// (wired in wireControls alongside the other .modal handlers).
+function openLightbox(src) {
+  if (!src) return;
+  $("#lightbox-img").src = src;
+  $("#lightbox").hidden = false;
+}
+
 function wireControls() {
   // SPA permalink navigation. A pasted/markdown link to this instance points at
   // a full URL like https://host/#c<chan>/m<msg>; with target="_blank" a click
@@ -2871,6 +2880,16 @@ function wireControls() {
     if (spoiler && !spoiler.classList.contains("revealed")) {
       e.preventDefault();
       spoiler.classList.add("revealed");
+      return;
+    }
+    // Inline images open in a large in-app lightbox rather than a new tab. The
+    // image is wrapped in an a.msg-image-link; intercept that anchor (unmodified
+    // left clicks only — the modifier checks above already let new-tab intent
+    // through) and show the lightbox instead of navigating.
+    const imgLink = e.target.closest && e.target.closest("a.msg-image-link");
+    if (imgLink) {
+      e.preventDefault();
+      openLightbox(imgLink.getAttribute("href"));
       return;
     }
     const a = e.target.closest && e.target.closest("a[href]");
@@ -3042,10 +3061,17 @@ function wireControls() {
   const closeModal = (m) => {
     m.hidden = true;
     if (m.id === "profile-modal") applyTheme(myTheme());
+    // Drop the lightbox source so a large image stops loading / frees memory and
+    // the next open never flashes the previous picture.
+    if (m.id === "lightbox") $("#lightbox-img").src = "";
   };
 
   for (const m of document.querySelectorAll(".modal"))
     m.addEventListener("click", e => { if (e.target === m) closeModal(m); });
+
+  // The × is the explicit close affordance (backdrop/Esc also dismiss). It sits
+  // over the image, so a direct click never reaches the backdrop handler.
+  $("#lightbox-close").onclick = () => closeModal($("#lightbox"));
 
   // Desktop: Escape closes the top-most open modal (mobile dismisses by tapping the
   // backdrop). Closing just the last-opened one lets a stacked flow unwind a step.
