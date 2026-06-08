@@ -728,8 +728,18 @@ function startRealtime() {
         const pingsMe = isNewFromOther && ((ch && ch.is_dm) || mentioned);
         // A muted channel is fully silent: no badge bump, no chime/notification.
         const muted = S.isMuted(state, cid);
+        // My own new message snaps the view to the newest, so I land on what I
+        // just sent even if I'd scrolled up to read.
+        const isNewFromMe = evt.type === "message.new" && evt.payload.user_id === state.me.id;
         if (cid === state.activeChannelId) {
-          renderMessages();
+          if (isNewFromMe && viewingHistory.has(cid)) {
+            // I sent while viewing a history window (below the live tail): reload
+            // the channel so my message shows at the bottom in proper context,
+            // not appended after a gap of unloaded messages.
+            loadChannel(cid);
+          } else {
+            renderMessages(isNewFromMe); // mine forces a jump to the newest
+          }
           refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
           if (tabUnfocused()) {
             // It's the open channel, but the tab isn't focused — you haven't
