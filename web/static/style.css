@@ -333,7 +333,7 @@ button.primary:hover { filter: brightness(1.08); }
 .msg-body .edited { color: var(--text-faint); font-size: 0.72rem; }
 .msg-body a { color: var(--accent); }
 .msg-body a.msg-image-link { display: inline-block; }
-.msg-body img.msg-image { display: block; max-width: min(360px, 100%); max-height: 280px; width: auto; height: auto; margin: 0.3rem 0; border-radius: var(--radius); background: var(--bg-3); object-fit: contain; }
+.msg-body img.msg-image { display: inline-block; vertical-align: top; max-width: min(360px, 100%); max-height: 280px; width: auto; height: auto; margin: 0.3rem 0; border-radius: var(--radius); background: var(--bg-3); object-fit: contain; }
 .msg-body code { background: var(--bg-3); padding: 0.05rem 0.3rem; border-radius: 4px; font-family: var(--mono); font-size: 0.85em; }
 .msg-body .spoiler { background: var(--text-faint); color: transparent; border-radius: 3px; padding: 0 3px; cursor: pointer; user-select: none; display: inline-block; transition: background 0.15s, color 0.15s; }
 .msg-body .spoiler.revealed { background: var(--bg-3); color: var(--text); user-select: auto; }
