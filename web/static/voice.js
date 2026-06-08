@@ -28,6 +28,41 @@ let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMute
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedia failure to the UI
 
+// On-screen RTC debug HUD. Firefox-Android has no reachable console without a
+// USB-tethered desktop, so when ?rtcdebug=1 is in the URL we mirror the same
+// getStats telemetry onto a fixed overlay readable straight off the phone. The
+// crucial extra signal the console line never had: the <video> element's own
+// playback state (paused / currentTime / readyState). The "one frame and done"
+// freeze is a PAUSED element while frames keep decoding — that only shows up if
+// you look at the element, not at getStats. Cumulative counters (framesDecoded,
+// bytesReceived) are shown raw so a static value between 2s refreshes localizes
+// the stall: bytes climbing + framesDecoded flat = decoder; framesDecoded
+// climbing + element paused = autoplay; out framesEncoded flat = sender stall.
+function rtcDebugEnabled() {
+  try {
+    if (new URLSearchParams(location.search).has("rtcdebug")) return true;
+    return localStorage.getItem("rivendell.rtcDebug") === "1";
+  } catch { return false; }
+}
+const hudStats = new Map(); // remoteUserId -> latest formatted lines
+function updateRtcHud() {
+  if (!rtcDebugEnabled()) return;
+  let hud = document.getElementById("rtc-hud");
+  if (!hud) {
+    hud = document.createElement("div");
+    hud.id = "rtc-hud";
+    hud.style.cssText = "position:fixed;left:4px;bottom:4px;z-index:99999;max-width:96vw;" +
+      "font:10px/1.35 monospace;color:#0f0;background:rgba(0,0,0,.78);padding:6px 8px;" +
+      "border-radius:6px;white-space:pre-wrap;pointer-events:none;word-break:break-all;";
+    document.body.appendChild(hud);
+  }
+  const lv = localVideoEl;
+  const localLine = lv
+    ? `local: paused=${lv.paused} t=${lv.currentTime?.toFixed(1)} rs=${lv.readyState} ${lv.videoWidth}x${lv.videoHeight}`
+    : "local: (none)";
+  hud.textContent = [localLine, ...hudStats.values()].join("\n");
+}
+
 const diagnosedPeers = new Set(); // remoteUserId -> diagnostics attached (attach once)
 export function attachCallDiagnostics(remoteUserId) {
   const pc = peerConns.get(remoteUserId);
@@ -40,7 +75,12 @@ export function attachCallDiagnostics(remoteUserId) {
   pc.addEventListener("iceconnectionstatechange", () =>
     console.log(`[rtc ${remoteUserId}] ice=${pc.iceConnectionState} conn=${pc.connectionState}`));
   const timer = setInterval(async () => {
-    if (!peerConns.has(remoteUserId)) return clearInterval(timer);
+    if (!peerConns.has(remoteUserId)) {
+      hudStats.delete(remoteUserId);
+      if (hudStats.size === 0) document.getElementById("rtc-hud")?.remove();
+      else updateRtcHud();
+      return clearInterval(timer);
+    }
     const s = await pc.getStats();
     let pair, inV, outV;
     s.forEach(r => {
@@ -52,6 +92,18 @@ export function attachCallDiagnostics(remoteUserId) {
     console.log(`[rtc ${remoteUserId}] path=${lc?.candidateType}->${rc?.candidateType} rtt=${pair?.currentRoundTripTime}s`,
       `| in fps=${inV?.framesPerSecond} drop=${inV?.framesDropped} lost=${inV?.packetsLost} pli=${inV?.pliCount} jitter=${inV?.jitter}`,
       `| out fps=${outV?.framesPerSecond} limit=${outV?.qualityLimitationReason} tgt=${outV?.targetBitrate}`);
+    if (rtcDebugEnabled()) {
+      const rv = videoEls.get(remoteUserId);
+      const elLine = rv
+        ? `  el: paused=${rv.paused} t=${rv.currentTime?.toFixed(1)} rs=${rv.readyState} ${rv.videoWidth}x${rv.videoHeight}`
+        : "  el: (no remote <video>)";
+      hudStats.set(remoteUserId,
+        `peer ${remoteUserId} ${pc.iceConnectionState}/${pc.connectionState} ${lc?.candidateType}->${rc?.candidateType}\n` +
+        `  in  fps=${inV?.framesPerSecond} decoded=${inV?.framesDecoded} recv=${inV?.framesReceived} bytes=${inV?.bytesReceived} pli=${inV?.pliCount} lost=${inV?.packetsLost}\n` +
+        `  out fps=${outV?.framesPerSecond} enc=${outV?.framesEncoded} bytes=${outV?.bytesSent} limit=${outV?.qualityLimitationReason}\n` +
+        elLine);
+      updateRtcHud();
+    }
   }, 2000);
 }
 
