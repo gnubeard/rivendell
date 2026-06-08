@@ -735,16 +735,25 @@ function startCanvasPipe() {
   if (typeof document === "undefined" || !localVideoEl) return null;
   const cam = localStream && localStream.getVideoTracks ? localStream.getVideoTracks()[0] : null;
   const set = cam && cam.getSettings ? cam.getSettings() : {};
-  let w = set.width || 640, h = set.height || 480;
-  w -= w % 2; h -= h % 2; // encoders want even dimensions
+  const even = (n) => n - (n % 2); // encoders want even dimensions
   const canvas = document.createElement("canvas");
-  canvas.width = w; canvas.height = h;
+  // Placeholder size until the preview decodes; the draw loop then adopts the
+  // ACTUAL decoded dimensions. getSettings() can disagree with the real frame on
+  // Android (sensor reports 640x480 while frames arrive rotated 480x640), so we
+  // trust videoWidth/videoHeight, drawn 1:1 — no transpose, no stretch.
+  canvas.width = even(set.width || 640); canvas.height = even(set.height || 480);
   const ctx = canvas.getContext ? canvas.getContext("2d", { alpha: false }) : null;
   if (!ctx || typeof canvas.captureStream !== "function") return null; // unsupported
   let raf = 0, stopped = false;
   const draw = () => {
     if (stopped) return;
-    if (localVideoEl && localVideoEl.videoWidth) ctx.drawImage(localVideoEl, 0, 0, w, h);
+    const vw = localVideoEl ? localVideoEl.videoWidth : 0;
+    const vh = localVideoEl ? localVideoEl.videoHeight : 0;
+    if (vw && vh) {
+      const w = even(vw), h = even(vh);
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      ctx.drawImage(localVideoEl, 0, 0, w, h);
+    }
     raf = requestAnimationFrame(draw);
   };
   raf = requestAnimationFrame(draw);
