@@ -495,23 +495,3 @@ test("orderVideoCodecsVP8First tolerates junk input", () => {
   assert.equal(out[0].mimeType, "video/VP8");
   assert.equal(out.length, 2);
 });
-
-// --- fmtDelta (RTC HUD counter deltas) --------------------------------------
-
-test("fmtDelta shows cur(+delta) against the previous refresh value", () => {
-  assert.equal(voice.fmtDelta(13, 7), "13(+6)");   // advancing
-  assert.equal(voice.fmtDelta(7, 7), "7(+0)");     // stalled — the freeze signal
-  assert.equal(voice.fmtDelta(21643, 10642), "21643(+11001)"); // bytes climbing
-});
-
-test("fmtDelta handles first-sample and missing counters", () => {
-  assert.equal(voice.fmtDelta(7, null), "7(+?)");        // no baseline yet
-  assert.equal(voice.fmtDelta(7, undefined), "7(+?)");
-  assert.equal(voice.fmtDelta(undefined, 5), "?");       // counter absent (e.g. Firefox)
-  assert.equal(voice.fmtDelta(null, 5), "?");
-});
-
-test("fmtDelta renders a counter reset as a negative delta, not a crash", () => {
-  // A counter going backwards (reconnect / stat reset) shows a signed negative.
-  assert.equal(voice.fmtDelta(2, 9), "2(-7)");
-});

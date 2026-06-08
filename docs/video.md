@@ -179,84 +179,90 @@ Key open questions deferred to that design pass:
 
 ---
 
-## Capture aspect ratio — the FF-Android square-capture saga (reference)
+## Capture aspect ratio & the FF-Android outbound-video freeze (reference)
 
-This is the single fiddliest corner of video, and it has bitten us across many
-commits. Read this before touching `VIDEO_CONSTRAINTS`, the coercion ladder, or
-anything that "fixes" a non-landscape capture. The short version:
+This is the single fiddliest corner of video. Read it before touching
+`VIDEO_CONSTRAINTS` or anything that "fixes" a non-landscape capture or a frozen
+tile. There are **two separate FF-Android problems** here that were long conflated;
+keep them apart.
 
-> **On Firefox for Android with a 4:3/1:1-native sensor (e.g. the Pixel 7 Pro),
-> the camera captures *square* (1080×1080, 360×360, …) and there is no JS
-> constraint that reliably moves it to landscape. This is a browser limitation,
-> not a bug in our code. Accept it; fix aspect on the render side. Chrome for
-> Android gives landscape; Firefox for Android does not.**
+### 1. Square capture (real, fixed)
 
-### How to recognise it
+On Firefox for Android with a 4:3/1:1-native sensor (e.g. the Pixel 7), given any
+`width ≠ height` ideal, the camera does NOT pick a matching native mode — it crops to
+a **square** whose side equals the requested height (`640×360 → 360×360`,
+`640×480 → 480×480`). No JS constraint reliably forces landscape.
 
-Open the admin video console (RTC HUD). The tells:
+**Fix (current policy):** request **no spatial constraint at all** —
+`VIDEO_CONSTRAINTS` is `{ frameRate: { ideal: 24 } }`, nothing else. With nothing to
+crop against, the sensor opens its own native (non-square) mode, and the render side
+absorbs whatever aspect arrives via `object-fit` (see `style.css`). Never use
+`aspectRatio`, `max`, or `exact` at getUserMedia time: an `aspectRatio: {ideal:16/9}`
+term (commit `3a31f7e`) *collapsed* capture to square, and a `max` ceiling threw
+`OverconstrainedError` and silently killed the Android preview (the v1.3.18
+regression). Open-time constraints are ideal-only, frame-rate-only, on purpose. See
+the comment block above `VIDEO_CONSTRAINTS` in `voice.js`.
 
-- `local cap: 1080x1080@60` / `local cap: 360x360@30` — width == height (square).
-- `(chromium-only) impl=n/a pe=n/a` — the Chromium-only encoder stats are absent,
-  so the browser is **Firefox**. (On Chromium these read real values.)
+### 2. The outbound-video encoder freeze (upstream Firefox bug, unfixable here)
 
-A square `local cap` line plus `impl=n/a` is the signature of this exact issue.
+Independently of capture geometry, **Firefox-stable on Android invokes its video
+encoder for ~3–7 frames and then stops entirely** (`totalEncodeTime` flat,
+`framesEncoded` frozen, `frameWidth = 0`) while it *receives/decodes* peers fine and
+its own local preview stays pristine. We ruled out, by direct testing: codec
+(reproduces on VP8 and VP9; FF-Android exposes no H.264 at all), transport
+(reproduces at `connected/connected` on LAN), the camera→encoder feed (a
+`canvas.captureStream` pipeline froze identically), and frame orientation/dimensions.
 
-### Why constraints can't fix it
+**Conclusion: it's an upstream Firefox-stable encoder bug — it works on Firefox
+Android _Nightly_.** Nothing in this codebase cures it; don't re-chase it. Use Chrome
+for Android (or Firefox Nightly) to *send* video from a phone; receiving works
+everywhere. The "one frame and done" *receiver* freeze was a different, fixed problem
+— an unmuted remote `<video>` paused by mobile autoplay policy (Phase 1, `muted =
+true` on every tile). Don't conflate the two.
 
-1. **getUserMedia constraints are advisory on FF-Android.** `width/height: {ideal}`
-   nudge the fitness-distance pick but do not force a mode; the camera can and does
-   settle on a square mode anyway.
-2. **`aspectRatio` makes it *worse*.** An earlier `aspectRatio: {ideal: 16/9}`
-   (commit `3a31f7e`) didn't widen the picture — it fought a sensor with no real
-   16:9 mode and *collapsed* FF-Android to a square 360×360 capture, which then fed
-   a wedged VP8 encoder (enc frozen, `0x0` out). Do not reintroduce an `aspectRatio`
-   term. See the comment block above `VIDEO_CONSTRAINTS` in `voice.js`.
-3. **`applyConstraints` is effectively a no-op on a live FF-Android track.** The
-   post-open coercion ladder (commit `f596106`) walks `exact` landscape profiles via
-   `track.applyConstraints()`. On Chromium this can re-pick a mode; on FF-Android the
-   exact rungs simply reject (or resolve back to square), leaving the track untouched.
-   The ladder is therefore a **best-effort safety net for portrait/rotated captures,
-   not a cure for FF-Android square.** It can only help, never break — don't expect
-   more from it, and don't expand it hoping to win this fight.
-4. **Never use `max` or `exact` at getUserMedia time.** A `max` ceiling threw
-   `OverconstrainedError` on Android front cameras and silently killed the preview
-   (the v1.3.18 regression). Open-time constraints are ideal-only on purpose.
+### Removed diagnostic scaffolding
 
-### The standing policy (the "standard")
+Chasing #2 produced a lot of throwaway tooling that has since been deleted — don't be
+surprised by references to it in old commit messages:
 
-- **Capture:** `VIDEO_CONSTRAINTS` is ideal-only, landscape-oriented size
-  (`width 640 / height 360`), **no `aspectRatio`, no `max`, no `exact`**. This lets
-  each camera settle on its own native landscape mode where it has one (~640×360 on
-  a 16:9 webcam, ~480×360 on a 4:3 Pixel under Chrome) and fall back to square on
-  FF-Android without erroring.
-- **Render:** the video tiles use `object-fit` (`contain`/`cover`, see `style.css`),
-  so *any* arriving aspect — square, 4:3, 16:9 — displays without stretching. This is
-  where aspect is actually handled.
-- **Encode:** VP8 drives a square frame cleanly. The historical "one frame and done"
-  freeze was **not** an encoder/aspect problem — it was an unmuted remote `<video>`
-  paused by mobile autoplay policy (fixed by `muted = true` on every video element;
-  see Phase 1). Don't go looking for a codec fix for a square frame.
-- **Diagnosis lever:** the admin video console persists a tuned constraints object to
-  `localStorage` (`rivendell.videoConstraints`) so you can A/B a capture profile on a
-  real call without a rebuild. Use it to *confirm* behaviour on a device, not to hunt
-  for a magic constraint that doesn't exist on FF-Android.
+- the `?rtcdebug=1` on-screen getStats HUD,
+- an admin-panel "video debugging console" (a live camera/constraints lab that
+  persisted a `rivendell.videoConstraints` override),
+- a `canvas.captureStream` send pipeline,
+- an `applyConstraints` landscape-coercion ladder.
+
+All served their diagnostic purpose and were removed to keep the surface small once
+the root cause (#2) was understood as an upstream bug.
+
+### What survives as standing policy
+
+- **Capture:** `VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } }` — frame-rate ideal
+  only, no spatial constraint (see #1).
+- **Codec:** VP8-first (`orderVideoCodecsVP8First`) as a safe cross-browser default;
+  it does **not** fix the freeze (#2).
+- **Render:** `object-fit` on the tiles absorbs any aspect ratio.
+- **Bandwidth:** shaped by `contentHint = "motion"` — not by a capture-resolution or
+  sender-bitrate cap. (A live `setParameters` bitrate cap was a dead end and was
+  removed.)
 
 ### Commit trail (so the reasoning isn't lost)
 
 | Commit | Move | Outcome |
 |---|---|---|
-| `3a31f7e` | `aspectRatio: {ideal: 16/9}` | Fought the 4:3 sensor → collapsed FF-Android to square, wedged the encoder. Reverted. |
-| `f596106` | `applyConstraints` coercion ladder | No-op on FF-Android live tracks; kept only as a portrait→landscape safety net. |
-| `98ba35e` | Added the real-time video debugging console / RTC HUD | Gave us `local cap` + `impl=n/a` so we could finally *see* the square frame. |
-| `cfdb0d3` | Stopped forcing 16:9; accept the native sensor + `object-fit` render | Current policy. Capture may be square on FF-Android; the UI handles it. |
+| `3a31f7e` | `aspectRatio: {ideal: 16/9}` | Collapsed FF-Android to square, wedged the encoder. Reverted. |
+| `ee2e9d7` | Dropped spatial constraints entirely | Current capture policy — sensor opens its own native mode. |
+| `fd0ba03` | `muted = true` on remote tiles | Fixed the "one frame and done" *receiver* freeze (autoplay). |
+| `1a65e48` → `3c31acd` | canvas send pipeline | Froze identically; the wedge is in FF's encoder, not the feed. Removed. |
+| `f596106` → `3c31acd` | `applyConstraints` coercion ladder | No-op on FF-Android live tracks. Removed. |
+| `98ba35e` → cleanup | video debugging console + `rtcdebug` HUD | Diagnostic only; let us *see* the freeze. Removed once the cause was known. |
 
-### If "make it landscape on that device" ever resurfaces
+### If "make it work on Firefox-stable Android" resurfaces
 
-The honest answer is: **use Chrome for Android**, or run an SFU/transcode step
-server-side (explicitly out of scope — no media server, see top of this doc).
-There is no client-side constraint that makes Firefox for Android hand us a
-landscape frame from a square-native sensor. Document any *new* device behaviour in
-the table above rather than re-litigating the constraint stack.
+There is no client-side fix — it's an upstream Firefox encoder bug (works on
+Nightly). Use Chrome for Android or Firefox Nightly to *send*; receiving works
+everywhere. An SFU/transcode step is explicitly out of scope (no media server, see
+top of this doc). Document any *new* device behaviour in the table above rather than
+re-litigating the constraint stack.
 
 ---
 

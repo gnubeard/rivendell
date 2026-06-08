@@ -28,162 +28,6 @@ let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMute
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedia failure to the UI
 
-// On-screen RTC debug HUD. Firefox-Android has no reachable console without a
-// USB-tethered desktop, so when ?rtcdebug=1 is in the URL we mirror the same
-// getStats telemetry onto a fixed overlay readable straight off the phone. The
-// crucial extra signal the console line never had: the <video> element's own
-// playback state (paused / currentTime / readyState). The "one frame and done"
-// freeze was a PAUSED element while frames keep decoding — fixed by muting the
-// tile (fd0ba03); el: paused=false rs=4 now confirms that path is healthy.
-//
-// Cumulative counters are shown as cur(+delta-since-last-refresh) so a SINGLE
-// screenshot localizes a freeze without having to diff two snapshots by eye:
-//   dec=(+0) while connected ............ receiver decode stall (or sender stopped)
-//   dec=(+0) + bytes=(+N climbing) ...... decoder stuck (packets arrive, none decode)
-//   enc=(+0) on the sender .............. sender encoder stall
-//   in dec=(+13) one way, (+0) the other  ASYMMETRIC stall — one direction only
-// kf=(+delta) is keyFramesDecoded: after a pli is sent, kf staying flat means the
-// peer's encoder never produced the requested recovery keyframe.
-//
-// NOTE: out fps is unreliable on Firefox — it leaves framesPerSecond unset on
-// outbound-rtp even while sending 13 fps, so a peer can show out fps=0 while the
-// OTHER end receives its video fine. Read the deltas, not out fps. Each rtp line
-// is prefixed with the NEGOTIATED CODEC so a codec-rooted stall is visible.
-
-// fmtDelta formats a cumulative getStats counter as "cur(+delta)" against its
-// previous-refresh value, so a single HUD reading shows whether the counter is
-// advancing. Pure; unit-tested. "?" for a missing counter, "(+?)" on the first
-// sample (no baseline yet).
-export function fmtDelta(cur, prev) {
-  if (cur == null) return "?";
-  if (prev == null) return `${cur}(+?)`;
-  const d = cur - prev;
-  return `${cur}(${d >= 0 ? "+" : ""}${d})`;
-}
-function rtcDebugEnabled() {
-  try {
-    if (new URLSearchParams(location.search).has("rtcdebug")) return true;
-    return localStorage.getItem("rivendell.rtcDebug") === "1";
-  } catch { return false; }
-}
-const hudStats = new Map(); // remoteUserId -> latest formatted lines
-const hudPrev = new Map();  // remoteUserId -> previous-refresh raw counters (for deltas)
-function updateRtcHud() {
-  if (!rtcDebugEnabled()) return;
-  let hud = document.getElementById("rtc-hud");
-  if (!hud) {
-    hud = document.createElement("div");
-    hud.id = "rtc-hud";
-    hud.style.cssText = "position:fixed;left:4px;bottom:4px;z-index:99999;max-width:96vw;" +
-      "font:10px/1.35 monospace;color:#0f0;background:rgba(0,0,0,.78);padding:6px 8px;" +
-      "border-radius:6px;white-space:pre-wrap;pointer-events:none;word-break:break-all;";
-    document.body.appendChild(hud);
-  }
-  const lv = localVideoEl;
-  const elLine = lv
-    ? `local el:  paused=${lv.paused} t=${lv.currentTime?.toFixed(1)} rs=${lv.readyState} ${lv.videoWidth}x${lv.videoHeight}`
-    : "local el:  (none)";
-  // Capture-side truth, read straight off the local camera MediaStreamTrack —
-  // BEFORE anything reaches the encoder. This is the fork getStats cannot give us
-  // on Firefox (impl/pe are undefined there): getSettings() reports the resolution
-  // and frameRate the camera negotiated (a 360x360 here = the odd square profile),
-  // and track.muted=true means the source is momentarily delivering NO frames.
-  // So an outbound 0x0 + a muted/0fps track here localizes the wedge to CAPTURE,
-  // not encoder selection; an outbound 0x0 next to a healthy live 640x360@24 track
-  // instead points downstream at the encoder/pipeline.
-  const vt = localStream && localStream.getVideoTracks ? localStream.getVideoTracks()[0] : null;
-  let capLine = "local cap: (no video track)";
-  if (vt) {
-    const s = vt.getSettings ? vt.getSettings() : {};
-    const fr = typeof s.frameRate === "number" ? s.frameRate.toFixed(0) : (s.frameRate ?? "?");
-    capLine = `local cap: ${s.width ?? "?"}x${s.height ?? "?"}@${fr} rs=${vt.readyState} muted=${vt.muted} en=${vt.enabled}`;
-  }
-  hud.textContent = [capLine, elLine, ...hudStats.values()].join("\n");
-}
-
-const diagnosedPeers = new Set(); // remoteUserId -> diagnostics attached (attach once)
-export function attachCallDiagnostics(remoteUserId) {
-  const pc = peerConns.get(remoteUserId);
-  if (!pc) return;
-  // onconnectionstatechange fires "connected" on every (re)connect, including
-  // each ICE restart. Attach the listener + stats poll only once per peer so we
-  // don't stack a fresh setInterval on every reconnection.
-  if (diagnosedPeers.has(remoteUserId)) return;
-  diagnosedPeers.add(remoteUserId);
-  pc.addEventListener("iceconnectionstatechange", () =>
-    console.log(`[rtc ${remoteUserId}] ice=${pc.iceConnectionState} conn=${pc.connectionState}`));
-  const timer = setInterval(async () => {
-    if (!peerConns.has(remoteUserId)) {
-      hudStats.delete(remoteUserId);
-      hudPrev.delete(remoteUserId);
-      if (hudStats.size === 0) document.getElementById("rtc-hud")?.remove();
-      else updateRtcHud();
-      return clearInterval(timer);
-    }
-    const s = await pc.getStats();
-    let pair, inV, outV;
-    s.forEach(r => {
-      if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r;
-      if (r.type === "inbound-rtp"  && r.kind === "video") inV = r;
-      if (r.type === "outbound-rtp" && r.kind === "video") outV = r;
-    });
-    // Negotiated codec per direction. This is the field the freeze diagnosis turns
-    // on: a symmetric encoder stall whose root is the chosen codec only shows up if
-    // you can see which codec was actually negotiated (VP8 vs H.264 vs VP9). The
-    // codec stat's mimeType is "video/VP8" etc.; strip the "video/" prefix.
-    const codecName = (rtp) => {
-      const c = rtp && rtp.codecId && s.get(rtp.codecId);
-      return c?.mimeType ? c.mimeType.replace(/^video\//i, "") : "?";
-    };
-    const inCodec = codecName(inV), outCodec = codecName(outV);
-    const lc = pair && s.get(pair.localCandidateId), rc = pair && s.get(pair.remoteCandidateId);
-    console.log(`[rtc ${remoteUserId}] path=${lc?.candidateType}->${rc?.candidateType} rtt=${pair?.currentRoundTripTime}s`,
-      `| in ${inCodec} fps=${inV?.framesPerSecond} drop=${inV?.framesDropped} lost=${inV?.packetsLost} pli=${inV?.pliCount} jitter=${inV?.jitter}`,
-      `| out ${outCodec} fps=${outV?.framesPerSecond} limit=${outV?.qualityLimitationReason} tgt=${outV?.targetBitrate}`);
-    if (rtcDebugEnabled()) {
-      const rv = videoEls.get(remoteUserId);
-      const elLine = rv
-        ? `  el: paused=${rv.paused} t=${rv.currentTime?.toFixed(1)} rs=${rv.readyState} ${rv.videoWidth}x${rv.videoHeight}`
-        : "  el: (no remote <video>)";
-      const prev = hudPrev.get(remoteUserId) || {};
-      const inDec = fmtDelta(inV?.framesDecoded, prev.dec);
-      const inRecv = fmtDelta(inV?.framesReceived, prev.recv);
-      const inKf = fmtDelta(inV?.keyFramesDecoded, prev.kf);
-      const inBytes = fmtDelta(inV?.bytesReceived, prev.brx);
-      const inPli = fmtDelta(inV?.pliCount, prev.pli);
-      const outEnc = fmtDelta(outV?.framesEncoded, prev.enc);
-      const outBytes = fmtDelta(outV?.bytesSent, prev.btx);
-      const outSent = fmtDelta(outV?.framesSent, prev.sent);
-      hudPrev.set(remoteUserId, {
-        dec: inV?.framesDecoded, recv: inV?.framesReceived, kf: inV?.keyFramesDecoded,
-        brx: inV?.bytesReceived, pli: inV?.pliCount,
-        enc: outV?.framesEncoded, btx: outV?.bytesSent, sent: outV?.framesSent,
-      });
-      // The real FF-Android wedge signature lives on the first out line below:
-      //   WxH = the resolution actually FED to the encoder. 0x0 = no sized frame
-      //     ever reached the encoder (capture starved) — compare the local cap:
-      //     line above to see if the track itself is muted/0-size.
-      //   encT = cumulative encode time. Frozen in lockstep with enc = the encoder
-      //     isn't being invoked at all (wedged UPSTREAM of encode), not merely
-      //     producing-and-not-sending.
-      // The second out line carries impl/pe (which encoder bound, power-efficient?)
-      // but these are NON-STANDARD, CHROMIUM-ONLY members of RTCOutboundRtpStreamStats:
-      // Firefox and Safari/iOS don't implement them, so they read undefined there
-      // regardless of encoder health. They carry ZERO signal on Firefox — labeled
-      // (chromium-only) so an undefined isn't mistaken for a diagnosis.
-      const encT = typeof outV?.totalEncodeTime === "number" ? outV.totalEncodeTime.toFixed(2) : outV?.totalEncodeTime;
-      hudStats.set(remoteUserId,
-        `peer ${remoteUserId} ${pc.iceConnectionState}/${pc.connectionState} ${lc?.candidateType}->${rc?.candidateType}\n` +
-        `  in  ${inCodec} fps=${inV?.framesPerSecond} dec=${inDec} recv=${inRecv} kf=${inKf}\n` +
-        `       bytes=${inBytes} pli=${inPli} lost=${inV?.packetsLost}\n` +
-        `  out ${outCodec} enc=${outEnc} bytes=${outBytes} ${outV?.frameWidth}x${outV?.frameHeight} sent=${outSent} encT=${encT} limit=${outV?.qualityLimitationReason}\n` +
-        `       (chromium-only) impl=${outV?.encoderImplementation ?? "n/a"} pe=${outV?.powerEfficientEncoder ?? "n/a"}\n` +
-        elLine);
-      updateRtcHud();
-    }
-  }, 2000);
-}
-
 // pendingIceCandidates buffers remote ICE candidates that arrive before
 // setRemoteDescription has been called on a peer connection. This is a real
 // race: onOffer/onAnswer are async (each await yields to the event loop), and
@@ -228,88 +72,27 @@ const SELF_TONE_SETTLE_MS = 250;
 const SELF_TONE_FINISH_MS = 400;
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Maximum video sender bitrate in kbps. At 640×360 this is comfortably above
-// the per-frame budget while preventing the encoder from blasting 5+ Mbps at
-// an uncooperative link and triggering the congestion-control oscillation that
-// causes the "2 seconds of smooth then back to a slideshow" pattern.
-const VIDEO_MAX_KBPS = 1000;
-
 // Camera capture constraints. These are deliberately ideal-ONLY (advisory): an
 // ideal constraint is best-effort and never rejects, whereas a `max` (mandatory
 // ceiling) can make getUserMedia throw OverconstrainedError on cameras whose
 // native capture modes can't satisfy the width/height/frameRate ceilings in
-// combination — common on Android front cameras. Bandwidth is bounded by
-// applyVideoSenderLimits (sender maxBitrate) + contentHint, NOT by capture
-// resolution, so capping resolution here only risks a silent camera failure for
-// no bandwidth gain. (A `max` ceiling here was the v1.3.18 regression that broke
-// Android video preview — getUserMedia rejected and the failure was swallowed.)
+// combination — common on Android front cameras. (A `max` ceiling here was the
+// v1.3.18 regression that broke Android video preview — getUserMedia rejected
+// and the failure was swallowed.) Outgoing bandwidth is shaped by contentHint
+// ("motion"), not by capping capture resolution, so constraining dimensions here
+// would only risk a silent camera failure for no bandwidth gain.
 //
-// We impose NO spatial constraint — only a frame-rate ideal. This is forced by an
-// FF-Android quirk the RTC HUD pinned down: given any width/height ideal where
-// width != height, FF-Android does NOT pick a matching native mode; it crops to a
-// SQUARE whose side equals the requested HEIGHT. We measured it directly — a
-// `640x360` ideal yielded `360x360`, a `640x480` ideal yielded `480x480`. The
-// Pixel 7 sensor is 4:3-only, so there is no 16:9 mode to land on; FF squares it
-// instead. And FF-Android's sender-side scaler wedges on a 1:1 frame, feeding the
-// encoder 0x0 after ~3 frames (the freeze — codec-agnostic across VP8/VP9/H.264;
-// the HUD showed enc frozen at 0x0 while the raw track stayed live at 24fps).
-// A dimensional ideal is therefore a square-crop trap on this hardware. Omitting
-// width/height entirely leaves nothing to crop against, so the sensor opens its
-// own native (non-square) 4:3 mode. The tiles render whatever aspect arrives
-// (object-fit, see style.css), so a 4:3 — or even a portrait — frame is fine.
+// We impose NO spatial constraint — only a frame-rate ideal. This dodges an
+// FF-Android quirk we measured directly: given any width/height ideal where
+// width != height, FF-Android does NOT pick a matching native mode; it crops to
+// a SQUARE whose side equals the requested HEIGHT (a `640x360` ideal yielded
+// `360x360`, `640x480` yielded `480x480`). The Pixel 7 sensor is 4:3-only, so
+// there is no 16:9 mode to land on; FF squares it instead, and its sender-side
+// scaler then wedges on the 1:1 frame. Omitting width/height entirely leaves
+// nothing to crop against, so the sensor opens its own native (non-square) 4:3
+// mode. The tiles render whatever aspect arrives (object-fit, see style.css),
+// so a 4:3 — or even a portrait — frame is fine.
 const VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } };
-
-// The built-in default, exposed so the admin video console can show/restore it.
-export const DEFAULT_VIDEO_CONSTRAINTS = VIDEO_CONSTRAINTS;
-
-// Capture-constraint override. The video debugging console (admin panel) can
-// persist a tuned MediaTrackConstraints object here so real calls capture with
-// it — no rebuild, no code change — which is the whole point of the console: tune
-// live, save, then join an actual call and confirm. The override REPLACES the
-// default wholesale (the console always emits a complete object); a deep merge
-// would surprise by leaving a stale dimension behind. Anything malformed or empty
-// in storage is ignored, falling back to the default. Every camera-acquire path
-// (join + mid-call enable) routes through effectiveVideoConstraints().
-const VIDEO_CONSTRAINT_OVERRIDE_KEY = "rivendell.videoConstraints";
-
-export function getVideoConstraintOverride() {
-  try {
-    const raw = localStorage.getItem(VIDEO_CONSTRAINT_OVERRIDE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-  } catch { /* unavailable or corrupt -> no override */ }
-  return null;
-}
-
-export function setVideoConstraintOverride(constraints) {
-  try {
-    if (constraints && typeof constraints === "object" && !Array.isArray(constraints) && Object.keys(constraints).length) {
-      localStorage.setItem(VIDEO_CONSTRAINT_OVERRIDE_KEY, JSON.stringify(constraints));
-    } else {
-      localStorage.removeItem(VIDEO_CONSTRAINT_OVERRIDE_KEY);
-    }
-  } catch { /* best-effort; persistence is non-fatal */ }
-}
-
-export function clearVideoConstraintOverride() {
-  try { localStorage.removeItem(VIDEO_CONSTRAINT_OVERRIDE_KEY); } catch { /* non-fatal */ }
-}
-
-// effectiveVideoConstraints returns the persisted override if present, else the
-// built-in default. Used by every getUserMedia camera path so a console-saved
-// profile takes effect on the next call.
-function effectiveVideoConstraints() {
-  return getVideoConstraintOverride() || VIDEO_CONSTRAINTS;
-}
-
-// getLocalVideoTrack exposes the live local camera track (or null) so the video
-// console can read its settings/capabilities and applyConstraints to the REAL
-// call session in real time, rather than a separate standalone capture.
-export function getLocalVideoTrack() {
-  if (!localStream || typeof localStream.getVideoTracks !== "function") return null;
-  return localStream.getVideoTracks()[0] || null;
-}
 
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
@@ -385,7 +168,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
 
   cameraEnabled = enableVideo;
   const audioConstraints = AUDIO_CONSTRAINTS;
-  const videoConstraint = cameraEnabled ? effectiveVideoConstraints() : false;
+  const videoConstraint = cameraEnabled ? VIDEO_CONSTRAINTS : false;
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: videoConstraint });
@@ -604,9 +387,6 @@ export async function setCameraEnabled(on) {
     // Swap each peer's audio sender to the new session's mic track (replaceTrack
     // is transparent — same m-line, no renegotiation), then add the video track
     // (this fires onnegotiationneeded; the offerer re-offers).
-    // Swap each peer's audio sender to the new session's mic track (replaceTrack
-    // is transparent — same m-line, no renegotiation), then add the video track
-    // (this fires onnegotiationneeded; the offerer re-offers).
     for (const pc of peerConns.values()) {
       if (newAudio) {
         const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
@@ -763,7 +543,7 @@ export function shouldRetryRelaxed(err) {
 // denial). Internal.
 async function acquireCameraStream() {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: effectiveVideoConstraints() });
+    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: VIDEO_CONSTRAINTS });
   } catch (err) {
     if (!shouldRetryRelaxed(err)) throw err;
     return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true });
@@ -942,17 +722,16 @@ async function drainPendingCandidates(remoteUserId) {
 // relative order within a rank (so rtx/red/ulpfec are retained). Pure — exported
 // for unit testing.
 //
-// Why VP8 first: Firefox on Android drives its *hardware* H.264 encoder, which
-// emits an initial keyframe then freezes and ignores PLI requests, so we keep
-// H.264 last to stay off it. VP8 is mandatory-to-implement and the most reliable
-// cross-browser path; a VP9 experiment (below) regressed the laptop sender, so we
-// returned to VP8 as the default.
+// Why VP8 first: it is mandatory-to-implement and the most reliable cross-browser
+// path. A VP9 experiment regressed the laptop sender, so we returned to VP8 as the
+// default and keep H.264 last. (FF-Android exposes no H.264 at all, so the ordering
+// is moot there — but it costs nothing and keeps other browsers off H.264.)
 //
-// NOTE: the FF-Android "few frames then freeze" is NOT a codec bug. We confirmed
-// it reproduces identically on VP8, VP9, and H.264, so codec order is not its cure
-// — the wedge lives upstream of the encoder (capture geometry was one contributor,
-// now fixed; a flaky TURN-relayed uplink is the current suspect). This preference
-// exists only to avoid the broken HW H.264 path, not to fix the freeze.
+// NOTE: codec order does NOT fix the long-standing FF-Android "few frames then
+// freeze" — it reproduced identically on every codec FF-Android offers (VP8, VP9).
+// That turned out to be an upstream Firefox-stable encoder bug (it works on Firefox
+// Android *nightly*); nothing in this codebase cures it. The preference is just a
+// safe cross-browser default, not a freeze workaround.
 export function orderVideoCodecsVP8First(codecs) {
   if (!Array.isArray(codecs)) return [];
   const rank = (c) => {
@@ -993,39 +772,6 @@ function preferVideoCodec(pc) {
     const kind = t.sender?.track?.kind || t.receiver?.track?.kind;
     if (kind !== "video") continue;
     try { t.setCodecPreferences(codecs); } catch { /* unsupported / rejected list */ }
-  }
-}
-
-// applyVideoSenderLimits caps the outgoing video bitrate at VIDEO_MAX_KBPS.
-// Called when a connection reaches "connected" and after every renegotiation
-// that may have added a video sender (mid-call camera enable). Without a cap
-// the encoder will probe as high as the congestion controller allows, which on
-// a busy WiFi link drives the link into oscillation: brief good quality,
-// congestion, drop to a single keyframe, cycle repeats.
-//
-// EXPERIMENT (Firefox-Android encoder stall): the RTC debug HUD on a frozen
-// FF-Android sender shows out enc=7(+0) with limit (qualityLimitationReason)
-// =undefined — the VP8 encoder emits ~7 frames (the first ~0.5s) then hard-
-// stalls with NO quality-limitation signal (not cpu, not bandwidth). That's a
-// wedge, not a throttle, and it lines up exactly with this live setParameters()
-// call firing on connectionState "connected" — i.e. just as media starts
-// flowing. Reconfiguring libvpx live via setParameters is a known way to wedge
-// Firefox's Android encoder. So we gate the live cap OFF to isolate it: if the
-// encoder now keeps emitting frames, setParameters is the culprit and we
-// reintroduce the cap via sendEncodings at transceiver-creation time (configure
-// once, before the encoder starts) instead of poking it live. If the stall
-// persists, this is exonerated and the next suspect is the capture profile.
-const APPLY_VIDEO_SENDER_LIMITS = false;
-async function applyVideoSenderLimits(pc) {
-  if (!APPLY_VIDEO_SENDER_LIMITS) return;
-  for (const sender of pc.getSenders()) {
-    if (!sender.track || sender.track.kind !== "video") continue;
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) continue;
-      params.encodings[0].maxBitrate = VIDEO_MAX_KBPS * 1000;
-      await sender.setParameters(params);
-    } catch { /* best-effort; not all browsers support setParameters */ }
   }
 }
 
@@ -1076,7 +822,6 @@ async function onOffer(payload) {
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: answer.sdp });
-  applyVideoSenderLimits(pc); // cap our outgoing video bitrate (answerer side)
 }
 
 async function onAnswer(payload) {
@@ -1085,7 +830,6 @@ async function onAnswer(payload) {
   if (!pc || pc.signalingState !== "have-local-offer") return;
   await pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
-  applyVideoSenderLimits(pc); // cap our outgoing video bitrate (offerer side)
 }
 
 async function onICE(payload) {
@@ -1191,12 +935,6 @@ function createPC(remoteUserId) {
   // transport on this same connection. See the reconnection section above.
   pc.onconnectionstatechange = () => {
     applyReconnectPlan(remoteUserId, pc);
-    // Apply bitrate cap as soon as media starts flowing; also catches the case
-    // where the connection briefly dropped and reconnected via ICE restart.
-    if (pc.connectionState === "connected") {
-	    attachCallDiagnostics(remoteUserId);
-	    applyVideoSenderLimits(pc);
-    }
   };
 
   return pc;
@@ -1204,7 +942,6 @@ function createPC(remoteUserId) {
 
 function closePeer(userId) {
   pendingIceCandidates.delete(userId);
-  diagnosedPeers.delete(userId); // allow diagnostics to re-attach on a rejoin
   removeMeter(userId);
   const meta = peerMeta.get(userId);
   if (meta) { clearReconnectTimer(meta); peerMeta.delete(userId); }

@@ -537,34 +537,6 @@ body.dm-active #members-toggle { display: none; }
    admin reads like a conversation devoted to settings rather than a hard takeover. */
 @media (min-width: 721px) { .admin-panel { left: 240px; } }
 
-/* --- video debugging console --------------------------------------------- */
-.vc-hint { margin: 0 0 0.9rem; font-size: 0.82rem; color: var(--text-faint); line-height: 1.45; }
-.vc-hint code { background: var(--bg-3); padding: 0 0.3em; border-radius: 4px; }
-.vc-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.2rem; align-items: start; }
-@media (max-width: 860px) { .vc-grid { grid-template-columns: 1fr; } }
-.vc-controls { display: flex; flex-direction: column; gap: 0.7rem; }
-.vc-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; color: var(--text-dim); }
-.vc-field input, .vc-field select, .vc-controls textarea { width: 100%; margin: 0; }
-.vc-row { display: flex; gap: 0.6rem; }
-.vc-row .vc-field { flex: 1; min-width: 0; }
-.vc-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.vc-presets button { width: auto; padding: 0.25rem 0.6rem; font-size: 0.78rem; }
-.vc-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.vc-actions button { width: auto; }
-.vc-default { font: 0.74rem/1.4 monospace; color: var(--text-faint); word-break: break-all; }
-.vc-output { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
-#vc-preview { width: 100%; max-height: 320px; background: #000; border-radius: 8px; object-fit: contain; aspect-ratio: 16 / 9; }
-.vc-resolution { font-size: 0.95rem; font-weight: 600; }
-.vc-live { font: 0.74rem/1.4 monospace; color: var(--text-faint); }
-.vc-readouts { display: flex; flex-direction: column; gap: 0.6rem; }
-.vc-readouts h4 { margin: 0 0 0.25rem; font-size: 0.78rem; color: var(--text-dim); }
-.vc-readouts pre { margin: 0; font-size: 0.75rem; background: var(--bg-3); padding: 0.5rem 0.6rem; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
-.vc-kv { display: flex; flex-direction: column; gap: 0.1rem; font-size: 0.78rem; }
-.vc-kv-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.1rem 0; border-bottom: 1px solid var(--border); }
-.vc-kv-key { color: var(--text-faint); }
-.vc-kv-val { font-family: monospace; text-align: right; word-break: break-all; }
-.admin-out.vc-error { color: var(--danger, #e06c75); }
-
 /* Stacked modal forms (new channel, edit profile) reuse the shared
    `form label`/`form input` rules; only the private-toggle row needs its own
    (inline, non-stretched) layout. */
