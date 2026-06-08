@@ -591,10 +591,6 @@ body.dm-active #members-toggle { display: none; }
 }
 .ring-banner #ring-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ring-banner #secret-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 480px) {
-  .ring-banner #ring-banner-text,
-  .ring-banner #secret-banner-text { flex-basis: 100%; white-space: normal; }
-}
 .secret-banner { background: color-mix(in srgb, var(--accent) 8%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
 button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; flex-shrink: 0; }
 

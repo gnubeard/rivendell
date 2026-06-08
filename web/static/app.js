@@ -3952,6 +3952,9 @@ async function onVoiceEvent(evt) {
     if (ringState) return; // already in a ring — ignore (shouldn't happen in practice)
     ringState = { channelId: p.dm_channel_id, direction: "incoming", fromUserId: p.from_user_id };
     renderRingBanner();
+    // Repaint the header so the active DM's call button flips to the "answer"
+    // icon — the banner alone doesn't drive the header.
+    renderChannelHeader(state.channels[state.activeChannelId]);
     startRingSound(audioCtx);
     fireRingNotification(p.from_user_id, p.dm_channel_id);
     return;
