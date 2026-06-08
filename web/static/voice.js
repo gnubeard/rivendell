@@ -255,6 +255,56 @@ const VIDEO_MAX_KBPS = 1000;
 // itself is the remaining suspect.
 const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, aspectRatio: { ideal: 16 / 9 }, frameRate: { ideal: 24 } };
 
+// needsLandscapeCoercion reports whether a live video track's settings look like
+// the FF-Android square-capture wedge: a square (or portrait) frame. The RTC HUD
+// caught FF-Android opening the camera at a square 360x360 that the hardware VP8
+// encoder refuses to drive (enc frozen, reported 0x0) — and ideal getUserMedia
+// constraints, INCLUDING an ideal 16:9 aspectRatio, didn't dislodge it. A frame
+// wider than it is tall is already landscape and needs no coercion. Unknown dims
+// (no getSettings support) return false — we don't gamble an applyConstraints
+// churn on a track we can't measure. Pure; unit-tested.
+export function needsLandscapeCoercion(settings) {
+  const w = settings && settings.width;
+  const h = settings && settings.height;
+  if (!w || !h) return false;
+  return w <= h;
+}
+
+// landscapeConstraintLadder is the ordered list of EXACT capture profiles tried,
+// via track.applyConstraints(), to drag a wedged square capture into a landscape
+// mode the VP8 encoder will actually drive. applyConstraints re-runs the camera's
+// mode selection AFTER the track is live, where the open-time ideals failed. Order:
+// our 16:9 360p target first (the canonical WebRTC profile), then 640x480 (4:3, the
+// single most universally supported camera mode), then 720p. All are exact so a
+// rung the camera can't honour REJECTS (leaving the track untouched) rather than
+// silently resolving back to the square. Pure; unit-tested.
+export function landscapeConstraintLadder() {
+  return [
+    { width: { exact: 640 }, height: { exact: 360 } },
+    { width: { exact: 640 }, height: { exact: 480 } },
+    { width: { exact: 1280 }, height: { exact: 720 } },
+  ];
+}
+
+// coerceLandscapeCapture works around the FF-Android square-capture wedge (see
+// needsLandscapeCoercion). If the camera opened square, it walks
+// landscapeConstraintLadder via applyConstraints() and stops at the first rung that
+// lands a landscape frame. Best-effort: a track with no applyConstraints, an
+// already-landscape capture, or a camera that rejects every rung all leave the
+// track exactly as-is — this can only help, never break the capture we already have.
+async function coerceLandscapeCapture(track) {
+  if (!track || typeof track.applyConstraints !== "function") return;
+  if (!needsLandscapeCoercion(track.getSettings ? track.getSettings() : {})) return;
+  for (const constraints of landscapeConstraintLadder()) {
+    try {
+      await track.applyConstraints(constraints);
+    } catch {
+      continue; // camera can't honour this exact profile — try the next rung
+    }
+    if (!needsLandscapeCoercion(track.getSettings ? track.getSettings() : {})) return;
+  }
+}
+
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
 // acquireCameraStream) and must request the mic identically to the join path.
@@ -357,6 +407,10 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   // contentHint "motion" tells the encoder to prefer frame rate over detail,
   // which is the right trade-off for a camera video call.
   localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
+
+  // Drag a wedged FF-Android square capture into a landscape mode before the track
+  // is shown/published (no-op everywhere the camera already opened landscape).
+  if (cameraEnabled) await coerceLandscapeCapture(localStream.getVideoTracks()[0]);
 
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
   if (cameraEnabled) setupLocalVideo();
@@ -543,6 +597,7 @@ export async function setCameraEnabled(on) {
     const vt = combined.getVideoTracks()[0];
     const newAudio = combined.getAudioTracks()[0];
     if (vt) vt.contentHint = "motion";
+    if (vt) await coerceLandscapeCapture(vt); // drag FF-Android square capture to landscape before publishing
     if (newAudio) newAudio.enabled = !muted; // preserve current mute state
 
     // Swap each peer's audio sender to the new session's mic track (replaceTrack
