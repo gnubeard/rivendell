@@ -492,45 +492,45 @@ test("camera failure on join falls back to audio-only, call still works", async 
   };
 });
 
-// --- VP9-first codec ordering (Firefox-Android HW H.264 encoder workaround) ---
+// --- VP8-first codec ordering (Firefox-Android HW H.264 encoder workaround) ---
 
-test("orderVideoCodecsVP9First puts VP9 then VP8 ahead of H.264", () => {
+test("orderVideoCodecsVP8First puts VP8 then VP9 ahead of H.264", () => {
   const input = [
     { mimeType: "video/H264" },
-    { mimeType: "video/VP8" },
     { mimeType: "video/VP9" },
+    { mimeType: "video/VP8" },
   ];
-  const out = voice.orderVideoCodecsVP9First(input).map(c => c.mimeType);
-  assert.deepEqual(out, ["video/VP9", "video/VP8", "video/H264"]);
+  const out = voice.orderVideoCodecsVP8First(input).map(c => c.mimeType);
+  assert.deepEqual(out, ["video/VP8", "video/VP9", "video/H264"]);
 });
 
-test("orderVideoCodecsVP9First keeps all codecs and middle-rank relative order", () => {
+test("orderVideoCodecsVP8First keeps all codecs and middle-rank relative order", () => {
   const input = [
     { mimeType: "video/H264" },
     { mimeType: "video/rtx" },
     { mimeType: "video/red" },
-    { mimeType: "video/VP9" },
+    { mimeType: "video/VP8" },
     { mimeType: "video/ulpfec" },
   ];
-  const out = voice.orderVideoCodecsVP9First(input).map(c => c.mimeType);
-  // VP9 first, H264 last; rtx/red/ulpfec retained in their original relative order.
-  assert.deepEqual(out, ["video/VP9", "video/rtx", "video/red", "video/ulpfec", "video/H264"]);
+  const out = voice.orderVideoCodecsVP8First(input).map(c => c.mimeType);
+  // VP8 first, H264 last; rtx/red/ulpfec retained in their original relative order.
+  assert.deepEqual(out, ["video/VP8", "video/rtx", "video/red", "video/ulpfec", "video/H264"]);
 });
 
-test("orderVideoCodecsVP9First is a pure copy (does not mutate input)", () => {
-  const input = [{ mimeType: "video/H264" }, { mimeType: "video/VP9" }];
+test("orderVideoCodecsVP8First is a pure copy (does not mutate input)", () => {
+  const input = [{ mimeType: "video/H264" }, { mimeType: "video/VP8" }];
   const before = input.map(c => c.mimeType);
-  voice.orderVideoCodecsVP9First(input);
+  voice.orderVideoCodecsVP8First(input);
   assert.deepEqual(input.map(c => c.mimeType), before);
 });
 
-test("orderVideoCodecsVP9First tolerates junk input", () => {
-  assert.deepEqual(voice.orderVideoCodecsVP9First(null), []);
-  assert.deepEqual(voice.orderVideoCodecsVP9First(undefined), []);
-  assert.deepEqual(voice.orderVideoCodecsVP9First("nope"), []);
+test("orderVideoCodecsVP8First tolerates junk input", () => {
+  assert.deepEqual(voice.orderVideoCodecsVP8First(null), []);
+  assert.deepEqual(voice.orderVideoCodecsVP8First(undefined), []);
+  assert.deepEqual(voice.orderVideoCodecsVP8First("nope"), []);
   // entries without mimeType keep middle rank and don't throw
-  const out = voice.orderVideoCodecsVP9First([{}, { mimeType: "video/VP9" }]);
-  assert.equal(out[0].mimeType, "video/VP9");
+  const out = voice.orderVideoCodecsVP8First([{}, { mimeType: "video/VP8" }]);
+  assert.equal(out[0].mimeType, "video/VP8");
   assert.equal(out.length, 2);
 });
 
