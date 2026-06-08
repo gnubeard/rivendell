@@ -900,7 +900,22 @@ function preferVideoCodec(pc) {
 // the encoder will probe as high as the congestion controller allows, which on
 // a busy WiFi link drives the link into oscillation: brief good quality,
 // congestion, drop to a single keyframe, cycle repeats.
+//
+// EXPERIMENT (Firefox-Android encoder stall): the RTC debug HUD on a frozen
+// FF-Android sender shows out enc=7(+0) with limit (qualityLimitationReason)
+// =undefined — the VP8 encoder emits ~7 frames (the first ~0.5s) then hard-
+// stalls with NO quality-limitation signal (not cpu, not bandwidth). That's a
+// wedge, not a throttle, and it lines up exactly with this live setParameters()
+// call firing on connectionState "connected" — i.e. just as media starts
+// flowing. Reconfiguring libvpx live via setParameters is a known way to wedge
+// Firefox's Android encoder. So we gate the live cap OFF to isolate it: if the
+// encoder now keeps emitting frames, setParameters is the culprit and we
+// reintroduce the cap via sendEncodings at transceiver-creation time (configure
+// once, before the encoder starts) instead of poking it live. If the stall
+// persists, this is exonerated and the next suspect is the capture profile.
+const APPLY_VIDEO_SENDER_LIMITS = false;
 async function applyVideoSenderLimits(pc) {
+  if (!APPLY_VIDEO_SENDER_LIMITS) return;
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     try {
