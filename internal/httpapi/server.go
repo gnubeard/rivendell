@@ -732,6 +732,35 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 	}
 }
 
+// pendingRingFrames returns voice.ring frames for every non-expired ring whose
+// callee is userID. A one-shot voice.ring is dropped if the callee has no socket
+// at that instant (relayToUser fans out to live connections only), so a caller
+// could ring a friend who is about to connect and they'd never see it. handleWS
+// replays these as welcome frames on each fresh connection, so a callee who comes
+// online mid-ring still gets it. The per-ring timeout timer is left untouched, so
+// the replay honours the original deadline (its residual TTL) — not a fresh 30s.
+func (s *Server) pendingRingFrames(userID int64) [][]byte {
+	s.ringMu.Lock()
+	defer s.ringMu.Unlock()
+	var frames [][]byte
+	for chID, r := range s.rings {
+		if r.calleeID != userID {
+			continue
+		}
+		// Faithfully reconstruct what relayToUser would have delivered live:
+		// {dm_channel_id, from_user_id} under a voice.ring envelope.
+		frame, err := json.Marshal(event{Type: "voice.ring", Payload: map[string]int64{
+			"dm_channel_id": chID,
+			"from_user_id":  r.callerID,
+		}})
+		if err != nil {
+			continue
+		}
+		frames = append(frames, frame)
+	}
+	return frames
+}
+
 // handleSecretWSMessage routes secret.* frames from clients. All frames are
 // relayed opaquely between the two DM members — the server never sees plaintext
 // or keys. secret.accept additionally dismisses the acceptor's sibling sessions

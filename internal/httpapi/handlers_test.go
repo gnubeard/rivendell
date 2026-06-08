@@ -32,6 +32,15 @@ func testDSN() string {
 
 func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config) {
 	t.Helper()
+	ts, st, cfg, _ := newTestServerSrv(t)
+	return ts, st, cfg
+}
+
+// newTestServerSrv is newTestServer plus the underlying *Server, for tests that
+// need to inspect in-memory state (e.g. pending rings) for deterministic
+// synchronisation.
+func newTestServerSrv(t *testing.T) (*httptest.Server, *store.Store, config.Config, *Server) {
+	t.Helper()
 	dsn := testDSN()
 	st, err := store.Open(context.Background(), dsn)
 	if err != nil {
@@ -64,7 +73,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 		ts.Close()
 		st.Close()
 	})
-	return ts, st, cfg
+	return ts, st, cfg, srv
 }
 
 // client carries a cookie jar so sessions persist across requests.

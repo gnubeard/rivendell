@@ -56,6 +56,54 @@ func TestRingDismissesSiblingConnections(t *testing.T) {
 	wsExpect(t, calleeConn2, calleeR2, "voice.ring_dismissed")
 }
 
+// TestRingReplayedToCalleeConnectingMidRing guards the offline-callee fix: a
+// one-shot voice.ring is dropped if the callee has no socket when the caller
+// rings. The ring lives on only as a 30s timeout timer; without replay the
+// callee never learns of the call. On connect the server must replay the pending
+// ring to the fresh connection.
+func TestRingReplayedToCalleeConnectingMidRing(t *testing.T) {
+	ts, st, _, srv := newTestServerSrv(t)
+	ctx := context.Background()
+
+	callerC, caller := seedAdmin(t, ts, st)
+	calleeC, callee := seedMember(t, ts, st, "frodo", "Frodo", store.RoleMember)
+
+	dm, _, err := st.GetOrCreateDM(ctx, caller.ID, callee.ID)
+	if err != nil {
+		t.Fatalf("create dm: %v", err)
+	}
+
+	// Caller rings while the callee has NO connection — the live relay is dropped.
+	callerConn, _ := wsDial(t, ts, callerC)
+	defer callerConn.Close()
+	wsSend(t, callerConn, map[string]any{"type": "voice.ring", "dm_channel_id": dm.ID})
+
+	// Wait until the ring is actually registered server-side, so the callee
+	// connecting next exercises the replay path (not the live relay path).
+	waitForRing(t, srv, dm.ID)
+
+	// Callee now comes online — the pending ring is replayed to this connection.
+	calleeConn, calleeR := wsDial(t, ts, calleeC)
+	defer calleeConn.Close()
+	wsExpect(t, calleeConn, calleeR, "voice.ring")
+}
+
+// waitForRing blocks until a pending ring exists for the DM channel, or fails.
+func waitForRing(t *testing.T, srv *Server, dmChannelID int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.ringMu.Lock()
+		_, ok := srv.rings[dmChannelID]
+		srv.ringMu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("ring for dm %d was never registered", dmChannelID)
+}
+
 // --- minimal WebSocket test client (stdlib only, matches the hand-rolled
 // server in internal/ws). The server accepts unmasked client frames, so the
 // writer doesn't bother masking; the reader skips control frames and any

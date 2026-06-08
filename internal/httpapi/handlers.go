@@ -2310,6 +2310,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Greet the connection with the server version so the client can notice it's
 	// running an older build (e.g. after a deploy) and offer to reload.
-	welcome, _ := json.Marshal(event{Type: "hello", Payload: map[string]string{"version": config.Version}})
-	s.hub.Serve(conn, u.ID, welcome)
+	hello, _ := json.Marshal(event{Type: "hello", Payload: map[string]string{"version": config.Version}})
+	// Replay any ring that's still pending for this user but was placed while they
+	// had no socket — a callee who comes online mid-ring still gets the call.
+	// These target only this fresh connection (welcome frames are per-connection),
+	// so siblings already ringing aren't disturbed.
+	welcome := append([][]byte{hello}, s.pendingRingFrames(u.ID)...)
+	s.hub.Serve(conn, u.ID, welcome...)
 }
