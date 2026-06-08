@@ -243,7 +243,17 @@ const VIDEO_MAX_KBPS = 1000;
 // resolution, so capping resolution here only risks a silent camera failure for
 // no bandwidth gain. (A `max` ceiling here was the v1.3.18 regression that broke
 // Android video preview — getUserMedia rejected and the failure was swallowed.)
-const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
+// aspectRatio is ideal-only too (16:9). FF-Android was honouring the height/
+// frameRate ideals but collapsing width to a *square* native mode (the RTC HUD
+// caught a live 360x360 capture feeding a wedged VP8 encoder: enc frozen, 0x0,
+// limit=undefined — i.e. the encoder stops being invoked on the non-standard,
+// non-16-aligned square profile). An ideal aspectRatio can't OverconstrainedError
+// (preserving the v1.3.18 lesson) but adds a strong landscape pull to the
+// fitness scoring, nudging FF off the square mode toward 640x360. If the encoder
+// un-wedges, the square profile was the culprit; if it still stalls at a clean
+// 16:9 size, the capture profile is exonerated and the FF-Android HW VP8 encoder
+// itself is the remaining suspect.
+const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, aspectRatio: { ideal: 16 / 9 }, frameRate: { ideal: 24 } };
 
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
