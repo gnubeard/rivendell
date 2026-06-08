@@ -734,6 +734,62 @@ async function drainPendingCandidates(remoteUserId) {
   }
 }
 
+// orderVideoCodecsVP8First returns a copy of an RTCRtpCodecCapability list
+// reordered so VP8 (then VP9) precede H.264, preserving every codec and the
+// relative order within a rank (so rtx/red/ulpfec are retained). Pure — exported
+// for unit testing.
+//
+// Why: Firefox on Android drives its *hardware* H.264 encoder, which emits an
+// initial keyframe then freezes and ignores PLI keyframe requests. The peer sees
+// a frame or two, then "in fps→undefined, lost=0, pli climbing" — frames simply
+// stop being produced (it's an encoder stall, not packet loss, which is why a
+// relay path and the receiver are red herrings, and why a laptop sending the same
+// call is fine: different encoder). VP8 is mandatory-to-implement and uses a
+// reliable software path on Android, so preferring it sidesteps the broken HW
+// H.264 encoder entirely. The doc already lists VP8 as an expected codec.
+export function orderVideoCodecsVP8First(codecs) {
+  if (!Array.isArray(codecs)) return [];
+  const rank = (c) => {
+    const m = (c && c.mimeType ? c.mimeType : "").toLowerCase();
+    if (m === "video/vp8") return 0;
+    if (m === "video/vp9") return 1;
+    if (m === "video/h264") return 3;
+    return 2; // rtx/red/ulpfec and anything else keep the middle, relative order
+  };
+  return codecs
+    .map((c, i) => [c, i])
+    .sort((a, b) => (rank(a[0]) - rank(b[0])) || (a[1] - b[1]))
+    .map(([c]) => c);
+}
+
+// videoCodecPreferenceList builds (once, cached) the VP8-first capability list
+// from the receiver's supported codecs. Empty on browsers without
+// getCapabilities — preferVideoCodec then no-ops and default negotiation stands.
+let preferredVideoCodecs = null;
+function videoCodecPreferenceList() {
+  if (preferredVideoCodecs !== null) return preferredVideoCodecs;
+  preferredVideoCodecs = [];
+  try {
+    const caps = RTCRtpReceiver.getCapabilities("video");
+    if (caps && caps.codecs) preferredVideoCodecs = orderVideoCodecsVP8First(caps.codecs);
+  } catch { /* leave empty -> no preference applied */ }
+  return preferredVideoCodecs;
+}
+
+// preferVideoCodec reorders each video transceiver's codec list VP8-first. Must
+// run before createOffer/createAnswer to land in the SDP; idempotent, so calling
+// it on both peers and on every (re)negotiation is safe. No-op without
+// setCodecPreferences (older Safari).
+function preferVideoCodec(pc) {
+  const codecs = videoCodecPreferenceList();
+  if (!codecs.length) return;
+  for (const t of pc.getTransceivers()) {
+    const kind = t.sender?.track?.kind || t.receiver?.track?.kind;
+    if (kind !== "video") continue;
+    try { t.setCodecPreferences(codecs); } catch { /* unsupported / rejected list */ }
+  }
+}
+
 // applyVideoSenderLimits caps the outgoing video bitrate at VIDEO_MAX_KBPS.
 // Called when a connection reaches "connected" and after every renegotiation
 // that may have added a video sender (mid-call camera enable). Without a cap
@@ -795,6 +851,7 @@ async function onOffer(payload) {
   }
   await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
+  preferVideoCodec(pc); // VP8-first on transceivers materialized by the remote offer
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: answer.sdp });
@@ -834,6 +891,8 @@ function createPC(remoteUserId) {
   if (localStream) {
     for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
   }
+  // Prefer VP8 on any video transceiver addTrack just created (offerer side).
+  preferVideoCodec(pc);
 
   pc.onicecandidate = (e) => {
     if (e.candidate && activeChannelId !== null) {
@@ -886,6 +945,7 @@ function createPC(remoteUserId) {
     // safe — the browser will re-fire once we're back to stable if still needed.
     if (pc.signalingState !== "stable") return;
     try {
+      preferVideoCodec(pc); // VP8-first on the newly-added (mid-call camera) video track
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: offer.sdp });
