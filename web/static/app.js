@@ -1246,7 +1246,10 @@ function renderChannelHeader(ch) {
       dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
     }
     // Show/update the call button for DM channels.
-    if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
+    if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
+      callBtn.textContent = "✅";
+      callBtn.title = "Answer call";
+    } else if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
       callBtn.textContent = "📵";
       callBtn.title = "Cancel call";
     } else if (isInCall() && voiceCallState.channelId === ch.id) {
@@ -3721,8 +3724,10 @@ function wireVoiceControls() {
     renderVideoGrid();
   };
 
-  // Ring banner (incoming call).
-  $("#ring-accept-btn").onclick = async () => {
+  // Accept the current incoming ring: signal the caller, clear the banner, and
+  // join the call. Shared by the ring banner's accept button and the channel
+  // header call button (which doubles as "Answer" while a ring is incoming).
+  const acceptRing = async () => {
     if (!ringState) return;
     const chId = ringState.channelId;
     stopRingSound();
@@ -3737,6 +3742,9 @@ function wireVoiceControls() {
       alert(micErrorMessage(e));
     }
   };
+
+  // Ring banner (incoming call).
+  $("#ring-accept-btn").onclick = acceptRing;
   $("#ring-decline-btn").onclick = () => {
     if (!ringState) return;
     const chId = ringState.channelId;
@@ -3763,6 +3771,11 @@ function wireVoiceControls() {
           alert(micErrorMessage(e));
         }
       }
+      return;
+    }
+    if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
+      // Answer the incoming call (same path as the ring banner's accept button).
+      await acceptRing();
       return;
     }
     if (ringState) {
