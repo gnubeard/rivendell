@@ -80,10 +80,25 @@ function updateRtcHud() {
     document.body.appendChild(hud);
   }
   const lv = localVideoEl;
-  const localLine = lv
-    ? `local: paused=${lv.paused} t=${lv.currentTime?.toFixed(1)} rs=${lv.readyState} ${lv.videoWidth}x${lv.videoHeight}`
-    : "local: (none)";
-  hud.textContent = [localLine, ...hudStats.values()].join("\n");
+  const elLine = lv
+    ? `local el:  paused=${lv.paused} t=${lv.currentTime?.toFixed(1)} rs=${lv.readyState} ${lv.videoWidth}x${lv.videoHeight}`
+    : "local el:  (none)";
+  // Capture-side truth, read straight off the local camera MediaStreamTrack —
+  // BEFORE anything reaches the encoder. This is the fork getStats cannot give us
+  // on Firefox (impl/pe are undefined there): getSettings() reports the resolution
+  // and frameRate the camera negotiated (a 360x360 here = the odd square profile),
+  // and track.muted=true means the source is momentarily delivering NO frames.
+  // So an outbound 0x0 + a muted/0fps track here localizes the wedge to CAPTURE,
+  // not encoder selection; an outbound 0x0 next to a healthy live 640x360@24 track
+  // instead points downstream at the encoder/pipeline.
+  const vt = localStream && localStream.getVideoTracks ? localStream.getVideoTracks()[0] : null;
+  let capLine = "local cap: (no video track)";
+  if (vt) {
+    const s = vt.getSettings ? vt.getSettings() : {};
+    const fr = typeof s.frameRate === "number" ? s.frameRate.toFixed(0) : (s.frameRate ?? "?");
+    capLine = `local cap: ${s.width ?? "?"}x${s.height ?? "?"}@${fr} rs=${vt.readyState} muted=${vt.muted} en=${vt.enabled}`;
+  }
+  hud.textContent = [capLine, elLine, ...hudStats.values()].join("\n");
 }
 
 const diagnosedPeers = new Set(); // remoteUserId -> diagnostics attached (attach once)
@@ -144,21 +159,25 @@ export function attachCallDiagnostics(remoteUserId) {
         brx: inV?.bytesReceived, pli: inV?.pliCount,
         enc: outV?.framesEncoded, btx: outV?.bytesSent, sent: outV?.framesSent,
       });
-      // Second out line isolates the FF-Android encoder wedge. impl = which encoder
-      // Firefox actually bound (libvpx software vs a hardware MediaCodec VP8) — a
-      // hardware path that emits one GOP then freezes is the prime suspect now that
-      // setParameters is exonerated. WxH = the resolution actually FED to the encoder
-      // (vs the capture WxH on the local: line) — if it reads 360x360 we're encoding
-      // the odd square profile. encT = cumulative encode time: if it stays frozen in
-      // lockstep with enc, the encoder isn't being invoked at all (wedged upstream of
-      // encode), not merely producing-and-not-sending.
+      // The real FF-Android wedge signature lives on the first out line below:
+      //   WxH = the resolution actually FED to the encoder. 0x0 = no sized frame
+      //     ever reached the encoder (capture starved) — compare the local cap:
+      //     line above to see if the track itself is muted/0-size.
+      //   encT = cumulative encode time. Frozen in lockstep with enc = the encoder
+      //     isn't being invoked at all (wedged UPSTREAM of encode), not merely
+      //     producing-and-not-sending.
+      // The second out line carries impl/pe (which encoder bound, power-efficient?)
+      // but these are NON-STANDARD, CHROMIUM-ONLY members of RTCOutboundRtpStreamStats:
+      // Firefox and Safari/iOS don't implement them, so they read undefined there
+      // regardless of encoder health. They carry ZERO signal on Firefox — labeled
+      // (chromium-only) so an undefined isn't mistaken for a diagnosis.
       const encT = typeof outV?.totalEncodeTime === "number" ? outV.totalEncodeTime.toFixed(2) : outV?.totalEncodeTime;
       hudStats.set(remoteUserId,
         `peer ${remoteUserId} ${pc.iceConnectionState}/${pc.connectionState} ${lc?.candidateType}->${rc?.candidateType}\n` +
         `  in  ${inCodec} fps=${inV?.framesPerSecond} dec=${inDec} recv=${inRecv} kf=${inKf}\n` +
         `       bytes=${inBytes} pli=${inPli} lost=${inV?.packetsLost}\n` +
-        `  out ${outCodec} enc=${outEnc} bytes=${outBytes} limit=${outV?.qualityLimitationReason}\n` +
-        `       impl=${outV?.encoderImplementation} pe=${outV?.powerEfficientEncoder} ${outV?.frameWidth}x${outV?.frameHeight} sent=${outSent} encT=${encT}\n` +
+        `  out ${outCodec} enc=${outEnc} bytes=${outBytes} ${outV?.frameWidth}x${outV?.frameHeight} sent=${outSent} encT=${encT} limit=${outV?.qualityLimitationReason}\n` +
+        `       (chromium-only) impl=${outV?.encoderImplementation ?? "n/a"} pe=${outV?.powerEfficientEncoder ?? "n/a"}\n` +
         elLine);
       updateRtcHud();
     }
