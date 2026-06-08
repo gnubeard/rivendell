@@ -948,57 +948,77 @@ func (s *Server) accessibleChannelIDs(r *http.Request, u store.User) ([]int64, e
 }
 
 // pingRecipients returns the user ids a message should ping (notify durably).
-// A DM pings every member except the author; any other channel pings the
-// @-mentioned users who can see it (members, for a private channel), minus the
-// author. Best-effort: lookup failures are logged and yield no pings rather than
-// failing the send.
-func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, authorID int64, content string) []int64 {
+// A DM pings every member except the author. Any other channel pings the
+// @-mentioned users who can see it (members, for a private channel) plus — when
+// the message is a reply — the author of the message being replied to: replying
+// to someone is itself a ping, no explicit @-mention required. The author is
+// never pinged for their own message, and the result is deduplicated so a reply
+// that also @-mentions the parent author counts once. Best-effort: lookup
+// failures are logged and yield no pings rather than failing the send.
+func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, msg store.Message) []int64 {
+	authorID := msg.UserID
+	out := make([]int64, 0, 4)
+	seen := make(map[int64]bool)
+	add := func(id int64) {
+		if id == authorID || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+
 	if ch.IsDM {
 		ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
 		if err != nil {
 			log.Printf("pingRecipients: dm members: %v", err)
-			return nil
+			return out
 		}
-		out := make([]int64, 0, len(ids))
 		for _, id := range ids {
-			if id != authorID {
-				out = append(out, id)
-			}
+			add(id)
 		}
-		return out
+		return out // a reply ping is redundant in a DM — both parties ping already
 	}
-	names := parseMentions(content)
-	if len(names) == 0 {
-		return nil
-	}
-	byName, err := s.st.UsersByUsernames(ctx, names)
-	if err != nil {
-		log.Printf("pingRecipients: resolve usernames: %v", err)
-		return nil
-	}
+
 	// For a private channel, only members can be pinged.
 	var members map[int64]bool
 	if ch.IsPrivate {
 		ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
 		if err != nil {
 			log.Printf("pingRecipients: channel members: %v", err)
-			return nil
+			return out
 		}
 		members = make(map[int64]bool, len(ids))
 		for _, id := range ids {
 			members[id] = true
 		}
 	}
-	out := make([]int64, 0, len(byName))
-	for _, id := range byName {
-		if id == authorID {
-			continue
+	pingable := func(id int64) bool { return members == nil || members[id] }
+
+	// @-mentions.
+	if names := parseMentions(msg.Content); len(names) > 0 {
+		byName, err := s.st.UsersByUsernames(ctx, names)
+		if err != nil {
+			log.Printf("pingRecipients: resolve usernames: %v", err)
+		} else {
+			for _, id := range byName {
+				if pingable(id) {
+					add(id)
+				}
+			}
 		}
-		if members != nil && !members[id] {
-			continue
-		}
-		out = append(out, id)
 	}
+
+	// Reply target: pinging the author you're replying to. The parent posted in
+	// this channel, so it had access; still honour the member filter for a private
+	// channel to stay consistent with the mention path (fail-closed).
+	if msg.ReplyToID != nil {
+		if parent, err := s.st.GetMessage(ctx, *msg.ReplyToID); err != nil {
+			log.Printf("pingRecipients: reply target: %v", err)
+		} else if pingable(parent.UserID) {
+			add(parent.UserID)
+		}
+	}
+
 	return out
 }
 
@@ -1007,7 +1027,7 @@ func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, authorID 
 // caller can drive push delivery from the same list. Best-effort: a failure is
 // logged but does not fail the request — the message itself is already persisted.
 func (s *Server) recordPings(ctx context.Context, ch store.Channel, msg store.Message) []int64 {
-	recipients := s.pingRecipients(ctx, ch, msg.UserID, msg.Content)
+	recipients := s.pingRecipients(ctx, ch, msg)
 	if len(recipients) == 0 {
 		return recipients
 	}

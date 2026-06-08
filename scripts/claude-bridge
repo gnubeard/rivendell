@@ -2,8 +2,10 @@
 # claude-bridge — watches a private Rivendell channel and forwards each message
 # to Claude Code. While a job runs the originating message wears a 👍
 # reaction; on completion the reaction is removed and the result is posted as a
-# threaded reply that @-mentions the requester (so they get pinged when it's done).
-# Also responds to DMs sent directly to the bot user (low-effort, read-only).
+# threaded reply to the originating message — which on its own pings the
+# requester (the server treats replying to someone as a ping), so the bridge
+# never has to name them. Also responds to DMs sent directly to the bot user
+# (low-effort, read-only).
 #
 # Required env:
 #   RIVENDELL_URL        Base URL of your Rivendell instance  (e.g. http://localhost:8080)
@@ -102,15 +104,6 @@ react() {
 unreact() {
     api DELETE "/messages/$1/reactions" \
         --data "$(jq -n --arg e "$2" '{emoji:$e}')" >/dev/null 2>&1 || true
-}
-
-# username_for <user_id> — echo the user's @-mention handle (without the @), or
-# nothing if it can't be resolved. Used to ping the requester on completion: a
-# threaded reply alone does not notify in a normal channel (only DMs and
-# @-mentions ping), so the reply text leads with @username.
-username_for() {
-    api GET /users 2>/dev/null \
-        | jq -r --argjson id "$1" '.[] | select(.id == $id) | .username' 2>/dev/null
 }
 
 set_status() {
@@ -317,17 +310,14 @@ $img_paths"
 $trimmed"
         fi
 
-        # Post the result as a threaded reply to the originating message, leading
-        # with an @-mention of the requester so the completion pings them (a reply
-        # by itself doesn't notify in a normal channel). Fall back to a plain post
-        # if the reply target is gone (e.g. the user deleted it mid-run). Then drop
-        # the working reaction regardless of outcome.
-        local mention reply_body
-        mention=$(username_for "$user_id") || mention=""
-        reply_body="$reply"
-        [ -n "$mention" ] && reply_body="@$mention $reply"
-        reply_msg "$channel_id" "$msg_id" "$reply_body" >/dev/null 2>&1 \
-            || post_msg "$channel_id" "$reply_body" >/dev/null 2>&1 || true
+        # Post the result as a threaded reply to the originating message. The reply
+        # itself pings the requester — the server treats replying to someone as a
+        # ping — so there's no need to @-mention them by name. Fall back to a plain
+        # post if the reply target is gone (e.g. the user deleted it mid-run); that
+        # loses the ping, but the message is still delivered. Then drop the working
+        # reaction regardless of outcome.
+        reply_msg "$channel_id" "$msg_id" "$reply" >/dev/null 2>&1 \
+            || post_msg "$channel_id" "$reply" >/dev/null 2>&1 || true
         unreact "$msg_id" "$WORKING_EMOJI"
 
         local run_time

@@ -1343,6 +1343,48 @@ func TestMentionClearedOnDeleteAndEdit(t *testing.T) {
 	}
 }
 
+// TestReplyPingsParentAuthor confirms a reply pings the author of the message it
+// replies to, with no explicit @-mention — and that the ping is deduplicated when
+// the reply also @-mentions the same person, and never fires for replying to your
+// own message.
+func TestReplyPingsParentAuthor(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+	aliceC, _ := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, _ := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var general store.Channel
+	json.Unmarshal(body, &general)
+
+	// Bob posts; Alice replies with no @-mention. Bob is pinged purely by the reply.
+	parent := postMessage(t, bobC, ts, general.ID, "anyone around?")
+	resp, rb := doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(general.ID)+"/messages",
+		map[string]any{"content": "yes, here", "reply_to_id": parent.ID})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post reply: %d %s", resp.StatusCode, rb)
+	}
+	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Mentions != 1 {
+		t.Fatalf("reply should ping the parent author: got %+v, want mentions=1", cu)
+	}
+
+	// A reply that also @-mentions the parent author counts once, not twice.
+	parent2 := postMessage(t, bobC, ts, general.ID, "still here?")
+	doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(general.ID)+"/messages",
+		map[string]any{"content": "yep @bob", "reply_to_id": parent2.ID})
+	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Mentions != 2 {
+		t.Fatalf("reply+mention to same user should add one ping: got %+v, want mentions=2", cu)
+	}
+
+	// Replying to your own message pings no one.
+	own := postMessage(t, aliceC, ts, general.ID, "talking to myself")
+	doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(general.ID)+"/messages",
+		map[string]any{"content": "still me", "reply_to_id": own.ID})
+	if cu := chUnread(getUnread(t, aliceC, ts), general.ID); cu.Mentions != 0 {
+		t.Fatalf("replying to yourself must not ping: got %+v, want mentions=0", cu)
+	}
+}
+
 // TestNewUserSeededCaughtUp verifies a user created through the admin endpoint is
 // seeded "caught up" on existing public channels rather than facing the backlog.
 func TestNewUserSeededCaughtUp(t *testing.T) {
