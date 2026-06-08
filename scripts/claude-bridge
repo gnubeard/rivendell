@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # claude-bridge — watches a private Rivendell channel and forwards each message
-# to Claude Code. While a job runs the originating message wears a :working:
+# to Claude Code. While a job runs the originating message wears a 👍
 # reaction; on completion the reaction is removed and the result is posted as a
 # threaded reply that @-mentions the requester (so they get pinged when it's done).
 # Also responds to DMs sent directly to the bot user (low-effort, read-only).
@@ -14,8 +14,12 @@
 #   RIVENDELL_REPO_DIR        Repo directory Claude runs in (default: parent of this script)
 #   RIVENDELL_POLL_INTERVAL   Seconds between polls (default: 3)
 #   RIVENDELL_STATE_DIR       Where to persist the last-seen message id (default: /tmp)
-#   RIVENDELL_WORKING_EMOJI   "In progress" reaction (default: :working: — a custom
-#                             emoji shortcode that must be registered on the instance)
+#   RIVENDELL_WORKING_EMOJI   "In progress" reaction (default: 👍 — a literal
+#                             Unicode emoji, which every instance accepts with no
+#                             setup). To override with a CUSTOM emoji, give the bare
+#                             shortcode, no colons (e.g. working, not :working:) — and
+#                             register it on the instance first, or the reactions API
+#                             rejects it with 400 (silently swallowed here).
 #
 # Setup checklist:
 #   1. Create a bot user via the admin panel (e.g. username "claude-bot").
@@ -36,7 +40,7 @@ REPO_DIR="${RIVENDELL_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 POLL_INTERVAL="${RIVENDELL_POLL_INTERVAL:-3}"
 STATE_DIR="${RIVENDELL_STATE_DIR:-/tmp}"
 STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
-WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-:working:}"  # "in progress" reaction
+WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
 MAX_RESPONSE=3800  # chars; leaves headroom under Rivendell's default 4096-byte limit
 
 # Standing instructions prepended to every request before it reaches Claude.
@@ -317,7 +321,7 @@ $trimmed"
         # with an @-mention of the requester so the completion pings them (a reply
         # by itself doesn't notify in a normal channel). Fall back to a plain post
         # if the reply target is gone (e.g. the user deleted it mid-run). Then drop
-        # the :working: reaction regardless of outcome.
+        # the working reaction regardless of outcome.
         local mention reply_body
         mention=$(username_for "$user_id") || mention=""
         reply_body="$reply"
