@@ -527,7 +527,12 @@ export function cameraErrorMessage(err) {
   switch (err && err.name) {
   case "NotAllowedError":
   case "SecurityError":
-    return "Camera access was blocked. Allow the camera for this site in your browser's settings.";
+    // No prompt + "blocked" despite the OS granting the browser camera access
+    // means the browser is blocking THIS SITE (a separate, per-site permission).
+    // On Firefox/Chrome for Android that's behind the shield/lock icon in the
+    // address bar → Permissions → Camera; clearing "Blocked" there re-enables
+    // the prompt. Point at that, not the OS-level app permission people check.
+    return "Camera blocked for this site. Tap the lock/shield icon in the address bar → Permissions → Camera, clear the block, then reload and try again.";
   case "NotFoundError":
   case "OverconstrainedError":
     return "No camera was found. Plug one in (or check your input device) and try again.";
@@ -921,10 +926,24 @@ function createPC(remoteUserId) {
         video = document.createElement("video");
         video.autoplay = true;
         video.setAttribute("playsinline", "");
-        // NOT muted — remote video has no echo problem; the local preview is muted
+        // MUTED is mandatory, not cosmetic. Mobile autoplay policy (Firefox and
+        // Chrome on Android) refuses to play a media element that produces sound
+        // unless the play() call rides a user gesture. The remote MediaStream
+        // carries an audio track, so an UNMUTED <video> decodes its first frame
+        // and then sits paused forever — the remote tile renders one frame and
+        // freezes (audio keeps flowing because it plays through the SEPARATE
+        // <audio> element below, which is why the call sounds fine). That "one
+        // frame and done" symptom survived every codec change because it was
+        // never an encoder stall on the sender; it was a paused element on the
+        // receiver. Muting the tile loses nothing (audio is on its own element)
+        // and lets autoplay / play() actually start the video.
+        video.muted = true;
         videoEls.set(remoteUserId, video);
       }
-      if (e.streams[0]) video.srcObject = e.streams[0];
+      if (e.streams[0]) {
+        video.srcObject = e.streams[0];
+        video.play?.().catch(() => {}); // kick playback now; renderVideoGrid also retries
+      }
       notifyState(); // app.js re-renders the video grid
     }
   };
