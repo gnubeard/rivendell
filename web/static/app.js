@@ -3719,6 +3719,7 @@ function wireVoiceControls() {
     renderRingBanner();
     try {
       await joinVoiceChannel(chId, { enableVideo: loadCameraPreference() });
+      selectChannel(chId);
     } catch (e) {
       alert(micErrorMessage(e));
     }
