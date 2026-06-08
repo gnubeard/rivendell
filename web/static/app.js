@@ -180,6 +180,9 @@ let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUser
 let secretRequestState = null; // { dmChannelId, fromUserId } | null
 // voiceCallState is the live state from voice.js (updated via callback).
 let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, videoMuted: true, participants: [] };
+// videoViewHidden: mobile user has tapped 💬 to view chat during a video call.
+// Cleared on call end, channel switch, or when both cameras go off.
+let videoViewHidden = false;
 // voiceRosters tracks voice participants per channel (sidebar display).
 // channelId → [{user_id, joined_at, muted}]
 let voiceRosters = {};
@@ -1161,6 +1164,7 @@ async function selectChannel(id) {
   renderChannels();
   renderDMs();
   renderNotificationTotal();
+  videoViewHidden = false;
   renderVideoGrid();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
@@ -1266,13 +1270,20 @@ function renderChannelHeader(ch) {
       secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
     }
     secretBtn.hidden = !supported;
-    // Camera button: visible in the header during an active DM call so it's
-    // reachable on mobile without opening the sidebar drawer.
+    // Video/chat toggle: mobile-only (CSS hides on desktop). During a DM video
+    // call, 💬 lets the user switch to chat; 📺 returns them to the video view.
     const headerCamBtn = $("#header-camera-btn");
     if (isInCall() && voiceCallState.channelId === ch.id) {
-      headerCamBtn.textContent = voiceCallState.videoMuted ? "🎥" : "📷";
-      headerCamBtn.title = voiceCallState.videoMuted ? "Turn camera on" : "Turn camera off";
-      headerCamBtn.hidden = false;
+      const hcbOtherId = S.otherDMParticipant(ch, state.me && state.me.id);
+      const hcbOtherP = voiceCallState.participants.find(p => p.user_id === hcbOtherId);
+      const hasVideo = !voiceCallState.videoMuted || (hcbOtherP && !hcbOtherP.video_muted);
+      if (hasVideo || videoViewHidden) {
+        headerCamBtn.textContent = videoViewHidden ? "📺" : "💬";
+        headerCamBtn.title = videoViewHidden ? "Show video" : "Show chat";
+        headerCamBtn.hidden = false;
+      } else {
+        headerCamBtn.hidden = true;
+      }
     } else {
       headerCamBtn.hidden = true;
     }
@@ -3701,10 +3712,12 @@ function wireVoiceControls() {
     renderCallStrip();
     renderVideoGrid();
   };
-  // Same toggle surfaced in the channel header for mobile accessibility.
-  $("#header-camera-btn").onclick = async () => {
-    await setCameraEnabled(!isCameraEnabled());
-    renderCallStrip();
+  // Mobile video/chat toggle: switches between watching video and reading chat.
+  $("#header-camera-btn").onclick = () => {
+    videoViewHidden = !videoViewHidden;
+    const btn = $("#header-camera-btn");
+    btn.textContent = videoViewHidden ? "📺" : "💬";
+    btn.title = videoViewHidden ? "Show video" : "Show chat";
     renderVideoGrid();
   };
 
@@ -4233,6 +4246,7 @@ function onVoiceStateChange(vs) {
     for (const id of prevRemote) if (!nowRemote.has(id)) farewellTone();
   }
   if (!vs.inCall && speakingIds.size) speakingIds.clear(); // call ended: drop stale rings
+  if (!vs.inCall) videoViewHidden = false; // call ended: clear any mobile chat-override
   renderCallStrip();
   renderVideoGrid();
   renderChannelHeader(state.channels[state.activeChannelId]);
@@ -4271,8 +4285,17 @@ function renderVideoGrid() {
   const otherP = voiceCallState.participants.find(p => p.user_id === otherId);
   const remoteVideoMuted = !otherP || otherP.video_muted;
 
-  // Only take over the screen when there's actual video to show.
+  // When both cameras are off there's no video to show; also clear any mobile
+  // view-override so the toggle button disappears cleanly.
   if (voiceCallState.videoMuted && remoteVideoMuted) {
+    videoViewHidden = false;
+    grid.hidden = true;
+    document.body.classList.remove("video-active");
+    return;
+  }
+
+  // On mobile the user may have chosen to view chat instead of video.
+  if (videoViewHidden) {
     grid.hidden = true;
     document.body.classList.remove("video-active");
     return;

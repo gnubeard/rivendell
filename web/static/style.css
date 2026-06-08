@@ -673,6 +673,9 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   body.video-active .composer { display: none; }
   .video-fullscreen-btn { opacity: 0.6; }
 }
+@media (min-width: 721px) {
+  #header-camera-btn { display: none !important; }
+}
 
 .call-strip {
   display: flex; align-items: center; gap: 0.3rem;
