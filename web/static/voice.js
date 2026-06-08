@@ -38,6 +38,9 @@ let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedi
 // bytesReceived) are shown raw so a static value between 2s refreshes localizes
 // the stall: bytes climbing + framesDecoded flat = decoder; framesDecoded
 // climbing + element paused = autoplay; out framesEncoded flat = sender stall.
+// Each rtp line is prefixed with the NEGOTIATED CODEC (in/out) because a symmetric
+// sender stall whose root is the codec choice (e.g. VP8 forced onto a peer that
+// handles it badly) is invisible without knowing which codec actually won.
 function rtcDebugEnabled() {
   try {
     if (new URLSearchParams(location.search).has("rtcdebug")) return true;
@@ -88,10 +91,19 @@ export function attachCallDiagnostics(remoteUserId) {
       if (r.type === "inbound-rtp"  && r.kind === "video") inV = r;
       if (r.type === "outbound-rtp" && r.kind === "video") outV = r;
     });
+    // Negotiated codec per direction. This is the field the freeze diagnosis turns
+    // on: a symmetric encoder stall whose root is the chosen codec only shows up if
+    // you can see which codec was actually negotiated (VP8 vs H.264 vs VP9). The
+    // codec stat's mimeType is "video/VP8" etc.; strip the "video/" prefix.
+    const codecName = (rtp) => {
+      const c = rtp && rtp.codecId && s.get(rtp.codecId);
+      return c?.mimeType ? c.mimeType.replace(/^video\//i, "") : "?";
+    };
+    const inCodec = codecName(inV), outCodec = codecName(outV);
     const lc = pair && s.get(pair.localCandidateId), rc = pair && s.get(pair.remoteCandidateId);
     console.log(`[rtc ${remoteUserId}] path=${lc?.candidateType}->${rc?.candidateType} rtt=${pair?.currentRoundTripTime}s`,
-      `| in fps=${inV?.framesPerSecond} drop=${inV?.framesDropped} lost=${inV?.packetsLost} pli=${inV?.pliCount} jitter=${inV?.jitter}`,
-      `| out fps=${outV?.framesPerSecond} limit=${outV?.qualityLimitationReason} tgt=${outV?.targetBitrate}`);
+      `| in ${inCodec} fps=${inV?.framesPerSecond} drop=${inV?.framesDropped} lost=${inV?.packetsLost} pli=${inV?.pliCount} jitter=${inV?.jitter}`,
+      `| out ${outCodec} fps=${outV?.framesPerSecond} limit=${outV?.qualityLimitationReason} tgt=${outV?.targetBitrate}`);
     if (rtcDebugEnabled()) {
       const rv = videoEls.get(remoteUserId);
       const elLine = rv
@@ -99,8 +111,8 @@ export function attachCallDiagnostics(remoteUserId) {
         : "  el: (no remote <video>)";
       hudStats.set(remoteUserId,
         `peer ${remoteUserId} ${pc.iceConnectionState}/${pc.connectionState} ${lc?.candidateType}->${rc?.candidateType}\n` +
-        `  in  fps=${inV?.framesPerSecond} decoded=${inV?.framesDecoded} recv=${inV?.framesReceived} bytes=${inV?.bytesReceived} pli=${inV?.pliCount} lost=${inV?.packetsLost}\n` +
-        `  out fps=${outV?.framesPerSecond} enc=${outV?.framesEncoded} bytes=${outV?.bytesSent} limit=${outV?.qualityLimitationReason}\n` +
+        `  in  ${inCodec} fps=${inV?.framesPerSecond} decoded=${inV?.framesDecoded} recv=${inV?.framesReceived} bytes=${inV?.bytesReceived} pli=${inV?.pliCount} lost=${inV?.packetsLost}\n` +
+        `  out ${outCodec} fps=${outV?.framesPerSecond} enc=${outV?.framesEncoded} bytes=${outV?.bytesSent} limit=${outV?.qualityLimitationReason}\n` +
         elLine);
       updateRtcHud();
     }
