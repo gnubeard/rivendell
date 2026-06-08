@@ -662,12 +662,28 @@ func (s *Store) ListChannelMemberIDs(ctx context.Context, channelID int64) ([]in
 // --- Messages ------------------------------------------------------------
 
 // messageCols is the canonical projection used by scanMessage; keep the scan
-// order in sync.
+// order in sync. Used for RETURNING clauses (subqueries are not allowed there).
 const messageCols = `id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at, pinned_at, pinned_by`
+
+// messageSelectCols extends messageCols with reply_to_user_id via a correlated
+// subquery. Use in SELECT … FROM messages queries, not RETURNING.
+const messageSelectCols = `id, channel_id, user_id, content, reply_to_id, ` +
+	`(SELECT user_id FROM messages AS r WHERE r.id = reply_to_id) AS reply_to_user_id, ` +
+	`created_at, edited_at, deleted_at, pinned_at, pinned_by`
 
 func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID,
+		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+func scanMessageFull(row interface{ Scan(...any) error }) (Message, error) {
+	var m Message
+	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID, &m.ReplyToUserID,
 		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
@@ -693,7 +709,7 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 		beforeID = 1<<62 - 1
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+messageCols+`
+		`SELECT `+messageSelectCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND id < $2
 		 ORDER BY id DESC LIMIT $3`, channelID, beforeID, limit)
@@ -703,7 +719,7 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := scanMessageFull(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -724,7 +740,7 @@ func (s *Store) ListMessagesAfter(ctx context.Context, channelID int64, afterID 
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+messageCols+`
+		`SELECT `+messageSelectCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND id > $2
 		 ORDER BY id ASC LIMIT $3`, channelID, afterID, limit)
@@ -734,7 +750,7 @@ func (s *Store) ListMessagesAfter(ctx context.Context, channelID int64, afterID 
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := scanMessageFull(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -753,7 +769,7 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 
 	// Older messages (DESC so we get the closest ones; reversed below).
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+messageCols+`
+		`SELECT `+messageSelectCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND id < $2
 		 ORDER BY id DESC LIMIT $3`, channelID, messageID, halfLimit)
@@ -763,7 +779,7 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 	defer rows.Close()
 	var older []Message
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := scanMessageFull(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -774,8 +790,8 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 	}
 
 	// The anchor message itself.
-	target, err := scanMessage(s.db.QueryRowContext(ctx,
-		`SELECT `+messageCols+` FROM messages WHERE channel_id = $1 AND id = $2`,
+	target, err := scanMessageFull(s.db.QueryRowContext(ctx,
+		`SELECT `+messageSelectCols+` FROM messages WHERE channel_id = $1 AND id = $2`,
 		channelID, messageID))
 	if err != nil {
 		return nil, err // includes ErrNotFound
@@ -783,7 +799,7 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 
 	// Newer messages.
 	rows2, err := s.db.QueryContext(ctx,
-		`SELECT `+messageCols+`
+		`SELECT `+messageSelectCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND id > $2
 		 ORDER BY id ASC LIMIT $3`, channelID, messageID, halfLimit)
@@ -793,7 +809,7 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 	defer rows2.Close()
 	var newer []Message
 	for rows2.Next() {
-		m, err := scanMessage(rows2)
+		m, err := scanMessageFull(rows2)
 		if err != nil {
 			return nil, err
 		}
@@ -817,7 +833,7 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 // pinned first.
 func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+messageCols+`
+		`SELECT `+messageSelectCols+`
 		 FROM messages
 		 WHERE channel_id = $1 AND pinned_at IS NOT NULL AND deleted_at IS NULL
 		 ORDER BY pinned_at ASC`, channelID)
@@ -827,7 +843,7 @@ func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Mess
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := scanMessageFull(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -866,7 +882,7 @@ func (s *Store) SearchMessages(ctx context.Context, channelIDs []int64, query st
 	n := len(channelIDs)
 	args = append(args, query, beforeID, limit)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+messageCols+`
+		`SELECT `+messageSelectCols+`
 		 FROM messages
 		 WHERE channel_id IN (`+strings.Join(ph, ", ")+`)
 		   AND deleted_at IS NULL
@@ -878,7 +894,7 @@ func (s *Store) SearchMessages(ctx context.Context, channelIDs []int64, query st
 	}
 	defer rows.Close()
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := scanMessageFull(rows)
 		if err != nil {
 			return nil, err
 		}

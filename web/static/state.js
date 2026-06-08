@@ -248,12 +248,13 @@ export function addMessage(state, msg) {
   let next;
   if (idx >= 0) {
     next = [...existing];
-    // Realtime message.new/update payloads carry no reactions (the server omits
-    // them on those events); preserve the ones we already have so an edit or pin
-    // doesn't blank the reaction row until the next reload.
-    next[idx] = msg.reactions === undefined && existing[idx].reactions !== undefined
-      ? { ...msg, reactions: existing[idx].reactions }
-      : msg;
+    // Realtime message.new/update payloads omit reactions and reply_to_user_id;
+    // preserve what we already have so an edit or pin doesn't blank those fields.
+    const prev = existing[idx];
+    const merged = { ...msg };
+    if (msg.reactions === undefined && prev.reactions !== undefined) merged.reactions = prev.reactions;
+    if (msg.reply_to_user_id === undefined && prev.reply_to_user_id !== undefined) merged.reply_to_user_id = prev.reply_to_user_id;
+    next[idx] = merged;
   } else {
     next = [...existing, msg].sort((a, b) => a.id - b.id);
   }

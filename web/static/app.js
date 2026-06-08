@@ -665,7 +665,8 @@ function startRealtime() {
         const ch = state.channels[cid];
         const isNewFromOther = evt.type === "message.new" && evt.payload.user_id !== state.me.id;
         const isReplyToMe = isNewFromOther && evt.payload.reply_to_id != null &&
-          (state.messages[cid] || []).some((m) => m.id === evt.payload.reply_to_id && m.user_id === state.me.id);
+          (evt.payload.reply_to_user_id === state.me.id ||
+           (state.messages[cid] || []).some((m) => m.id === evt.payload.reply_to_id && m.user_id === state.me.id));
         const mentioned = isNewFromOther && (mentionsUser(evt.payload.content, state.me.username) || isReplyToMe);
         // A "ping" is a message directed at you: any DM, an @-mention, or a reply to your message.
         const pingsMe = isNewFromOther && ((ch && ch.is_dm) || mentioned);
@@ -1763,7 +1764,8 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const body = editing
       ? editorFor(m)
       : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
-    const mentionsMe = m.user_id !== state.me.id && mentionsUser(m.content, state.me.username);
+    const mentionsMe = m.user_id !== state.me.id &&
+      (mentionsUser(m.content, state.me.username) || m.reply_to_user_id === state.me.id);
 
     const isOwn = m.user_id === state.me.id;
     const canDelete = isOwn || isMod; // non-mods can only delete their own

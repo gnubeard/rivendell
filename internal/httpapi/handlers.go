@@ -1298,18 +1298,21 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	// A reply must point at a live message in this same channel. Validate here so a
 	// stray/forged reply_to_id can't dangle (or leak that a message exists in another
 	// channel). The DB's ON DELETE SET NULL only covers hard-deletes, not soft ones.
+	var replyToUserID *int64
 	if req.ReplyTo != nil {
 		parent, err := s.st.GetMessage(r.Context(), *req.ReplyTo)
 		if err != nil || parent.ChannelID != id || parent.DeletedAt != nil {
 			writeErr(w, http.StatusBadRequest, "reply target not found in this channel")
 			return
 		}
+		replyToUserID = &parent.UserID
 	}
 	msg, err := s.st.CreateMessage(r.Context(), id, u.ID, req.Content, req.ReplyTo)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not send message")
 		return
 	}
+	msg.ReplyToUserID = replyToUserID
 	// A message in a DM reopens it for every participant who had closed it
 	// (server-authoritative open state). If anyone was reopened, re-announce the
 	// channel first so a client that no longer has it in its list gains the
