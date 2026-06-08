@@ -146,10 +146,15 @@ export const api = {
   muteChannel: (channelId) => req("PUT", `/api/channels/${channelId}/mute`),
   unmuteChannel: (channelId) => req("DELETE", `/api/channels/${channelId}/mute`),
 
+  // signup via invitation (unauthenticated)
+  checkInvitation: (token) => req("GET", `/api/auth/invitation/${encodeURIComponent(token)}`),
+  signup: (token, username, password) => req("POST", "/api/auth/signup", { token, username, password }),
+
   // admin
   adminStats: () => req("GET", "/api/admin/stats"),
-  createUser: (username, displayName, role) =>
-    req("POST", "/api/admin/users", { username, display_name: displayName, role }),
+  createInvitation: () => req("POST", "/api/admin/invitations"),
+  listInvitations: () => req("GET", "/api/admin/invitations"),
+  deleteInvitation: (id) => req("DELETE", `/api/admin/invitations/${id}`),
   createMagicLink: (userId) => req("POST", `/api/admin/users/${userId}/magic-link`),
   setRole: (userId, role) => req("PUT", `/api/admin/users/${userId}/role`, { role }),
   setActive: (userId, active) => req("PUT", `/api/admin/users/${userId}/active`, { active }),

@@ -200,6 +200,19 @@ type BotToken struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Invitation is a single-use, time-limited signup token an admin issues so a new
+// person can create their own member account. Only the token's SHA-256 hash is
+// stored. UsedAt/UsedBy are set when the invitation is redeemed (a user is
+// created from it); CreatedBy/UsedBy may be nil if that account was later deleted.
+type Invitation struct {
+	ID        int64      `json:"id"`
+	CreatedBy *int64     `json:"created_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at,omitempty"`
+	UsedBy    *int64     `json:"used_by,omitempty"`
+}
+
 // Blob is a content-addressed image stored in the local blob store. The hash is
 // a hex-encoded SHA-256 of the file bytes and serves as the primary key and the
 // filename on disk. UploaderID may be nil if the uploader account was deleted.

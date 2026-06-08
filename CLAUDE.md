@@ -113,7 +113,10 @@ declaring a change finished. Add tests for new behavior — this repo tests earl
   (`TestEmptyListsReturnArraysNotNull`) — keep it green.
 - **Auth:** session cookie `rivendell_session` (HttpOnly, SameSite=Lax, Secure from
   config). Tokens are random 256-bit, stored only as SHA-256 hashes. No email —
-  admins mint single-use magic links for set/reset password.
+  new accounts are created by the **invitation** flow (admins mint a single-use
+  signup link; the new person picks their own username/password — see Feature
+  notes), and admins mint single-use **magic links** to set/reset the password of
+  an *existing* user.
 - **Passwords:** `internal/auth/password.go`, format
   `pbkdf2-sha256$<iter>$<b64salt>$<b64key>`, 600k iterations, constant-time
   compare. Don't lower the iteration count.
@@ -197,6 +200,13 @@ are required for realtime:
 ## Feature notes
 
 Key design invariants per feature — preserve these when modifying related code.
+
+**Signup invitations** (migration `0017`). New accounts are self-service via an admin-issued, single-use invitation link — admins no longer pick a new user's name/role.
+- An `invitations` row stores only the token's SHA-256 hash (like sessions/magic links), plus `created_by`, `expires_at`, and `used_at`/`used_by` (set on redemption). TTL reuses `RIVENDELL_MAGIC_LINK_TTL`. This table is **distinct from `magic_links`**, which still set/reset the password of an *existing* user (unchanged) — don't merge the two.
+- Admin endpoints (admin-only): `POST /api/admin/invitations` (mint; returns `{id,url,token,expires_at}` — the raw token is shown **once**), `GET /api/admin/invitations` (list; never returns the token), `DELETE /api/admin/invitations/{id}` (revoke/delete). Admin panel "Invitations" section drives these.
+- Public endpoints: `GET /api/auth/invitation/{token}` (peek validity, doesn't consume), `POST /api/auth/signup` `{token,username,password}` — creates the account and auto-logs-in. The new user **always starts as a member**, the **display name defaults to the username**, and the password is set during signup (no separate set-password step). Client route is `/invite#<token>` (`bootSignup`).
+- **Account creation + invitation consumption are one transaction** (`store.RedeemInvitation`): a duplicate username aborts before the invitation is touched (stays redeemable → 409), an invalid/used/expired token rolls back the new account (→ 404), and concurrent reuse of one link can never mint two users. `SeedPublicReadCursors` runs after, so the first login isn't a wall of unread.
+- Tests: `TestInvitationSignupFlow`, `TestInvitationRevoke`, `TestInvitationSignupValidation`; `TestMagicLinkFlow` still guards the unchanged password set/reset path.
 
 **DMs.** A DM is a private channel with `is_dm = TRUE` and exactly two members (migration `0002_dms.sql`).
 - Canonical name `dm-<minUserId>-<maxUserId>` maps a pair to exactly one channel; `UNIQUE(name)` makes create-or-find race-safe (`store.GetOrCreateDM`, `POST /api/dms`).

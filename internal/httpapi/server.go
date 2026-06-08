@@ -120,6 +120,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/auth/magic/{token}", s.handleCheckMagic)
 	mux.HandleFunc("POST /api/auth/set-password", s.handleSetPassword)
+	// Signup via an admin-issued invitation (new members create their own account).
+	mux.HandleFunc("GET /api/auth/invitation/{token}", s.handleCheckInvitation)
+	mux.HandleFunc("POST /api/auth/signup", s.handleSignup)
 
 	// Self.
 	mux.HandleFunc("GET /api/me", s.auth(s.handleMe))
@@ -189,7 +192,11 @@ func (s *Server) Handler() http.Handler {
 
 	// Admin.
 	mux.HandleFunc("GET /api/admin/stats", s.requireRole(store.RoleAdmin, s.handleAdminStats))
-	mux.HandleFunc("POST /api/admin/users", s.requireRole(store.RoleAdmin, s.handleCreateUser))
+	// Signup invitations (new-user onboarding). Password set/reset for an
+	// existing user stays on the magic-link endpoint below.
+	mux.HandleFunc("GET /api/admin/invitations", s.requireRole(store.RoleAdmin, s.handleListInvitations))
+	mux.HandleFunc("POST /api/admin/invitations", s.requireRole(store.RoleAdmin, s.handleCreateInvitation))
+	mux.HandleFunc("DELETE /api/admin/invitations/{id}", s.requireRole(store.RoleAdmin, s.handleDeleteInvitation))
 	mux.HandleFunc("POST /api/admin/users/{id}/magic-link", s.requireRole(store.RoleAdmin, s.handleCreateMagicLink))
 	mux.HandleFunc("PUT /api/admin/users/{id}/role", s.requireRole(store.RoleAdmin, s.handleSetRole))
 	mux.HandleFunc("PUT /api/admin/users/{id}/active", s.requireRole(store.RoleAdmin, s.handleSetActive))

@@ -58,6 +58,28 @@
     </div>
   </section>
 
+  <!-- SIGN UP (invitation) -->
+  <section data-view="signup" class="centered" hidden>
+    <div class="card">
+      <h1 class="brand">rivendell</h1>
+      <p id="su-intro" class="tagline">You're invited! Create your account.</p>
+      <form id="su-form">
+        <label>Username
+          <input id="su-username" autocomplete="username" autofocus required
+                 pattern="[a-z0-9_]{2,32}" title="2-32 characters: lowercase letters, digits, or underscore">
+        </label>
+        <label>Password
+          <input id="su-password" type="password" autocomplete="new-password" minlength="10" required>
+        </label>
+        <label>Confirm password
+          <input id="su-password2" type="password" autocomplete="new-password" minlength="10" required>
+        </label>
+        <button type="submit" class="primary">Create account</button>
+        <p id="su-error" class="error" role="alert"></p>
+      </form>
+    </div>
+  </section>
+
   <!-- APP -->
   <section data-view="app" class="app" hidden>
     <aside class="sidebar">
@@ -315,18 +337,12 @@
 
       <div class="admin-grid">
         <section class="admin-section">
-          <h3>Create user</h3>
-          <form id="admin-create-form" class="admin-create">
-            <input id="admin-new-username" placeholder="username" required>
-            <input id="admin-new-display" placeholder="display name">
-            <select id="admin-new-role">
-              <option value="member">member</option>
-              <option value="moderator">moderator</option>
-              <option value="admin">admin</option>
-            </select>
-            <button type="submit" class="primary">Create + link</button>
-          </form>
-          <div id="admin-create-out" class="admin-out"></div>
+          <h3>Invitations</h3>
+          <p class="admin-hint">Issue a one-time signup link. The new person picks
+            their own username and password and joins as a member.</p>
+          <button id="admin-invite-create" type="button" class="primary">Create invitation link</button>
+          <div id="admin-invite-out" class="admin-out"></div>
+          <div id="admin-invite-list"></div>
         </section>
 
         <section class="admin-section">

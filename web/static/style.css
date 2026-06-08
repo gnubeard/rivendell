@@ -511,6 +511,7 @@ body.dm-active #members-toggle { display: none; }
 .admin-create input, .admin-create select { width: auto; flex: 1; min-width: 120px; margin: 0; }
 .admin-create button.primary { width: auto; }
 .admin-out { margin-top: 0.6rem; }
+.admin-hint { font-size: 0.8rem; color: var(--text-faint); margin: 0 0 0.6rem; }
 .linkbox { width: 100%; margin-top: 0.4rem; padding: 0.5rem; background: var(--bg-3); border: 1px solid var(--accent-dim); border-radius: var(--radius); color: var(--text); font-family: var(--mono); font-size: 0.8rem; }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.4rem; }
 .admin-table th { text-align: left; color: var(--text-faint); font-weight: 600; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); }

@@ -1673,43 +1673,120 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 
 // --- admin ---------------------------------------------------------------
 
-func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+// handleCheckInvitation reports whether a signup invitation token is still
+// redeemable, without consuming it, so the signup form can validate the link
+// before the user fills it in. Unauthenticated (the whole point is onboarding a
+// user who has no account yet).
+func (s *Server) handleCheckInvitation(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if err := s.st.PeekInvitation(r.Context(), auth.HashToken(token)); err != nil {
+		writeErr(w, http.StatusNotFound, "invitation is invalid or expired")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"valid": true})
+}
+
+// handleSignup redeems an invitation: the new user picks their own username and
+// password, the display name defaults to the username, and the account is always
+// created as a member. The invitation is consumed atomically with the account
+// creation (store.RedeemInvitation). On success the user is logged in immediately.
+// Unauthenticated.
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username    string `json:"username"`
-		DisplayName string `json:"display_name"`
-		Role        string `json:"role"`
+		Token    string `json:"token"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
-	req.DisplayName = strings.TrimSpace(req.DisplayName)
-	if !reUsername.MatchString(req.Username) {
+	username := strings.ToLower(strings.TrimSpace(req.Username))
+	if !reUsername.MatchString(username) {
 		writeErr(w, http.StatusBadRequest, "username must be 2-32 chars of a-z, 0-9, or underscore")
 		return
 	}
-	if l := len(req.DisplayName); l < 1 || l > 64 {
-		req.DisplayName = req.Username
+	if len(req.Password) < 10 {
+		writeErr(w, http.StatusBadRequest, "password must be at least 10 characters")
+		return
 	}
-	role := store.Role(req.Role)
-	if role != store.RoleAdmin && role != store.RoleModerator && role != store.RoleMember {
-		role = store.RoleMember
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not create account")
+		return
 	}
-	u, err := s.st.CreateUser(r.Context(), req.Username, req.DisplayName, role)
+	// Display name seeds from the username; the user can change it later.
+	u, err := s.st.RedeemInvitation(r.Context(), auth.HashToken(req.Token), username, username, hash)
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "username already taken")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "could not create user")
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "invitation is invalid or expired")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not create account")
 		return
 	}
 	// Start the new user caught up on existing public channels, so their first
 	// login isn't a wall of unread history.
 	if err := s.st.SeedPublicReadCursors(r.Context(), u.ID); err != nil {
-		log.Printf("createUser: seed public read cursors: %v", err)
+		log.Printf("signup: seed public read cursors: %v", err)
+	}
+	// Log the user in immediately, mirroring the set-password flow.
+	if err := s.startSession(w, r, u.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not create session")
+		return
 	}
 	writeJSON(w, http.StatusCreated, u)
+}
+
+// handleCreateInvitation mints a single-use signup link an admin shares with a
+// new person. Admin-only.
+func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) {
+	admin := userFrom(r.Context())
+	token, err := auth.NewToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not create invitation")
+		return
+	}
+	expires := time.Now().Add(s.cfg.MagicLinkTTL)
+	inv, err := s.st.CreateInvitation(r.Context(), auth.HashToken(token), admin.ID, expires)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not create invitation")
+		return
+	}
+	base := strings.TrimRight(s.cfg.PublicURL, "/")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         inv.ID,
+		"url":        base + "/invite#" + token,
+		"token":      token,
+		"expires_at": inv.ExpiresAt,
+	})
+}
+
+// handleListInvitations lists every issued invitation for the admin panel.
+func (s *Server) handleListInvitations(w http.ResponseWriter, r *http.Request) {
+	invites, err := s.st.ListInvitations(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list invitations")
+		return
+	}
+	writeJSON(w, http.StatusOK, invites)
+}
+
+// handleDeleteInvitation revokes/deletes an invitation by id. Admin-only.
+func (s *Server) handleDeleteInvitation(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid invitation id")
+		return
+	}
+	if err := s.st.DeleteInvitation(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not delete invitation")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleCreateMagicLink(w http.ResponseWriter, r *http.Request) {

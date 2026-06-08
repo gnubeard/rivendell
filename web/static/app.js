@@ -353,6 +353,10 @@ async function boot() {
   if (location.pathname === "/set-password") {
     return bootSetPassword();
   }
+  // Invitation signup route: /invite#<token>
+  if (location.pathname === "/invite") {
+    return bootSignup();
+  }
   try {
     const me = await api.me();
     state = S.setMe(state, me);
@@ -432,6 +436,54 @@ async function bootSetPassword() {
     }
     try {
       const me = await api.setPassword(token, pw);
+      state = S.setMe(state, me);
+      history.replaceState(null, "", "/");
+      await enterApp();
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  };
+}
+
+// bootSignup drives the invitation route: validate the token, then let the new
+// person choose a username + password. On success the server creates the member
+// account, logs them in, and we drop straight into the app.
+async function bootSignup() {
+  show("signup");
+  const token = location.hash.replace(/^#/, "");
+  const err = $("#su-error");
+  if (!token) {
+    err.textContent = "This invitation link is missing its token.";
+    $("#su-form").hidden = true;
+    return;
+  }
+  try {
+    await api.checkInvitation(token);
+  } catch {
+    err.textContent = "This invitation is invalid or has expired. Ask an admin for a new one.";
+    $("#su-form").hidden = true;
+    return;
+  }
+  $("#su-form").onsubmit = async (e) => {
+    e.preventDefault();
+    err.textContent = "";
+    const username = $("#su-username").value.trim().toLowerCase();
+    const pw = $("#su-password").value;
+    const pw2 = $("#su-password2").value;
+    if (!/^[a-z0-9_]{2,32}$/.test(username)) {
+      err.textContent = "Username must be 2-32 characters: lowercase letters, digits, or underscore.";
+      return;
+    }
+    if (pw !== pw2) {
+      err.textContent = "Passwords don't match.";
+      return;
+    }
+    if (pw.length < 10) {
+      err.textContent = "Password must be at least 10 characters.";
+      return;
+    }
+    try {
+      const me = await api.signup(token, username, pw);
       state = S.setMe(state, me);
       history.replaceState(null, "", "/");
       await enterApp();
@@ -3229,6 +3281,7 @@ async function openAdmin() {
   $("#admin-panel").hidden = false;
   refreshAdminStats();
   await refreshAdminUsers();
+  await refreshAdminInvitations();
   await refreshAdminEmojis();
   await refreshDeletedChannels();
   await refreshAdminBotTokens();
@@ -3283,28 +3336,74 @@ async function openAdmin() {
     }
   };
 
-  $("#admin-create-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const username = $("#admin-new-username").value.trim().toLowerCase();
-    const display = $("#admin-new-display").value.trim();
-    const role = $("#admin-new-role").value;
-    const out = $("#admin-create-out");
+  $("#admin-invite-create").onclick = async () => {
+    const out = $("#admin-invite-out");
     out.textContent = "";
     try {
-      const u = await api.createUser(username, display, role);
-      const link = await api.createMagicLink(u.id);
+      const inv = await api.createInvitation();
       out.innerHTML = "";
       out.append(
-        el("div", { class: "notice" }, `Created ${u.username}. Share this one-time link:`),
-        el("input", { class: "linkbox", readonly: "readonly", value: link.url, onclick: (e) => e.target.select() })
+        el("div", { class: "notice" }, "Invitation created. Share this one-time link:"),
+        el("input", { class: "linkbox", readonly: "readonly", value: inv.url, onclick: (e) => e.target.select() }),
       );
-      $("#admin-new-username").value = "";
-      $("#admin-new-display").value = "";
-      await refreshAdminUsers();
+      await refreshAdminInvitations();
     } catch (ex) {
       out.textContent = ex.message;
     }
   };
+}
+
+// refreshAdminInvitations renders the issued-invitation list with revoke controls.
+// Pending links can be re-copied; redeemed/expired ones are shown for the record
+// and can be cleaned up. The raw token is never returned by the list endpoint, so
+// only the just-created link (shown above) is copyable.
+async function refreshAdminInvitations() {
+  const box = $("#admin-invite-list");
+  let invites;
+  try {
+    invites = await api.listInvitations();
+  } catch (ex) {
+    box.innerHTML = "";
+    box.append(el("span", { class: "notice" }, ex.message));
+    return;
+  }
+  box.innerHTML = "";
+  if (!invites.length) {
+    box.append(el("span", { class: "notice" }, "No invitations issued yet."));
+    return;
+  }
+  const now = Date.now();
+  const table = el("table", { class: "admin-table" });
+  const thead = el("thead");
+  thead.append(el("tr", {},
+    el("th", {}, "status"), el("th", {}, "created"), el("th", {}, "expires"), el("th", {}),
+  ));
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const inv of invites) {
+    let status;
+    if (inv.used_at) {
+      const who = inv.used_by && state.users[inv.used_by];
+      status = who ? `used by ${who.username}` : "used";
+    } else if (new Date(inv.expires_at).getTime() <= now) {
+      status = "expired";
+    } else {
+      status = "pending";
+    }
+    const delBtn = el("button", { class: "link danger", onclick: async () => {
+      const verb = inv.used_at ? "Delete this used invitation record" : "Revoke this invitation link";
+      if (!confirm(`${verb}?`)) return;
+      try { await api.deleteInvitation(inv.id); await refreshAdminInvitations(); } catch (ex) { alert(ex.message); }
+    }}, inv.used_at ? "delete" : "revoke");
+    tbody.append(el("tr", {},
+      el("td", {}, status),
+      el("td", {}, formatTime(inv.created_at)),
+      el("td", {}, formatTime(inv.expires_at)),
+      el("td", {}, delBtn),
+    ));
+  }
+  table.append(tbody);
+  box.append(table);
 }
 
 async function refreshAdminUsers() {

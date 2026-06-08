@@ -50,7 +50,7 @@ func newTestServerSrv(t *testing.T) (*httptest.Server, *store.Store, config.Conf
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE push_subscriptions, blobs, emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
+	_, err = st.DB().Exec(`TRUNCATE push_subscriptions, blobs, emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, invitations, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -163,6 +163,15 @@ func TestEmptyListsReturnArraysNotNull(t *testing.T) {
 	if strings.TrimSpace(string(body)) != "[]" {
 		t.Fatalf("empty messages must serialize as [], got %q", string(body))
 	}
+
+	// And for the admin invitation list on a fresh install.
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/admin/invitations", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("invitations: %d", resp.StatusCode)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("empty invitations must serialize as [], got %q", string(body))
+	}
 }
 
 func TestHealth(t *testing.T) {
@@ -195,24 +204,23 @@ func TestLoginWrongPassword(t *testing.T) {
 	}
 }
 
-// TestMagicLinkFlow drives the whole bootstrap path: admin creates a user, mints
-// a magic link, the user peeks it, sets a password, and is auto-logged-in.
+// TestMagicLinkFlow drives the password set/reset path (kept unchanged when the
+// new-user flow moved to invitations): a member without a password exists, the
+// admin mints a magic link, the user peeks it, sets a password, and is
+// auto-logged-in.
 func TestMagicLinkFlow(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	adminC, _ := seedAdmin(t, ts, st)
 
-	// Admin creates a member.
-	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/admin/users", map[string]string{
-		"username": "bob", "display_name": "Bob",
-	})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create user: %d %s", resp.StatusCode, body)
+	// A member exists without a password yet (e.g. the bootstrap admin path, or
+	// an account whose password is being reset).
+	created, err := st.CreateUser(context.Background(), "bob", "Bob", store.RoleMember)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
 	}
-	var created store.User
-	json.Unmarshal(body, &created)
 
 	// Admin mints a magic link.
-	resp, body = doJSON(t, adminC, "POST", ts.URL+"/api/admin/users/"+itoa(created.ID)+"/magic-link", nil)
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/admin/users/"+itoa(created.ID)+"/magic-link", nil)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("magic link: %d %s", resp.StatusCode, body)
 	}
@@ -261,6 +269,170 @@ func TestMagicLinkFlow(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected reused link 404, got %d", resp.StatusCode)
+	}
+}
+
+// adminCreateInvitation mints an invitation as the admin and returns the link
+// fields. Fails the test on a non-201.
+func adminCreateInvitation(t *testing.T, ts *httptest.Server, adminC *http.Client) (id int64, token, url string) {
+	t.Helper()
+	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/admin/invitations", nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create invitation: %d %s", resp.StatusCode, body)
+	}
+	var inv struct {
+		ID    int64  `json:"id"`
+		Token string `json:"token"`
+		URL   string `json:"url"`
+	}
+	json.Unmarshal(body, &inv)
+	if inv.ID == 0 || inv.Token == "" {
+		t.Fatalf("invitation missing id/token: %s", body)
+	}
+	if !strings.Contains(inv.URL, inv.Token) {
+		t.Fatalf("url %q missing token", inv.URL)
+	}
+	return inv.ID, inv.Token, inv.URL
+}
+
+// TestInvitationSignupFlow drives the new-user path: an admin issues an
+// invitation, a new person validates it and signs up choosing their own
+// username, lands as a logged-in member with the display name seeded from the
+// username, and the invitation is consumed (single-use).
+func TestInvitationSignupFlow(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	id, token, _ := adminCreateInvitation(t, ts, adminC)
+
+	// It shows up in the admin list as pending (not yet used).
+	resp, body := doJSON(t, adminC, "GET", ts.URL+"/api/admin/invitations", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list invitations: %d %s", resp.StatusCode, body)
+	}
+	var invites []store.Invitation
+	json.Unmarshal(body, &invites)
+	if len(invites) != 1 || invites[0].ID != id || invites[0].UsedAt != nil {
+		t.Fatalf("expected one pending invitation, got %s", body)
+	}
+
+	// New user validates the link (unauthenticated).
+	userC := newClient(t)
+	resp, body = doJSON(t, userC, "GET", ts.URL+"/api/auth/invitation/"+token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("check invitation: %d %s", resp.StatusCode, body)
+	}
+
+	// New user signs up -> auto-login.
+	resp, body = doJSON(t, userC, "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "Frodo", "password": "ringbearer-pw",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup: %d %s", resp.StatusCode, body)
+	}
+	var created store.User
+	json.Unmarshal(body, &created)
+	if created.Username != "frodo" { // lower-cased
+		t.Fatalf("expected username frodo, got %q", created.Username)
+	}
+	if created.DisplayName != "frodo" {
+		t.Fatalf("display name should default to username, got %q", created.DisplayName)
+	}
+	if created.Role != store.RoleMember {
+		t.Fatalf("new user should be a member, got %q", created.Role)
+	}
+	if !created.HasPassword {
+		t.Fatalf("new user should have a password set")
+	}
+
+	// Cookie is valid (auto-logged-in).
+	resp, body = doJSON(t, userC, "GET", ts.URL+"/api/me", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("me after signup: %d %s", resp.StatusCode, body)
+	}
+
+	// Invitation is consumed: peek now 404, reuse now 404, list shows used_by.
+	resp, _ = doJSON(t, newClient(t), "GET", ts.URL+"/api/auth/invitation/"+token, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected consumed invitation peek 404, got %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, newClient(t), "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "sam", "password": "samwise-pw-12",
+	})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected reused invitation 404, got %d", resp.StatusCode)
+	}
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/admin/invitations", nil)
+	json.Unmarshal(body, &invites)
+	if len(invites) != 1 || invites[0].UsedAt == nil || invites[0].UsedBy == nil || *invites[0].UsedBy != created.ID {
+		t.Fatalf("expected invitation used by %d, got %s", created.ID, body)
+	}
+}
+
+// TestInvitationRevoke checks an admin can revoke an unused invitation, after
+// which the link no longer validates or redeems.
+func TestInvitationRevoke(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	id, token, _ := adminCreateInvitation(t, ts, adminC)
+
+	resp, body := doJSON(t, adminC, "DELETE", ts.URL+"/api/admin/invitations/"+itoa(id), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete invitation: %d %s", resp.StatusCode, body)
+	}
+
+	resp, _ = doJSON(t, newClient(t), "GET", ts.URL+"/api/auth/invitation/"+token, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected revoked peek 404, got %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, newClient(t), "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "merry", "password": "meriadoc-pw-1",
+	})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected revoked signup 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestInvitationSignupValidation covers rejected inputs and the duplicate-username
+// case, asserting that a failed signup leaves the invitation redeemable.
+func TestInvitationSignupValidation(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	_, token, _ := adminCreateInvitation(t, ts, adminC)
+
+	// Bad username.
+	resp, _ := doJSON(t, newClient(t), "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "x", "password": "long-enough-pw",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad username, got %d", resp.StatusCode)
+	}
+	// Short password.
+	resp, _ = doJSON(t, newClient(t), "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "pippin", "password": "short",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for short password, got %d", resp.StatusCode)
+	}
+	// Duplicate username (admin already exists) -> 409, invitation stays valid.
+	resp, _ = doJSON(t, newClient(t), "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "admin", "password": "long-enough-pw",
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 for taken username, got %d", resp.StatusCode)
+	}
+	// Invitation must still be redeemable after the failures.
+	resp, _ = doJSON(t, newClient(t), "GET", ts.URL+"/api/auth/invitation/"+token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("invitation should survive failed signups, got %d", resp.StatusCode)
+	}
+	resp, body := doJSON(t, newClient(t), "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "pippin", "password": "peregrin-pw-1",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup after failures: %d %s", resp.StatusCode, body)
 	}
 }
 
@@ -1394,8 +1566,9 @@ func TestReplyPingsParentAuthor(t *testing.T) {
 	}
 }
 
-// TestNewUserSeededCaughtUp verifies a user created through the admin endpoint is
-// seeded "caught up" on existing public channels rather than facing the backlog.
+// TestNewUserSeededCaughtUp verifies a user created through the invitation signup
+// flow is seeded "caught up" on existing public channels rather than facing the
+// backlog (handleSignup seeds public read cursors).
 func TestNewUserSeededCaughtUp(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	adminC, _ := seedAdmin(t, ts, st)
@@ -1406,23 +1579,14 @@ func TestNewUserSeededCaughtUp(t *testing.T) {
 	postMessage(t, adminC, ts, general.ID, "history one")
 	postMessage(t, adminC, ts, general.ID, "history two")
 
-	// Create a fresh user via the handler (which seeds public read cursors).
-	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/admin/users",
-		map[string]string{"username": "newbie", "display_name": "Newbie"})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create user: %d %s", resp.StatusCode, body)
-	}
-	var newbie store.User
-	json.Unmarshal(body, &newbie)
-
-	// Give them a password directly and log in.
-	hash, _ := auth.HashPassword("newbie-strong-pw")
-	if err := st.SetPassword(context.Background(), newbie.ID, hash); err != nil {
-		t.Fatalf("set password: %v", err)
-	}
+	// Create a fresh user via the invitation signup flow (auto-logged-in).
+	_, token, _ := adminCreateInvitation(t, ts, adminC)
 	c := newClient(t)
-	doJSON(t, c, "POST", ts.URL+"/api/auth/login",
-		map[string]string{"username": "newbie", "password": "newbie-strong-pw"})
+	resp, body := doJSON(t, c, "POST", ts.URL+"/api/auth/signup",
+		map[string]string{"token": token, "username": "newbie", "password": "newbie-strong-pw"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup: %d %s", resp.StatusCode, body)
+	}
 
 	if cu := chUnread(getUnread(t, c, ts), general.ID); cu.Unread != 0 {
 		t.Fatalf("new user should start caught up, got general unread=%d", cu.Unread)
