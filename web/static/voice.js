@@ -38,15 +38,35 @@ let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedi
 // Drained immediately after setRemoteDescription; cleaned up in closePeer.
 const pendingIceCandidates = new Map(); // remoteUserId -> RTCIceCandidateInit[]
 
-// Camera preference: remembered across calls so "camera was on last time" auto-enables it.
+// Camera preference is remembered PER channel (DM): "camera was on when we last
+// hung up in this DM" auto-enables it on the next call to that same DM, while a
+// brand-new DM (or one we always voice-call in) starts voice-only. Stored as a
+// JSON map of channelId -> true; only camera-on entries are kept, so the absence
+// of a key means voice-only. Saved on every toggle, so the stored value always
+// equals the camera state at the moment the call ended.
 const CAMERA_PREF_KEY = "rivendell.cameraEnabled";
-function loadCameraPref() {
-  try { return localStorage.getItem(CAMERA_PREF_KEY) === "1"; } catch { return false; }
+function loadCameraPrefs() {
+  try {
+    const raw = localStorage.getItem(CAMERA_PREF_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    // Back-compat: an older build stored a single "1"/"0" global scalar. A
+    // non-object parse is that legacy value — treat it as no per-channel prefs.
+    return obj && typeof obj === "object" ? obj : {};
+  } catch { return {}; }
 }
-function saveCameraPref(on) {
-  try { localStorage.setItem(CAMERA_PREF_KEY, on ? "1" : "0"); } catch {}
+function loadCameraPref(channelId) {
+  return loadCameraPrefs()[channelId] === true;
 }
-export function loadCameraPreference() { return loadCameraPref(); }
+function saveCameraPref(channelId, on) {
+  if (channelId == null) return;
+  try {
+    const prefs = loadCameraPrefs();
+    if (on) prefs[channelId] = true; else delete prefs[channelId];
+    localStorage.setItem(CAMERA_PREF_KEY, JSON.stringify(prefs));
+  } catch { /* localStorage unavailable (node tests / private mode) — non-fatal */ }
+}
+export function loadCameraPreference(channelId) { return loadCameraPref(channelId); }
 // Self join/leave tones are fired from these lifecycle hooks rather than from
 // onStateChange, but — crucially — they play INSIDE the live-capture window, in
 // the same steady state where remote-peer tones already play loud and clear.
@@ -207,6 +227,12 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   activeChannelId = channelId;
   participants = []; // reset; the server's voice.state will populate the roster
   sendFn({ type: "voice.join", channel_id: channelId });
+  // Announce our real mute/camera state immediately. A fresh participant is
+  // video-muted by default server-side (so peers never flash a video placeholder
+  // before anyone turns a camera on), so a camera-on-at-join caller MUST correct
+  // that to video_muted:false here or their video tile would never appear; a
+  // mic-muted caller (mute persists across calls) likewise announces it.
+  sendFn({ type: "voice.mute", channel_id: channelId, muted, video_muted: !cameraEnabled });
   notifyState();
 
   // Greet AFTER the mic is live and the AEC has settled — this lands the tone in
@@ -404,13 +430,13 @@ export async function setCameraEnabled(on) {
     addMeter(myUserId, localStream);
 
     cameraEnabled = true;
-    saveCameraPref(true);
+    saveCameraPref(activeChannelId, true);
     setupLocalVideo();
   } else if (videoTracks.length > 0) {
     // Track already exists: flip .enabled (no renegotiation required).
     videoTracks.forEach(t => { t.enabled = on; });
     cameraEnabled = on;
-    saveCameraPref(on);
+    saveCameraPref(activeChannelId, on);
     if (on) setupLocalVideo(); else teardownLocalVideo();
   }
 

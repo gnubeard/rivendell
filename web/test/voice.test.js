@@ -29,11 +29,11 @@ function makeFakeStream({ includeVideo = false } = {}) {
   };
   const tracks = includeVideo ? [audioTrack, videoTrack] : [audioTrack];
   return {
-    getAudioTracks: () => [audioTrack],
-    getVideoTracks: () => includeVideo ? [videoTrack] : [],
-    addTrack: () => {},
-    removeTrack: () => {},
-    getTracks: () => tracks,
+    getAudioTracks: () => tracks.filter((t) => t.kind === "audio"),
+    getVideoTracks: () => tracks.filter((t) => t.kind === "video"),
+    addTrack: (t) => { if (t && !tracks.includes(t)) tracks.push(t); },
+    removeTrack: (t) => { const i = tracks.indexOf(t); if (i >= 0) tracks.splice(i, 1); },
+    getTracks: () => tracks.slice(),
   };
 }
 
@@ -58,17 +58,47 @@ Object.defineProperty(globalThis, "navigator", {
   },
 });
 
+// Minimal in-memory localStorage so the per-channel camera preference (and the
+// per-user volume store) persist within a test run instead of silently no-op'ing.
+const lsStore = new Map();
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  writable: true,
+  value: {
+    getItem: (k) => (lsStore.has(k) ? lsStore.get(k) : null),
+    setItem: (k, v) => { lsStore.set(k, String(v)); },
+    removeItem: (k) => { lsStore.delete(k); },
+    clear: () => { lsStore.clear(); },
+  },
+});
+
 const voice = await import("../static/voice.js");
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Frames the code under test pushed to the socket (populated by setup()'s send).
+let sent = [];
+
+// Reinstalls the default getUserMedia mock after a test swapped it out.
+function restoreGetUserMedia() {
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    if (getUserMediaRejectWith) throw getUserMediaRejectWith;
+    const includeVideo = !!(constraints && constraints.video && getUserMediaVideo);
+    if (includeVideo) timeline.push("cam-open");
+    timeline.push("mic-open");
+    return makeFakeStream({ includeVideo });
+  };
+}
+
 function setup() {
   timeline.length = 0;
+  sent = [];
+  lsStore.clear();
   getUserMediaVideo = false;
   getUserMediaRejectWith = null;
   voice.initVoice(
     1,                       // myUserId
-    () => {},                // socketSend — irrelevant here
+    (obj) => { sent.push(obj); }, // socketSend — captured for assertions
     () => {},                // onStateChange
     () => timeline.push("greet"),
     () => timeline.push("farewell"),
@@ -353,6 +383,66 @@ test("joinVoiceChannel with camera on: cameraEnabled is true", async () => {
   await voice.joinVoiceChannel(42, { enableVideo: true });
   assert.equal(voice.isCameraEnabled(), true);
   await voice.leaveVoiceChannel();
+});
+
+// --- join-time state announce + per-channel camera preference ---------------
+// A fresh participant is video-muted server-side so peers don't flash a video
+// placeholder before anyone turns a camera on (see hub.VoiceJoin). The client
+// therefore announces its real state on join so a camera-on caller still shows.
+
+test("joinVoiceChannel announces voice-only state to the server (video_muted:true)", async () => {
+  setup();
+  await voice.joinVoiceChannel(42, { enableVideo: false });
+  const mute = sent.find((m) => m.type === "voice.mute");
+  assert.ok(mute, "a voice.mute is sent on join");
+  assert.equal(mute.channel_id, 42);
+  assert.equal(mute.video_muted, true, "a voice-only join announces video_muted:true");
+  await voice.leaveVoiceChannel();
+});
+
+test("joinVoiceChannel with camera on announces video_muted:false", async () => {
+  setup();
+  getUserMediaVideo = true;
+  await voice.joinVoiceChannel(42, { enableVideo: true });
+  const mute = sent.find((m) => m.type === "voice.mute");
+  assert.ok(mute && mute.video_muted === false, "a camera-on join announces video_muted:false");
+  await voice.leaveVoiceChannel();
+});
+
+// The camera preference is remembered PER channel: turning the camera on in one
+// DM and hanging up auto-enables it next time in THAT DM, but a different DM (or
+// a brand-new call) starts voice-only.
+test("camera preference is remembered per channel, not globally", async () => {
+  setup();
+  navigator.mediaDevices.getUserMedia = async (constraints) =>
+    makeFakeStream({ includeVideo: !!(constraints && constraints.video) });
+
+  await voice.joinVoiceChannel(42, { enableVideo: false });
+  await voice.setCameraEnabled(true);
+  assert.equal(voice.isCameraEnabled(), true);
+  await voice.leaveVoiceChannel();
+
+  assert.equal(voice.loadCameraPreference(42), true, "the DM we used the camera in remembers it");
+  assert.equal(voice.loadCameraPreference(99), false, "a different DM stays voice-only");
+
+  restoreGetUserMedia();
+});
+
+// Turning the camera back off before hanging up clears the saved preference, so
+// the next call to that DM is voice-only again.
+test("turning the camera off in a DM clears its saved preference", async () => {
+  setup();
+  navigator.mediaDevices.getUserMedia = async (constraints) =>
+    makeFakeStream({ includeVideo: !!(constraints && constraints.video) });
+
+  await voice.joinVoiceChannel(7, { enableVideo: false });
+  await voice.setCameraEnabled(true);
+  assert.equal(voice.loadCameraPreference(7), true);
+  await voice.setCameraEnabled(false);
+  assert.equal(voice.loadCameraPreference(7), false);
+  await voice.leaveVoiceChannel();
+
+  restoreGetUserMedia();
 });
 
 // Mid-call camera enable: the join-time mic must be RELEASED before the combined

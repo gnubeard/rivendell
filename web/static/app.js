@@ -3782,7 +3782,7 @@ function wireVoiceControls() {
     ringState = null;
     renderRingBanner();
     try {
-      await joinVoiceChannel(chId, { enableVideo: loadCameraPreference() });
+      await joinVoiceChannel(chId, { enableVideo: loadCameraPreference(chId) });
       selectChannel(chId);
     } catch (e) {
       alert(micErrorMessage(e));
@@ -3973,7 +3973,7 @@ async function onVoiceEvent(evt) {
     renderChannelHeader(state.channels[state.activeChannelId]);
     if (accepted) {
       try {
-        await joinVoiceChannel(chId, { enableVideo: loadCameraPreference() });
+        await joinVoiceChannel(chId, { enableVideo: loadCameraPreference(chId) });
       } catch (e) {
         alert(micErrorMessage(e));
       }

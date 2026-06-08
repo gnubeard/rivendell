@@ -273,9 +273,13 @@ func (h *Hub) VoiceJoin(channelID, userID int64) []VoiceParticipant {
 		h.voiceChannels[channelID] = make(map[int64]*VoiceParticipant)
 	}
 	if _, ok := h.voiceChannels[channelID][userID]; !ok {
+		// Default to video-muted: a call starts voice-only so peers don't render a
+		// video placeholder before anyone turns a camera on. A camera-on-at-join
+		// participant corrects this with an immediate voice.mute (video_muted:false).
 		h.voiceChannels[channelID][userID] = &VoiceParticipant{
-			UserID:   userID,
-			JoinedAt: time.Now(),
+			UserID:     userID,
+			JoinedAt:   time.Now(),
+			VideoMuted: true,
 		}
 	}
 	return voiceList(h.voiceChannels[channelID])
