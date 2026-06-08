@@ -243,17 +243,20 @@ const VIDEO_MAX_KBPS = 1000;
 // resolution, so capping resolution here only risks a silent camera failure for
 // no bandwidth gain. (A `max` ceiling here was the v1.3.18 regression that broke
 // Android video preview — getUserMedia rejected and the failure was swallowed.)
-// aspectRatio is ideal-only too (16:9). FF-Android was honouring the height/
-// frameRate ideals but collapsing width to a *square* native mode (the RTC HUD
-// caught a live 360x360 capture feeding a wedged VP8 encoder: enc frozen, 0x0,
-// limit=undefined — i.e. the encoder stops being invoked on the non-standard,
-// non-16-aligned square profile). An ideal aspectRatio can't OverconstrainedError
-// (preserving the v1.3.18 lesson) but adds a strong landscape pull to the
-// fitness scoring, nudging FF off the square mode toward 640x360. If the encoder
-// un-wedges, the square profile was the culprit; if it still stalls at a clean
-// 16:9 size, the capture profile is exonerated and the FF-Android HW VP8 encoder
-// itself is the remaining suspect.
-const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, aspectRatio: { ideal: 16 / 9 }, frameRate: { ideal: 24 } };
+//
+// We deliberately do NOT constrain aspectRatio. The Pixel 7 Pro (and any other
+// 4:3-native sensor) exposes only 4:3 (and 1:1) capture modes — there is no real
+// 16:9 mode to select, only a crop of the 4:3 frame. An earlier
+// `aspectRatio: {ideal: 16/9}` here didn't widen the picture; it fought the 4:3
+// sensor and collapsed FF-Android to a *square* 360x360 capture (the RTC HUD
+// caught that square frame feeding a wedged VP8 encoder: enc frozen, 0x0). Asking
+// only for a landscape-oriented size (width > height) with no aspect term lets
+// each camera settle on its own native landscape mode: ~640x360 (16:9) on a 16:9
+// webcam, ~480x360 (4:3) on the Pixel. Both are even-dimensioned and the VP8
+// encoder drives them cleanly; the video tiles render whatever aspect arrives
+// (object-fit: contain / cover, see style.css), so a 4:3 frame is handled
+// gracefully rather than coerced into a mode the hardware doesn't have.
+const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
 
 // The built-in default, exposed so the admin video console can show/restore it.
 export const DEFAULT_VIDEO_CONSTRAINTS = VIDEO_CONSTRAINTS;
@@ -307,14 +310,13 @@ export function getLocalVideoTrack() {
   return localStream.getVideoTracks()[0] || null;
 }
 
-// needsLandscapeCoercion reports whether a live video track's settings look like
-// the FF-Android square-capture wedge: a square (or portrait) frame. The RTC HUD
-// caught FF-Android opening the camera at a square 360x360 that the hardware VP8
-// encoder refuses to drive (enc frozen, reported 0x0) — and ideal getUserMedia
-// constraints, INCLUDING an ideal 16:9 aspectRatio, didn't dislodge it. A frame
-// wider than it is tall is already landscape and needs no coercion. Unknown dims
-// (no getSettings support) return false — we don't gamble an applyConstraints
-// churn on a track we can't measure. Pure; unit-tested.
+// needsLandscapeCoercion reports whether a live video track opened square or
+// portrait (height >= width). With the aspectRatio constraint gone (see
+// VIDEO_CONSTRAINTS) most cameras — including the 4:3-only Pixel — now settle on a
+// landscape mode on their own, so this is a safety net for the cameras that still
+// open rotated/portrait. A frame wider than it is tall is already landscape and
+// needs no coercion. Unknown dims (no getSettings support) return false — we don't
+// gamble an applyConstraints churn on a track we can't measure. Pure; unit-tested.
 export function needsLandscapeCoercion(settings) {
   const w = settings && settings.width;
   const h = settings && settings.height;
@@ -323,23 +325,26 @@ export function needsLandscapeCoercion(settings) {
 }
 
 // landscapeConstraintLadder is the ordered list of EXACT capture profiles tried,
-// via track.applyConstraints(), to drag a wedged square capture into a landscape
-// mode the VP8 encoder will actually drive. applyConstraints re-runs the camera's
-// mode selection AFTER the track is live, where the open-time ideals failed. Order:
-// our 16:9 360p target first (the canonical WebRTC profile), then 640x480 (4:3, the
-// single most universally supported camera mode), then 720p. All are exact so a
-// rung the camera can't honour REJECTS (leaving the track untouched) rather than
-// silently resolving back to the square. Pure; unit-tested.
+// via track.applyConstraints(), to flip a square/portrait capture into a landscape
+// mode the VP8 encoder will drive. applyConstraints re-runs the camera's mode
+// selection AFTER the track is live, where the open-time ideals failed. Order leads
+// with 4:3 (480x360, then 640x480) because that's the only family a 4:3-native
+// sensor like the Pixel 7 Pro actually has — forcing 16:9 first just wastes a rung
+// on a mode the hardware can't produce. The 16:9 rungs follow for cameras that do
+// support them. All are exact so a rung the camera can't honour REJECTS (leaving
+// the track untouched) rather than silently resolving back to portrait. Pure;
+// unit-tested.
 export function landscapeConstraintLadder() {
   return [
-    { width: { exact: 640 }, height: { exact: 360 } },
+    { width: { exact: 480 }, height: { exact: 360 } },
     { width: { exact: 640 }, height: { exact: 480 } },
+    { width: { exact: 640 }, height: { exact: 360 } },
     { width: { exact: 1280 }, height: { exact: 720 } },
   ];
 }
 
-// coerceLandscapeCapture works around the FF-Android square-capture wedge (see
-// needsLandscapeCoercion). If the camera opened square, it walks
+// coerceLandscapeCapture is the portrait→landscape safety net (see
+// needsLandscapeCoercion). If the camera opened square/portrait, it walks
 // landscapeConstraintLadder via applyConstraints() and stops at the first rung that
 // lands a landscape frame. Best-effort: a track with no applyConstraints, an
 // already-landscape capture, or a camera that rejects every rung all leave the

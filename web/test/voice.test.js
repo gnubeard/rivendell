@@ -336,14 +336,16 @@ test("shouldRetryRelaxed retries everything except a permission denial", () => {
 });
 
 // --- needsLandscapeCoercion / landscapeConstraintLadder ---------------------
-// The FF-Android square-capture wedge: the camera opens at a square 360x360 the
-// HW VP8 encoder won't drive. These pure helpers decide when to intervene and
-// what to try; coerceLandscapeCapture (effectful, not unit-tested) walks them.
+// Safety net for cameras that open square/portrait. These pure helpers decide
+// when to intervene and what to try; coerceLandscapeCapture (effectful, not
+// unit-tested) walks them. The ladder leads with 4:3 because a 4:3-native sensor
+// (e.g. the Pixel 7 Pro) has no 16:9 mode to coerce to.
 
 test("needsLandscapeCoercion flags square and portrait, passes landscape", () => {
-  assert.equal(voice.needsLandscapeCoercion({ width: 360, height: 360 }), true);  // the wedge
+  assert.equal(voice.needsLandscapeCoercion({ width: 360, height: 360 }), true);  // square
   assert.equal(voice.needsLandscapeCoercion({ width: 480, height: 640 }), true);  // portrait
   assert.equal(voice.needsLandscapeCoercion({ width: 640, height: 360 }), false); // already landscape
+  assert.equal(voice.needsLandscapeCoercion({ width: 480, height: 360 }), false); // 4:3 landscape (Pixel native)
   assert.equal(voice.needsLandscapeCoercion({ width: 1280, height: 720 }), false);
 });
 
@@ -359,8 +361,8 @@ test("needsLandscapeCoercion doesn't gamble on unknown dimensions", () => {
 test("landscapeConstraintLadder is exact, landscape, and even-dimensioned throughout", () => {
   const ladder = voice.landscapeConstraintLadder();
   assert.ok(ladder.length >= 1);
-  // Our 16:9 target is tried first.
-  assert.deepEqual(ladder[0], { width: { exact: 640 }, height: { exact: 360 } });
+  // 4:3 is tried first — it's the only family a 4:3-native sensor (Pixel) has.
+  assert.deepEqual(ladder[0], { width: { exact: 480 }, height: { exact: 360 } });
   for (const c of ladder) {
     const w = c.width.exact, h = c.height.exact;
     assert.ok(w > h, "every rung is landscape (the whole point — escape the square)");
