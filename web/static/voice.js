@@ -348,30 +348,55 @@ export function setVolumeForUser(userId, vol) {
 // needed; we still send voice.mute so the server and peers know the new state.
 // When no video track exists yet (camera was off at join), we re-acquire a single
 // COMBINED audio+video stream, swap the audio track on every peer, add the video
-// track (which fires onnegotiationneeded so the offerer re-offers transparently),
-// and release the original audio-only capture session. Camera failure surfaces via
-// onCameraError and leaves the call audio-only — the original stream is untouched
-// until the new one is in hand, so a failure can never drop the live call.
+// track (which fires onnegotiationneeded so the offerer re-offers transparently).
+// Camera failure surfaces via onCameraError and leaves the call audio-only.
 //
 // Why combined rather than a lone getUserMedia({video}): on Android the camera and
 // mic capture are coupled at the HAL level, so opening the camera as a SECOND,
 // standalone capture session while the mic session from join is still live throws
 // AbortError "Starting videoinput failed". Bundling both devices into one session
-// (and releasing the old one) is what the working join path already does.
+// is what the working join path already does.
+//
+// The crucial ordering: we RELEASE the original mic capture *before* acquiring the
+// combined stream. The combined getUserMedia re-opens the mic too, and the audio
+// HAL is exclusive on Android — so requesting it while the join-time mic session is
+// still live makes the combined acquire itself fail ("Starting videoinput failed" /
+// NotReadableError). Stopping the old audio after a successful acquire (as we used
+// to) meant the acquire never succeeded on Android — that was the mid-call-camera
+// bug. We keep a handle to the released track so a camera failure can re-acquire
+// audio-only and keep the call alive rather than leaving it mute.
 export async function setCameraEnabled(on) {
   if (!localStream || activeChannelId === null) return;
   const videoTracks = localStream.getVideoTracks();
 
   if (on && videoTracks.length === 0) {
-    // First time enabling camera this call: re-acquire a combined audio+video
-    // session, then adopt BOTH its tracks (see the function comment above).
+    // First time enabling camera this call. RELEASE the live mic session first —
+    // the combined acquire re-opens the mic, and on Android it can't start while
+    // the old session still holds it (see the function comment above). We stash
+    // the track so a camera failure can restore audio-only.
+    const oldAudio = localStream.getAudioTracks()[0];
+    if (oldAudio) { localStream.removeTrack(oldAudio); oldAudio.stop(); }
+
     let combined;
     try {
       combined = await acquireCameraStream();
     } catch (err) {
-      // Camera unavailable — stay audio-only, but surface why instead of failing
-      // silently (the old silent return is exactly what made a broken camera look
-      // like "nothing happens" on Android). The original audio stream is intact.
+      // Camera unavailable — re-acquire the mic we just released so the call keeps
+      // working audio-only, then surface why (the old silent return is exactly
+      // what made a broken camera look like "nothing happens" on Android).
+      try {
+        const restored = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+        const a = restored.getAudioTracks()[0];
+        if (a) {
+          a.enabled = !muted;
+          localStream.addTrack(a);
+          for (const pc of peerConns.values()) {
+            const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+            if (audioSender) { try { await audioSender.replaceTrack(a); } catch {} }
+          }
+          addMeter(myUserId, localStream);
+        }
+      } catch { /* couldn't restore the mic either; report the camera error regardless */ }
       if (onCameraError) onCameraError(err);
       notifyState();
       return;
@@ -392,10 +417,8 @@ export async function setCameraEnabled(on) {
       if (vt) pc.addTrack(vt, localStream);
     }
 
-    // Replace tracks in localStream: stop the old audio (releasing the original
-    // capture session, so we never hold two), adopt the new audio + video.
-    const oldAudio = localStream.getAudioTracks()[0];
-    if (oldAudio) { localStream.removeTrack(oldAudio); oldAudio.stop(); }
+    // Adopt the new session's tracks into localStream (the original audio was
+    // already removed and stopped above, before the acquire).
     if (newAudio) localStream.addTrack(newAudio);
     if (vt) localStream.addTrack(vt);
 

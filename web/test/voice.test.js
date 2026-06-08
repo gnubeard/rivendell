@@ -32,6 +32,7 @@ function makeFakeStream({ includeVideo = false } = {}) {
     getAudioTracks: () => [audioTrack],
     getVideoTracks: () => includeVideo ? [videoTrack] : [],
     addTrack: () => {},
+    removeTrack: () => {},
     getTracks: () => tracks,
   };
 }
@@ -352,6 +353,81 @@ test("joinVoiceChannel with camera on: cameraEnabled is true", async () => {
   await voice.joinVoiceChannel(42, { enableVideo: true });
   assert.equal(voice.isCameraEnabled(), true);
   await voice.leaveVoiceChannel();
+});
+
+// Mid-call camera enable: the join-time mic must be RELEASED before the combined
+// audio+video acquire, or the acquire fails on Android (the audio HAL is exclusive
+// and won't open a second session while the first is live). This guards the
+// ordering — stopping the mic only after a successful acquire (the old code) meant
+// the acquire never succeeded on Android, which was the recurring bug.
+test("mid-call camera enable releases the mic before the combined acquire", async () => {
+  setup();
+  await voice.joinVoiceChannel(42, { enableVideo: false });
+  await delay(400);
+  timeline.length = 0;
+
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    if (constraints && constraints.video) {
+      timeline.push("combined-acquire");
+      return makeFakeStream({ includeVideo: true });
+    }
+    timeline.push("mic-open");
+    return makeFakeStream({ includeVideo: false });
+  };
+
+  await voice.setCameraEnabled(true);
+  assert.equal(voice.isCameraEnabled(), true);
+  assert.ok(timeline.includes("mic-stop"), "the join-time mic must be released");
+  assert.ok(timeline.includes("combined-acquire"), "a combined audio+video stream must be acquired");
+  assert.ok(
+    timeline.indexOf("mic-stop") < timeline.indexOf("combined-acquire"),
+    "the mic must be released BEFORE the combined acquire (Android HAL is exclusive)",
+  );
+
+  await voice.leaveVoiceChannel();
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    const includeVideo = !!(constraints && constraints.video && getUserMediaVideo);
+    if (includeVideo) timeline.push("cam-open");
+    timeline.push("mic-open");
+    return makeFakeStream({ includeVideo });
+  };
+});
+
+// If the camera acquire fails mid-call, the released mic must be re-acquired so the
+// call survives audio-only (rather than going silently mute), and the error must be
+// surfaced via the onCameraError callback.
+test("mid-call camera failure restores audio-only and reports the error", async () => {
+  setup();
+  let reported = null;
+  voice.setCameraErrorCallback((err) => { reported = err; });
+
+  await voice.joinVoiceChannel(42, { enableVideo: false });
+  await delay(400);
+  timeline.length = 0;
+
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    if (constraints && constraints.video) {
+      const err = new Error("Starting videoinput failed"); err.name = "NotReadableError"; throw err;
+    }
+    timeline.push("mic-reopen");
+    return makeFakeStream({ includeVideo: false });
+  };
+
+  await voice.setCameraEnabled(true);
+  assert.equal(voice.isCameraEnabled(), false, "camera stays off after a failed acquire");
+  assert.ok(voice.isInCall(), "the call must survive a camera failure");
+  assert.ok(timeline.includes("mic-stop"), "the original mic was released");
+  assert.ok(timeline.includes("mic-reopen"), "audio-only was re-acquired so the call isn't left mute");
+  assert.ok(reported && reported.name === "NotReadableError", "the camera error is surfaced to the UI");
+
+  voice.setCameraErrorCallback(null);
+  await voice.leaveVoiceChannel();
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    const includeVideo = !!(constraints && constraints.video && getUserMediaVideo);
+    if (includeVideo) timeline.push("cam-open");
+    timeline.push("mic-open");
+    return makeFakeStream({ includeVideo });
+  };
 });
 
 test("camera failure on join falls back to audio-only, call still works", async () => {
