@@ -2153,15 +2153,17 @@ function wireComposer() {
   // then fall through to the existing URL-wrap logic for plain-text URL pastes.
   input.addEventListener("paste", async (e) => {
     const items = Array.from((e.clipboardData || window.clipboardData)?.items || []);
-    const imageItem = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
-    if (imageItem) {
+    const imageItems = items.filter((i) => i.kind === "file" && i.type.startsWith("image/"));
+    if (imageItems.length) {
       // Images can't be sent in a secret session — suppress silently.
       const activeCh = state.channels[state.activeChannelId];
       const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
       if (secretSess && secretSess.phase === "active") { e.preventDefault(); return; }
       e.preventDefault();
-      const file = imageItem.getAsFile();
-      if (file) uploadAndInsert(file);
+      for (const it of imageItems) {
+        const file = it.getAsFile();
+        if (file) uploadAndInsert(file);
+      }
       return;
     }
     // Paste a single URL onto a non-empty selection → wrap it as a [text](url)
@@ -2274,10 +2276,8 @@ function wireComposer() {
   if (attachBtn && attachInput) {
     attachBtn.addEventListener("click", () => attachInput.click());
     attachInput.addEventListener("change", () => {
-      if (attachInput.files[0]) {
-        uploadAndInsert(attachInput.files[0]);
-        attachInput.value = ""; // reset so the same file can be re-selected
-      }
+      for (const file of attachInput.files) uploadAndInsert(file);
+      attachInput.value = ""; // reset so the same file(s) can be re-selected
     });
   }
 
@@ -2290,13 +2290,13 @@ function wireComposer() {
       }
     });
     composerEl.addEventListener("drop", (e) => {
-      const file = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/"));
-      if (file) {
+      const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+      if (files.length) {
         const activeCh = state.channels[state.activeChannelId];
         const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
         if (secretSess && secretSess.phase === "active") { e.preventDefault(); return; }
         e.preventDefault();
-        uploadAndInsert(file);
+        for (const file of files) uploadAndInsert(file);
       }
     });
   }
