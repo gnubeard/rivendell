@@ -33,14 +33,33 @@ let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedi
 // getStats telemetry onto a fixed overlay readable straight off the phone. The
 // crucial extra signal the console line never had: the <video> element's own
 // playback state (paused / currentTime / readyState). The "one frame and done"
-// freeze is a PAUSED element while frames keep decoding — that only shows up if
-// you look at the element, not at getStats. Cumulative counters (framesDecoded,
-// bytesReceived) are shown raw so a static value between 2s refreshes localizes
-// the stall: bytes climbing + framesDecoded flat = decoder; framesDecoded
-// climbing + element paused = autoplay; out framesEncoded flat = sender stall.
-// Each rtp line is prefixed with the NEGOTIATED CODEC (in/out) because a symmetric
-// sender stall whose root is the codec choice (e.g. VP8 forced onto a peer that
-// handles it badly) is invisible without knowing which codec actually won.
+// freeze was a PAUSED element while frames keep decoding — fixed by muting the
+// tile (fd0ba03); el: paused=false rs=4 now confirms that path is healthy.
+//
+// Cumulative counters are shown as cur(+delta-since-last-refresh) so a SINGLE
+// screenshot localizes a freeze without having to diff two snapshots by eye:
+//   dec=(+0) while connected ............ receiver decode stall (or sender stopped)
+//   dec=(+0) + bytes=(+N climbing) ...... decoder stuck (packets arrive, none decode)
+//   enc=(+0) on the sender .............. sender encoder stall
+//   in dec=(+13) one way, (+0) the other  ASYMMETRIC stall — one direction only
+// kf=(+delta) is keyFramesDecoded: after a pli is sent, kf staying flat means the
+// peer's encoder never produced the requested recovery keyframe.
+//
+// NOTE: out fps is unreliable on Firefox — it leaves framesPerSecond unset on
+// outbound-rtp even while sending 13 fps, so a peer can show out fps=0 while the
+// OTHER end receives its video fine. Read the deltas, not out fps. Each rtp line
+// is prefixed with the NEGOTIATED CODEC so a codec-rooted stall is visible.
+
+// fmtDelta formats a cumulative getStats counter as "cur(+delta)" against its
+// previous-refresh value, so a single HUD reading shows whether the counter is
+// advancing. Pure; unit-tested. "?" for a missing counter, "(+?)" on the first
+// sample (no baseline yet).
+export function fmtDelta(cur, prev) {
+  if (cur == null) return "?";
+  if (prev == null) return `${cur}(+?)`;
+  const d = cur - prev;
+  return `${cur}(${d >= 0 ? "+" : ""}${d})`;
+}
 function rtcDebugEnabled() {
   try {
     if (new URLSearchParams(location.search).has("rtcdebug")) return true;
@@ -48,6 +67,7 @@ function rtcDebugEnabled() {
   } catch { return false; }
 }
 const hudStats = new Map(); // remoteUserId -> latest formatted lines
+const hudPrev = new Map();  // remoteUserId -> previous-refresh raw counters (for deltas)
 function updateRtcHud() {
   if (!rtcDebugEnabled()) return;
   let hud = document.getElementById("rtc-hud");
@@ -80,6 +100,7 @@ export function attachCallDiagnostics(remoteUserId) {
   const timer = setInterval(async () => {
     if (!peerConns.has(remoteUserId)) {
       hudStats.delete(remoteUserId);
+      hudPrev.delete(remoteUserId);
       if (hudStats.size === 0) document.getElementById("rtc-hud")?.remove();
       else updateRtcHud();
       return clearInterval(timer);
@@ -109,10 +130,24 @@ export function attachCallDiagnostics(remoteUserId) {
       const elLine = rv
         ? `  el: paused=${rv.paused} t=${rv.currentTime?.toFixed(1)} rs=${rv.readyState} ${rv.videoWidth}x${rv.videoHeight}`
         : "  el: (no remote <video>)";
+      const prev = hudPrev.get(remoteUserId) || {};
+      const inDec = fmtDelta(inV?.framesDecoded, prev.dec);
+      const inRecv = fmtDelta(inV?.framesReceived, prev.recv);
+      const inKf = fmtDelta(inV?.keyFramesDecoded, prev.kf);
+      const inBytes = fmtDelta(inV?.bytesReceived, prev.brx);
+      const inPli = fmtDelta(inV?.pliCount, prev.pli);
+      const outEnc = fmtDelta(outV?.framesEncoded, prev.enc);
+      const outBytes = fmtDelta(outV?.bytesSent, prev.btx);
+      hudPrev.set(remoteUserId, {
+        dec: inV?.framesDecoded, recv: inV?.framesReceived, kf: inV?.keyFramesDecoded,
+        brx: inV?.bytesReceived, pli: inV?.pliCount,
+        enc: outV?.framesEncoded, btx: outV?.bytesSent,
+      });
       hudStats.set(remoteUserId,
         `peer ${remoteUserId} ${pc.iceConnectionState}/${pc.connectionState} ${lc?.candidateType}->${rc?.candidateType}\n` +
-        `  in  ${inCodec} fps=${inV?.framesPerSecond} decoded=${inV?.framesDecoded} recv=${inV?.framesReceived} bytes=${inV?.bytesReceived} pli=${inV?.pliCount} lost=${inV?.packetsLost}\n` +
-        `  out ${outCodec} fps=${outV?.framesPerSecond} enc=${outV?.framesEncoded} bytes=${outV?.bytesSent} limit=${outV?.qualityLimitationReason}\n` +
+        `  in  ${inCodec} fps=${inV?.framesPerSecond} dec=${inDec} recv=${inRecv} kf=${inKf}\n` +
+        `       bytes=${inBytes} pli=${inPli} lost=${inV?.packetsLost}\n` +
+        `  out ${outCodec} enc=${outEnc} bytes=${outBytes} limit=${outV?.qualityLimitationReason}\n` +
         elLine);
       updateRtcHud();
     }
