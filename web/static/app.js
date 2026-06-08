@@ -664,8 +664,10 @@ function startRealtime() {
         const cid = evt.payload.channel_id;
         const ch = state.channels[cid];
         const isNewFromOther = evt.type === "message.new" && evt.payload.user_id !== state.me.id;
-        const mentioned = isNewFromOther && mentionsUser(evt.payload.content, state.me.username);
-        // A "ping" is a message directed at you: any DM, or an @-mention.
+        const isReplyToMe = isNewFromOther && evt.payload.reply_to_id != null &&
+          (state.messages[cid] || []).some((m) => m.id === evt.payload.reply_to_id && m.user_id === state.me.id);
+        const mentioned = isNewFromOther && (mentionsUser(evt.payload.content, state.me.username) || isReplyToMe);
+        // A "ping" is a message directed at you: any DM, an @-mention, or a reply to your message.
         const pingsMe = isNewFromOther && ((ch && ch.is_dm) || mentioned);
         // A muted channel is fully silent: no badge bump, no chime/notification.
         const muted = S.isMuted(state, cid);
