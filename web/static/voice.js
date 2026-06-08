@@ -467,7 +467,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
 
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
-  if (cameraEnabled) setupLocalVideo();
+  if (cameraEnabled) { setupLocalVideo(); startCanvasPipe(); }
 
   // Meter our own mic so our roster row pulses while we talk (a disabled/muted
   // track reads as silence, so muting naturally clears our own speaking ring).
@@ -656,25 +656,30 @@ export async function setCameraEnabled(on) {
     // Swap each peer's audio sender to the new session's mic track (replaceTrack
     // is transparent — same m-line, no renegotiation), then add the video track
     // (this fires onnegotiationneeded; the offerer re-offers).
+    // Adopt the new session's tracks into localStream first (the original audio was
+    // already removed and stopped above), so the preview — and the canvas pipe that
+    // draws from it — sees the new camera frames before we publish.
+    if (newAudio) localStream.addTrack(newAudio);
+    if (vt) localStream.addTrack(vt);
+    cameraEnabled = true;
+    saveCameraPref(true);
+    setupLocalVideo();
+    // Publish the canvas-sourced track, not the raw camera track (FF-Android wedge).
+    const sendVideo = vt ? (startCanvasPipe() || vt) : null;
+
+    // Swap each peer's audio sender to the new mic track (replaceTrack is
+    // transparent — same m-line, no renegotiation), then add our video track (fires
+    // onnegotiationneeded; the offerer re-offers).
     for (const pc of peerConns.values()) {
       if (newAudio) {
         const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
         if (audioSender) { try { await audioSender.replaceTrack(newAudio); } catch {} }
       }
-      if (vt) pc.addTrack(vt, localStream);
+      if (sendVideo) pc.addTrack(sendVideo, localStream);
     }
-
-    // Adopt the new session's tracks into localStream (the original audio was
-    // already removed and stopped above, before the acquire).
-    if (newAudio) localStream.addTrack(newAudio);
-    if (vt) localStream.addTrack(vt);
 
     // Re-meter our mic: the old analyser source pointed at the now-stopped track.
     addMeter(myUserId, localStream);
-
-    cameraEnabled = true;
-    saveCameraPref(true);
-    setupLocalVideo();
   } else if (videoTracks.length > 0) {
     // Track already exists: flip .enabled (no renegotiation required).
     videoTracks.forEach(t => { t.enabled = on; });
@@ -704,6 +709,62 @@ function setupLocalVideo() {
 
 function teardownLocalVideo() {
   if (localVideoEl) localVideoEl.srcObject = null;
+}
+
+// --- Canvas send pipeline (FF-Android camera->encoder wedge workaround) --------
+//
+// On Firefox-Android the camera->encoder feed wedges: the encoder is never invoked
+// (getStats totalEncodeTime + framesEncoded freeze at ~3-7, frameWidth/Height=0x0)
+// even though the camera MediaStreamTrack stays live at full fps and the local
+// preview renders perfectly. Confirmed NOT the codec (identical on VP8/VP9/H.264)
+// and NOT transport (reproduces on a healthy connected/connected WiFi path, inbound
+// decoding fine) — it is FF-Android's capture->encoder path specifically.
+//
+// Escape hatch: don't hand the raw camera track to the RTCRtpSender at all. Draw
+// the live preview frames into a <canvas> and publish canvas.captureStream()'s
+// track instead. The encoder then pulls from a canvas source — a different pipeline
+// that sidesteps the wedged capture path — fed fixed, even dimensions. The camera
+// track keeps a single sink (the preview <video>), which the canvas reads via
+// drawImage; the sender never touches the camera track. Best-effort: a platform
+// without canvas.captureStream falls back to publishing the raw camera track.
+const CANVAS_SEND_FPS = 24;
+let canvasPipe = null; // { track, stop() } | null
+
+function startCanvasPipe() {
+  stopCanvasPipe();
+  if (typeof document === "undefined" || !localVideoEl) return null;
+  const cam = localStream && localStream.getVideoTracks ? localStream.getVideoTracks()[0] : null;
+  const set = cam && cam.getSettings ? cam.getSettings() : {};
+  let w = set.width || 640, h = set.height || 480;
+  w -= w % 2; h -= h % 2; // encoders want even dimensions
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext ? canvas.getContext("2d", { alpha: false }) : null;
+  if (!ctx || typeof canvas.captureStream !== "function") return null; // unsupported
+  let raf = 0, stopped = false;
+  const draw = () => {
+    if (stopped) return;
+    if (localVideoEl && localVideoEl.videoWidth) ctx.drawImage(localVideoEl, 0, 0, w, h);
+    raf = requestAnimationFrame(draw);
+  };
+  raf = requestAnimationFrame(draw);
+  const track = canvas.captureStream(CANVAS_SEND_FPS).getVideoTracks()[0];
+  if (track) track.contentHint = "motion";
+  canvasPipe = {
+    track,
+    stop() { stopped = true; if (raf) cancelAnimationFrame(raf); try { track && track.stop(); } catch {} },
+  };
+  return track;
+}
+
+function stopCanvasPipe() {
+  if (canvasPipe) { canvasPipe.stop(); canvasPipe = null; }
+}
+
+// videoSendTrack returns the track to publish for our camera: the canvas pipe's
+// track when active, else the raw camera track (non-FF / canvas unsupported).
+function videoSendTrack(cameraTrack) {
+  return (canvasPipe && canvasPipe.track) || cameraTrack;
 }
 
 // setSpeakingCallback registers cb(userId, speaking) for speaking-indicator UI.
@@ -1159,7 +1220,12 @@ function createPC(remoteUserId) {
   peerMeta.set(remoteUserId, { restarts: 0, timer: null });
 
   if (localStream) {
-    for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+    // Publish the canvas-sourced video track (FF-Android wedge workaround), not the
+    // raw camera track; audio is published as-is.
+    for (const track of localStream.getTracks()) {
+      const t = track.kind === "video" ? videoSendTrack(track) : track;
+      if (t) pc.addTrack(t, localStream);
+    }
   }
   // Prefer VP8 on any video transceiver addTrack just created (offerer side).
   preferVideoCodec(pc);
@@ -1283,6 +1349,7 @@ function closeAllPeers() {
 }
 
 function stopLocalStream() {
+  stopCanvasPipe();
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
