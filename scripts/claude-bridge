@@ -7,6 +7,16 @@
 # never has to name them. Also responds to DMs sent directly to the bot user
 # (low-effort, read-only).
 #
+# Concurrency: each request runs as a background job, so the poll loop never
+# blocks. Different channels run in parallel — in particular you can DM the bot
+# a question while a long job is still running in the main channel. Within a
+# single channel only one job runs at a time; a second request to a busy channel
+# is politely declined (resend it once the first finishes).
+#
+# Interrupting: send "!stop" (also "!cancel" / "!interrupt") in a channel or DM
+# to kill the job currently running there. The bot confirms with a reply, and
+# the in-progress reaction it left behind is cleared.
+#
 # Required env:
 #   RIVENDELL_URL        Base URL of your Rivendell instance  (e.g. http://localhost:8080)
 #   RIVENDELL_BOT_TOKEN  Bearer token from POST /api/admin/bot-tokens
@@ -42,6 +52,7 @@ REPO_DIR="${RIVENDELL_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 POLL_INTERVAL="${RIVENDELL_POLL_INTERVAL:-3}"
 STATE_DIR="${RIVENDELL_STATE_DIR:-/tmp}"
 STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
+JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
 WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
 MAX_RESPONSE=3800  # chars; leaves headroom under Rivendell's default 4096-byte limit
 
@@ -68,7 +79,7 @@ BRIDGE_PREAMBLE='Project standing instructions (injected by claude-bridge — al
 # ---------------------------------------------------------------------------
 # Dependency check
 
-for cmd in curl jq claude; do
+for cmd in curl jq claude pgrep; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "error: $cmd is required" >&2; exit 1; }
 done
 
@@ -157,6 +168,147 @@ fetch_message_images() {
 }
 
 # ---------------------------------------------------------------------------
+# Concurrency / interrupt helpers
+#
+# Each in-flight request is a background subshell. Per channel we keep one
+# registry file ($JOBS_DIR/<channel_id>) holding "<pid> <msg_id>": the pid lets
+# us observe and kill the job, the msg_id lets us clear its in-progress reaction
+# if we kill it. Different channels run concurrently; a channel runs at most one
+# job at a time.
+
+# is_stop_command <content> — true if the message is an interrupt command.
+is_stop_command() {
+    local c
+    c=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$c" in
+        '!stop'|'!cancel'|'!interrupt') return 0 ;;
+    esac
+    return 1
+}
+
+# is_busy <channel_id> — true if a live job is registered for the channel. A
+# registry entry whose process is gone is stale; reap it and report not-busy.
+is_busy() {
+    local f="$JOBS_DIR/$1" pid
+    [ -f "$f" ] || return 1
+    pid=$(cut -d' ' -f1 "$f" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$f"
+    return 1
+}
+
+# active_job_count — number of channels with a live job, reaping stale entries.
+active_job_count() {
+    local n=0 f pid
+    for f in "$JOBS_DIR"/*; do
+        [ -e "$f" ] || continue
+        pid=$(cut -d' ' -f1 "$f" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            n=$((n + 1))
+        else
+            rm -f "$f"
+        fi
+    done
+    printf '%s' "$n"
+}
+
+# kill_tree <pid> — TERM a process and all its descendants, leaves first, so the
+# claude child dies before the subshell that's waiting on it (which would
+# otherwise be orphaned). pgrep walks the tree without job control.
+kill_tree() {
+    local pid="$1" child
+    while IFS= read -r child; do
+        [ -n "$child" ] && kill_tree "$child"
+    done < <(pgrep -P "$pid" 2>/dev/null || true)
+    kill -TERM "$pid" 2>/dev/null || true
+}
+
+# interrupt_channel <channel_id> — kill the channel's running job. Returns 0 if
+# something was actually killed, 1 if nothing was running.
+interrupt_channel() {
+    local f="$JOBS_DIR/$1" line pid msg_id
+    [ -f "$f" ] || return 1
+    line=$(cat "$f" 2>/dev/null) || { rm -f "$f"; return 1; }
+    pid=${line%% *}
+    msg_id=${line##* }
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$f"
+        return 1
+    fi
+    kill_tree "$pid"
+    rm -f "$f"
+    # The killed job can't run its own cleanup, so drop its 👍 reaction here.
+    [ -n "$msg_id" ] && [ "$msg_id" != "$pid" ] && unreact "$msg_id" "$WORKING_EMOJI"
+    return 0
+}
+
+# run_claude_job <channel_id> <mode> <msg_id> <content>
+# The actual work, run inside a background subshell (see handle_channel). On a
+# clean finish it drops its own registry entry; if interrupted, interrupt_channel
+# has already removed the entry and cleared the reaction.
+run_claude_job() {
+    local channel_id="$1" mode="$2" msg_id="$3" content="$4"
+
+    # Restore default INT/TERM so an interrupt's SIGTERM actually kills this job —
+    # the parent traps those signals for graceful shutdown and a subshell inherits
+    # the trap, which would otherwise swallow the kill.
+    trap - INT TERM
+    # On a clean exit, remove our registry entry, but only if it's still ours (an
+    # interrupt may have removed it and a newer job replaced it).
+    trap '[ "$(cut -d" " -f1 "$JOBS_DIR/$channel_id" 2>/dev/null)" = "$BASHPID" ] && rm -f "$JOBS_DIR/$channel_id"' EXIT
+
+    # Signal "work in progress" by reacting to the user's own message.
+    react "$msg_id" "$WORKING_EMOJI"
+
+    # Pull down any attached images so Claude can actually see them (the blob
+    # markdown is a session-gated server URL, useless to Claude on its own).
+    local img_dir img_paths prompt_content
+    img_dir=$(mktemp -d)
+    img_paths=$(fetch_message_images "$content" "$img_dir")
+    prompt_content="$content"
+    local -a img_args=()
+    if [ -n "$img_paths" ]; then
+        prompt_content="$content
+
+[The user attached image file(s). Read each of these local paths with the Read tool to view them:]
+$img_paths"
+        img_args=(--add-dir "$img_dir")
+    fi
+
+    local claude_exit=0 claude_out
+    if [ "$mode" = "dm" ]; then
+        # DM mode: low-effort, no file write tools. -- terminates flag parsing so
+        # $prompt_content isn't consumed as a tool name by --disallowed-tools.
+        claude_out=$(cd "$REPO_DIR" && claude --print --effort low \
+            --disallowed-tools "Edit,Write,Bash" "${img_args[@]}" -- \
+            "$prompt_content" 2>&1) || claude_exit=$?
+    else
+        # -- terminates flag parsing so the prompt isn't swallowed by --add-dir.
+        claude_out=$(cd "$REPO_DIR" && claude --print "${img_args[@]}" -- \
+            "$BRIDGE_PREAMBLE$prompt_content" 2>&1) || claude_exit=$?
+    fi
+    rm -rf "$img_dir"
+
+    local trimmed reply
+    trimmed=$(trim_output "$claude_out")
+    if [ "$claude_exit" -eq 0 ]; then
+        reply="${trimmed:-✅ Done.}"
+    else
+        reply="❌ Error (exit $claude_exit).
+
+$trimmed"
+    fi
+
+    # Post the result as a threaded reply (which itself pings the requester). Fall
+    # back to a plain post if the reply target is gone, then drop the reaction.
+    reply_msg "$channel_id" "$msg_id" "$reply" >/dev/null 2>&1 \
+        || post_msg "$channel_id" "$reply" >/dev/null 2>&1 || true
+    unreact "$msg_id" "$WORKING_EMOJI"
+}
+
+# ---------------------------------------------------------------------------
 # Startup
 
 echo "rivendell-claude-bridge starting"
@@ -190,7 +342,12 @@ if [ ! -f "$STATE_FILE" ]; then
     echo "  seeded at message id $SEED_ID"
 fi
 
-echo "polling every ${POLL_INTERVAL}s — ready (DM mode: enabled)"
+# Fresh job registry — any entries left over from a previous run are stale (their
+# pids may even have been reused by unrelated processes).
+mkdir -p "$JOBS_DIR"
+rm -f "$JOBS_DIR"/* 2>/dev/null || true
+
+echo "polling every ${POLL_INTERVAL}s — ready (DM mode: enabled, parallel; interrupt with !stop)"
 echo ""
 
 # Signal readiness via the bot's status.
@@ -200,11 +357,17 @@ set_status_text "operational — waiting"
 # ---------------------------------------------------------------------------
 # Main loop
 
-TMPFILE=$(mktemp)
 SHUTDOWN=0
 
 do_cleanup() {
-    rm -f "$TMPFILE"
+    # Let any in-flight jobs finish rather than sever work mid-edit. Send a
+    # "!stop" first (or signal the bridge a second time) if you need a faster exit.
+    local n; n=$(active_job_count)
+    if [ "$n" -gt 0 ]; then
+        echo "bridge: waiting for $n in-flight job(s) to finish…"
+        wait
+    fi
+    rm -rf "$JOBS_DIR"
     set_status "offline"
     set_status_text "offline"
     echo "bridge stopped"
@@ -213,13 +376,19 @@ do_cleanup() {
 
 on_shutdown() {
     SHUTDOWN=1
-    echo "bridge: shutdown requested — finishing current work before exit…" >&2
+    echo "bridge: shutdown requested — finishing in-flight work before exit…" >&2
 }
 trap on_shutdown INT TERM
 
 # handle_channel <channel_id> <mode>
 # mode = "normal"  → full Claude in $REPO_DIR with BRIDGE_PREAMBLE
 # mode = "dm"      → low-effort Claude in $REPO_DIR, write tools disallowed, no preamble
+#
+# Dispatches each request as a background job (run_claude_job) so the poll loop
+# never blocks: different channels run concurrently, but a channel runs at most
+# one job at a time. Messages are always consumed in id order, so the cursor
+# advances contiguously and nothing is lost. A "!stop" command interrupts the
+# channel's running job and is honored even while it's busy.
 handle_channel() {
     local channel_id="$1"
     local mode="$2"
@@ -243,13 +412,15 @@ handle_channel() {
     local last_id
     last_id=$(cat "$state_file")
 
+    local tmp
+    tmp=$(mktemp)
     api GET "/channels/$channel_id/messages?limit=20" 2>/dev/null \
         | jq -c \
             --argjson last "$last_id" \
             --argjson bot  "$BOT_ID" \
             '[.[] | select(.id > $last and .user_id != $bot and .deleted_at == null)]
              | reverse | .[]' \
-        > "$TMPFILE" 2>/dev/null || return
+        > "$tmp" 2>/dev/null || { rm -f "$tmp"; return; }
 
     while IFS= read -r msg && [ -n "$msg" ]; do
         local msg_id content user_id
@@ -257,93 +428,78 @@ handle_channel() {
         content=$( jq -r '.content' <<<"$msg")
         user_id=$( jq -r '.user_id' <<<"$msg")
 
+        # Consume in id order so the cursor only ever advances contiguously.
         printf '%s' "$msg_id" > "$state_file"
+
+        # Interrupt command — kill this channel's running job (honored even while
+        # busy). The reply pings the requester.
+        if is_stop_command "$content"; then
+            printf '[%s msg %s user %s] stop command\n' "$mode" "$msg_id" "$user_id"
+            if interrupt_channel "$channel_id"; then
+                reply_msg "$channel_id" "$msg_id" "🛑 Interrupted the running job." >/dev/null 2>&1 || true
+            else
+                reply_msg "$channel_id" "$msg_id" "Nothing is currently running here to interrupt." >/dev/null 2>&1 || true
+            fi
+            continue
+        fi
+
+        # One job per channel: politely decline a new request while this channel is
+        # busy, rather than running two clobbering jobs. (Different channels — e.g.
+        # a DM while the main channel works — still run in parallel.)
+        if is_busy "$channel_id"; then
+            printf '[%s msg %s user %s] busy — declined\n' "$mode" "$msg_id" "$user_id"
+            reply_msg "$channel_id" "$msg_id" "⏳ I'm still working on a previous request in here. Send \`!stop\` to cancel it, or resend this once it's done." >/dev/null 2>&1 || true
+            continue
+        fi
 
         printf '[%s msg %s user %s] %s\n' "$mode" "$msg_id" "$user_id" "${content:0:100}"
 
-        # Signal "work in progress" by reacting to the user's own message rather
-        # than posting (and later editing) a placeholder. The reaction is removed
-        # and a reply posted on completion.
-        react "$msg_id" "$WORKING_EMOJI"
+        # Dispatch the work as a background job and register it so it can be
+        # observed (is_busy) and interrupted (interrupt_channel). $! inside the
+        # parent equals $BASHPID inside the subshell, so the job's own cleanup can
+        # match this entry. The channel is now busy: any further work message this
+        # cycle hits the is_busy branch above.
+        run_claude_job "$channel_id" "$mode" "$msg_id" "$content" &
+        local pid=$!
+        printf '%s %s\n' "$pid" "$msg_id" > "$JOBS_DIR/$channel_id"
 
-        # Pull down any attached images so Claude can actually see them. The
-        # blob markdown in the message text is a server-relative URL behind the
-        # session, useless to Claude on its own; we fetch each blob to a temp
-        # dir, hand Claude the local paths, and --add-dir the dir so its Read
-        # tool may open them.
-        local img_dir img_paths prompt_content
-        img_dir=$(mktemp -d)
-        img_paths=$(fetch_message_images "$content" "$img_dir")
-        prompt_content="$content"
-        local -a img_args=()
-        if [ -n "$img_paths" ]; then
-            prompt_content="$content
+    done < "$tmp"
+    rm -f "$tmp"
+}
 
-[The user attached image file(s). Read each of these local paths with the Read tool to view them:]
-$img_paths"
-            img_args=(--add-dir "$img_dir")
-        fi
-
-        local claude_exit=0 claude_out
-        if [ "$mode" = "dm" ]; then
-            # DM mode: low-effort, no file write tools.
-            # -- terminates flag parsing so $prompt_content isn't consumed as a
-            # tool name by the greedy <tools...> nargs of --disallowed-tools.
-            claude_out=$(cd "$REPO_DIR" && claude --print --effort low \
-                --disallowed-tools "Edit,Write,Bash" "${img_args[@]}" -- \
-                "$prompt_content" 2>&1) || claude_exit=$?
-        else
-            # -- terminates flag parsing so the prompt isn't swallowed by the
-            # greedy <directories...> nargs of --add-dir.
-            claude_out=$(cd "$REPO_DIR" && claude --print "${img_args[@]}" -- \
-                "$BRIDGE_PREAMBLE$prompt_content" 2>&1) || claude_exit=$?
-        fi
-        rm -rf "$img_dir"
-
-        local trimmed reply
-        trimmed=$(trim_output "$claude_out")
-        if [ "$claude_exit" -eq 0 ]; then
-            reply="${trimmed:-✅ Done.}"
-        else
-            reply="❌ Error (exit $claude_exit).
-
-$trimmed"
-        fi
-
-        # Post the result as a threaded reply to the originating message. The reply
-        # itself pings the requester — the server treats replying to someone as a
-        # ping — so there's no need to @-mention them by name. Fall back to a plain
-        # post if the reply target is gone (e.g. the user deleted it mid-run); that
-        # loses the ping, but the message is still delivered. Then drop the working
-        # reaction regardless of outcome.
-        reply_msg "$channel_id" "$msg_id" "$reply" >/dev/null 2>&1 \
-            || post_msg "$channel_id" "$reply" >/dev/null 2>&1 || true
-        unreact "$msg_id" "$WORKING_EMOJI"
-
-        local run_time
-        run_time=$(TZ=America/Chicago date +%H:%M)
-        if [ "$claude_exit" -eq 0 ]; then
-            set_status_text "last run: ✅ done at $run_time"
-        else
-            set_status_text "last run: ❌ error at $run_time"
-        fi
+# Reflect the live job count in the bot's status text, but only PATCH when it
+# changes (the loop runs every few seconds).
+LAST_STATUS=""
+update_status() {
+    local n msg
+    n=$(active_job_count)
+    if [ "$n" -gt 0 ]; then
+        msg="operational — $n job(s) running"
+    else
+        msg="operational — idle"
+    fi
+    if [ "$msg" != "$LAST_STATUS" ]; then
+        set_status_text "$msg"
         set_status "online"
-
-    done < "$TMPFILE"
+        LAST_STATUS="$msg"
+    fi
 }
 
 while true; do
     sleep "$POLL_INTERVAL" || true   # interrupted sleep (on signal) must not trigger errexit
     [ "$SHUTDOWN" -eq 1 ] && do_cleanup
 
-    # Main claude channel — full access.
+    # Main claude channel — full access. Dispatch is non-blocking.
     handle_channel "$CHANNEL_ID" "normal"
     [ "$SHUTDOWN" -eq 1 ] && do_cleanup
 
     # DM channels — discover dynamically each cycle, handle in low-effort mode.
+    # These dispatch in parallel with each other and with the main channel, so a
+    # DM question is answered even while a long job is still running.
     while IFS= read -r dm_id; do
         [ -n "$dm_id" ] && handle_channel "$dm_id" "dm"
-        [ "$SHUTDOWN" -eq 1 ] && do_cleanup
     done < <(api GET /channels 2>/dev/null \
         | jq -r '[.[] | select(.is_dm == true)] | .[].id' 2>/dev/null || true)
+
+    update_status
 done
