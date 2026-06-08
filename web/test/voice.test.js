@@ -287,6 +287,8 @@ test("micErrorMessage maps known getUserMedia errors to actionable text", () => 
   assert.match(voice.micErrorMessage({ name: "SecurityError" }), /blocked/i);
   assert.match(voice.micErrorMessage({ name: "NotFoundError" }), /no microphone/i);
   assert.match(voice.micErrorMessage({ name: "NotReadableError" }), /in use|unavailable/i);
+  // AbortError ("Starting audioinput failed") is a device-start failure, same class.
+  assert.match(voice.micErrorMessage({ name: "AbortError" }), /in use|unavailable/i);
 });
 
 test("micErrorMessage falls back gracefully for unknown / missing errors", () => {
@@ -303,6 +305,10 @@ test("cameraErrorMessage maps known getUserMedia errors to actionable text", () 
   assert.match(voice.cameraErrorMessage({ name: "NotFoundError" }), /no camera/i);
   assert.match(voice.cameraErrorMessage({ name: "OverconstrainedError" }), /no camera/i);
   assert.match(voice.cameraErrorMessage({ name: "NotReadableError" }), /in use|unavailable/i);
+  // AbortError is Chromium's "Starting videoinput failed" on Android — a device
+  // start failure, not a constraints problem. Must not hit the raw-message default.
+  assert.match(voice.cameraErrorMessage({ name: "AbortError" }), /in use|rejoin/i);
+  assert.doesNotMatch(voice.cameraErrorMessage({ name: "AbortError", message: "Starting videoinput failed" }), /Starting videoinput failed/);
 });
 
 test("cameraErrorMessage falls back gracefully for unknown / missing errors", () => {

@@ -116,6 +116,17 @@ const VIDEO_MAX_KBPS = 1000;
 // Android video preview — getUserMedia rejected and the failure was swallowed.)
 const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
 
+// Microphone capture constraints. Hoisted to module scope because the mid-call
+// camera-enable path re-acquires a combined audio+video stream (see
+// acquireCameraStream) and must request the mic identically to the join path.
+const AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+  sampleRate: 48000,
+};
+
 // Ring-sound state. The incoming-call ringtone (callee) and the call-pending
 // tone (caller waiting for pickup) are independent so they never share an
 // interval — a single client is only ever one side of a ring, but keeping them
@@ -178,13 +189,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   if (activeChannelId !== null) await leaveVoiceChannel();
 
   cameraEnabled = enableVideo;
-  const audioConstraints = {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-    channelCount: 1,
-    sampleRate: 48000,
-  };
+  const audioConstraints = AUDIO_CONSTRAINTS;
   const videoConstraint = cameraEnabled ? VIDEO_CONSTRAINTS : false;
 
   try {
@@ -341,30 +346,62 @@ export function setVolumeForUser(userId, vol) {
 // setCameraEnabled toggles the camera mid-call. When the video track already
 // exists (camera was on at join), it just flips track.enabled — no renegotiation
 // needed; we still send voice.mute so the server and peers know the new state.
-// When no video track exists yet (camera was off at join), we acquire the camera,
-// addTrack to all peers, which fires onnegotiationneeded on each (offerer handles
-// the re-offer transparently). Camera failure is silent — cameraEnabled stays false.
+// When no video track exists yet (camera was off at join), we re-acquire a single
+// COMBINED audio+video stream, swap the audio track on every peer, add the video
+// track (which fires onnegotiationneeded so the offerer re-offers transparently),
+// and release the original audio-only capture session. Camera failure surfaces via
+// onCameraError and leaves the call audio-only — the original stream is untouched
+// until the new one is in hand, so a failure can never drop the live call.
+//
+// Why combined rather than a lone getUserMedia({video}): on Android the camera and
+// mic capture are coupled at the HAL level, so opening the camera as a SECOND,
+// standalone capture session while the mic session from join is still live throws
+// AbortError "Starting videoinput failed". Bundling both devices into one session
+// (and releasing the old one) is what the working join path already does.
 export async function setCameraEnabled(on) {
   if (!localStream || activeChannelId === null) return;
   const videoTracks = localStream.getVideoTracks();
 
   if (on && videoTracks.length === 0) {
-    // First time enabling camera this call: acquire device and add track.
-    let vt;
+    // First time enabling camera this call: re-acquire a combined audio+video
+    // session, then adopt BOTH its tracks (see the function comment above).
+    let combined;
     try {
-      const vs = await acquireCamera();
-      vt = vs.getVideoTracks()[0];
-      if (vt) vt.contentHint = "motion";
+      combined = await acquireCameraStream();
     } catch (err) {
       // Camera unavailable — stay audio-only, but surface why instead of failing
       // silently (the old silent return is exactly what made a broken camera look
-      // like "nothing happens" on Android).
+      // like "nothing happens" on Android). The original audio stream is intact.
       if (onCameraError) onCameraError(err);
       notifyState();
       return;
     }
-    localStream.addTrack(vt);
-    for (const pc of peerConns.values()) pc.addTrack(vt, localStream);
+    const vt = combined.getVideoTracks()[0];
+    const newAudio = combined.getAudioTracks()[0];
+    if (vt) vt.contentHint = "motion";
+    if (newAudio) newAudio.enabled = !muted; // preserve current mute state
+
+    // Swap each peer's audio sender to the new session's mic track (replaceTrack
+    // is transparent — same m-line, no renegotiation), then add the video track
+    // (this fires onnegotiationneeded; the offerer re-offers).
+    for (const pc of peerConns.values()) {
+      if (newAudio) {
+        const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
+        if (audioSender) { try { await audioSender.replaceTrack(newAudio); } catch {} }
+      }
+      if (vt) pc.addTrack(vt, localStream);
+    }
+
+    // Replace tracks in localStream: stop the old audio (releasing the original
+    // capture session, so we never hold two), adopt the new audio + video.
+    const oldAudio = localStream.getAudioTracks()[0];
+    if (oldAudio) { localStream.removeTrack(oldAudio); oldAudio.stop(); }
+    if (newAudio) localStream.addTrack(newAudio);
+    if (vt) localStream.addTrack(vt);
+
+    // Re-meter our mic: the old analyser source pointed at the now-stopped track.
+    addMeter(myUserId, localStream);
+
     cameraEnabled = true;
     saveCameraPref(true);
     setupLocalVideo();
@@ -454,6 +491,7 @@ export function micErrorMessage(err) {
   case "OverconstrainedError":
     return "No microphone was found. Plug one in (or check your input device) and try again.";
   case "NotReadableError":     // device held by another app / OS-level error
+  case "AbortError":           // device failed to start (e.g. Android "Starting audioinput failed")
     return "Your microphone is in use by another app (or unavailable). Close anything else using it and try again.";
   default:
     return "Could not access the microphone" + (err && err.message ? ": " + err.message : ".");
@@ -471,7 +509,8 @@ export function cameraErrorMessage(err) {
   case "OverconstrainedError":
     return "No camera was found. Plug one in (or check your input device) and try again.";
   case "NotReadableError":
-    return "Your camera is in use by another app (or unavailable). Close anything else using it and try again.";
+  case "AbortError":           // device failed to start (Android "Starting videoinput failed")
+    return "Your camera couldn't be started (it may be in use by another app). Close anything else using it, or leave and rejoin the call.";
   default:
     return "Could not access the camera" + (err && err.message ? ": " + err.message : ".");
   }
@@ -487,16 +526,21 @@ export function shouldRetryRelaxed(err) {
   return name !== "NotAllowedError" && name !== "SecurityError";
 }
 
-// acquireCamera gets a camera-only MediaStream, falling back to an unconstrained
-// `video: true` request if the constrained one fails for a reason relaxing might
-// fix (see shouldRetryRelaxed). Throws the original error if even the relaxed
-// request fails (or if the failure was a permission denial). Internal.
-async function acquireCamera() {
+// acquireCameraStream gets a COMBINED audio+video MediaStream for the mid-call
+// camera-enable path, falling back to an unconstrained `video: true` request if
+// the constrained one fails for a reason relaxing might fix (see
+// shouldRetryRelaxed). Requesting both devices in one getUserMedia call yields a
+// single capture session — the lone-video second session is what fails with
+// AbortError on Android (see setCameraEnabled). The mic is requested identically
+// to the join path so the swapped-in audio track matches. Throws the original
+// error if even the relaxed request fails (or if the failure was a permission
+// denial). Internal.
+async function acquireCameraStream() {
   try {
-    return await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
+    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: VIDEO_CONSTRAINTS });
   } catch (err) {
     if (!shouldRetryRelaxed(err)) throw err;
-    return await navigator.mediaDevices.getUserMedia({ video: true });
+    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true });
   }
 }
 
