@@ -69,16 +69,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []User{}
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanUser)
 }
 
 func (s *Store) SetPassword(ctx context.Context, id int64, hash string) error {
@@ -424,16 +415,7 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Channel{}
-	for rows.Next() {
-		c, err := scanChannel(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanChannel)
 }
 
 func (s *Store) GetChannel(ctx context.Context, id int64) (Channel, error) {
@@ -570,16 +552,7 @@ func (s *Store) ListArchivedChannels(ctx context.Context) ([]Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Channel{}
-	for rows.Next() {
-		c, err := scanChannel(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanChannel)
 }
 
 // RestoreChannel un-archives a channel. The name was never freed while archived,
@@ -628,16 +601,7 @@ func (s *Store) ListChannelMembers(ctx context.Context, channelID int64) ([]User
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []User{}
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanUser)
 }
 
 // ListChannelMemberIDs returns the user ids that belong to a private channel.
@@ -716,20 +680,15 @@ func (s *Store) ListMessages(ctx context.Context, channelID int64, beforeID int6
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Message{}
-	for rows.Next() {
-		m, err := scanMessageFull(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
+	out, err := collectRows(rows, scanMessageFull)
+	if err != nil {
+		return nil, err
 	}
 	// reverse to oldest-first
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListMessagesAfter returns up to limit messages in a channel with id > afterID,
@@ -747,16 +706,7 @@ func (s *Store) ListMessagesAfter(ctx context.Context, channelID int64, afterID 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Message{}
-	for rows.Next() {
-		m, err := scanMessageFull(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanMessageFull)
 }
 
 // GetMessagesAround returns up to halfLimit messages before messageID, the
@@ -776,16 +726,8 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var older []Message
-	for rows.Next() {
-		m, err := scanMessageFull(rows)
-		if err != nil {
-			return nil, err
-		}
-		older = append(older, m)
-	}
-	if err := rows.Err(); err != nil {
+	older, err := collectRows(rows, scanMessageFull)
+	if err != nil {
 		return nil, err
 	}
 
@@ -806,16 +748,8 @@ func (s *Store) GetMessagesAround(ctx context.Context, channelID, messageID int6
 	if err != nil {
 		return nil, err
 	}
-	defer rows2.Close()
-	var newer []Message
-	for rows2.Next() {
-		m, err := scanMessageFull(rows2)
-		if err != nil {
-			return nil, err
-		}
-		newer = append(newer, m)
-	}
-	if err := rows2.Err(); err != nil {
+	newer, err := collectRows(rows2, scanMessageFull)
+	if err != nil {
 		return nil, err
 	}
 
@@ -840,16 +774,7 @@ func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Mess
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Message{}
-	for rows.Next() {
-		m, err := scanMessageFull(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanMessageFull)
 }
 
 // SearchMessages returns up to limit non-deleted messages whose content matches
@@ -860,9 +785,8 @@ func (s *Store) ListPinnedMessages(ctx context.Context, channelID int64) ([]Mess
 // and yields no matches (an empty slice) for a query with no searchable terms.
 // An empty channel set or blank query short-circuits to [].
 func (s *Store) SearchMessages(ctx context.Context, channelIDs []int64, query string, beforeID int64, limit int) ([]Message, error) {
-	out := []Message{}
 	if len(channelIDs) == 0 || strings.TrimSpace(query) == "" {
-		return out, nil
+		return []Message{}, nil
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 25
@@ -892,15 +816,7 @@ func (s *Store) SearchMessages(ctx context.Context, channelIDs []int64, query st
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		m, err := scanMessageFull(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return collectRows(rows, scanMessageFull)
 }
 
 func (s *Store) GetMessage(ctx context.Context, id int64) (Message, error) {
@@ -1352,6 +1268,21 @@ func (s *Store) SaveVAPIDKeys(ctx context.Context, privB64, pubB64 string) error
 }
 
 // --- helpers -------------------------------------------------------------
+
+// collectRows calls scan on each row, accumulates results into a non-nil slice,
+// and closes rows. Any scan error or rows.Err() is returned immediately.
+func collectRows[T any](rows *sql.Rows, scan func(interface{ Scan(...any) error }) (T, error)) ([]T, error) {
+	defer rows.Close()
+	out := []T{}
+	for rows.Next() {
+		t, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
 
 func (s *Store) exec(ctx context.Context, query string, args ...any) error {
 	res, err := s.db.ExecContext(ctx, query, args...)

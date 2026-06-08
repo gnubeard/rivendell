@@ -872,6 +872,14 @@ func readJSON(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := readJSON(r, v); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return false
+	}
+	return true
+}
+
 func pathInt(r *http.Request, name string) (int64, error) {
 	return strconv.ParseInt(r.PathValue(name), 10, 64)
 }

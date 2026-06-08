@@ -61,8 +61,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
@@ -122,8 +121,7 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		Token    string `json:"token"`
 		Password string `json:"password"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if len(req.Password) < 10 {
@@ -183,8 +181,7 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		StatusText  *string `json:"status_text"`
 		Theme       *string `json:"theme"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	displayName := u.DisplayName
@@ -229,8 +226,7 @@ func (s *Server) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Status string `json:"status"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if !validStatus[req.Status] {
@@ -254,8 +250,7 @@ func (s *Server) handlePublishIdentityKey(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Key string `json:"key"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if len(req.Key) == 0 {
@@ -390,21 +385,11 @@ func (s *Server) handleGetVoiceState(w http.ResponseWriter, r *http.Request) {
 // handleGetVoiceParticipants lists who is currently in a voice channel.
 func (s *Server) handleGetVoiceParticipants(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "access denied")
-		return
-	}
-	writeJSON(w, http.StatusOK, s.hub.VoiceParticipants(id))
+	writeJSON(w, http.StatusOK, s.hub.VoiceParticipants(ch.ID))
 }
 
 // handleGetRTCCredentials returns a short-lived STUN/TURN credential pair for
@@ -596,8 +581,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		Topic     string `json:"topic"`
 		IsPrivate bool   `json:"is_private"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
@@ -641,8 +625,7 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		Topic    *string `json:"topic"`
 		Position *int    `json:"position"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	topic := ch.Topic
@@ -693,8 +676,7 @@ func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		UserID int64 `json:"user_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.UserID == u.ID {
@@ -763,18 +745,8 @@ func (s *Server) handleCloseDM(w http.ResponseWriter, r *http.Request) {
 // channel list (e.g. to label search results or reopen on a permalink click).
 func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
-		return
-	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, ch)
@@ -783,21 +755,11 @@ func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 // handleListChannelMembers lists the members of a channel the caller can access.
 func (s *Server) handleListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
-		return
-	}
-	members, err := s.st.ListChannelMembers(r.Context(), id)
+	members, err := s.st.ListChannelMembers(r.Context(), ch.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list members")
 		return
@@ -835,8 +797,7 @@ func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		UserID int64 `json:"user_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	target, err := s.st.GetUserByID(r.Context(), req.UserID)
@@ -927,6 +888,27 @@ func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.Use
 		return isMember
 	}
 	return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
+}
+
+// requireChannelAccess parses the channel id from the path, fetches the channel,
+// and checks the caller's access. On failure it writes the appropriate HTTP error
+// and returns false; the caller should return immediately when ok is false.
+func (s *Server) requireChannelAccess(w http.ResponseWriter, r *http.Request, u store.User) (store.Channel, bool) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid channel id")
+		return store.Channel{}, false
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "channel not found")
+		return store.Channel{}, false
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "no access to this channel")
+		return store.Channel{}, false
+	}
+	return ch, true
 }
 
 // accessibleChannelIDs returns the ids of every channel the user may read —
@@ -1128,8 +1110,7 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 			Auth   string `json:"auth"`
 		} `json:"keys"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if !strings.HasPrefix(req.Endpoint, "https://") || req.Keys.P256dh == "" || req.Keys.Auth == "" {
@@ -1162,18 +1143,8 @@ func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
-		return
-	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
 	limit := 50
@@ -1185,7 +1156,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("around"); v != "" {
 		aroundID, _ := strconv.ParseInt(v, 10, 64)
 		if aroundID > 0 {
-			msgs, err := s.st.GetMessagesAround(r.Context(), id, aroundID, 25)
+			msgs, err := s.st.GetMessagesAround(r.Context(), ch.ID, aroundID, 25)
 			if errors.Is(err, store.ErrNotFound) {
 				writeErr(w, http.StatusNotFound, "message not found")
 				return
@@ -1204,7 +1175,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("after"); v != "" {
 		afterID, _ := strconv.ParseInt(v, 10, 64)
 		if afterID > 0 {
-			msgs, err := s.st.ListMessagesAfter(r.Context(), id, afterID, limit)
+			msgs, err := s.st.ListMessagesAfter(r.Context(), ch.ID, afterID, limit)
 			if err != nil {
 				writeErr(w, http.StatusInternalServerError, "could not list messages")
 				return
@@ -1218,7 +1189,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("before"); v != "" {
 		beforeID, _ = strconv.ParseInt(v, 10, 64)
 	}
-	msgs, err := s.st.ListMessages(r.Context(), id, beforeID, limit)
+	msgs, err := s.st.ListMessages(r.Context(), ch.ID, beforeID, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list messages")
 		return
@@ -1264,26 +1235,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
-		return
-	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
 	var req struct {
 		Content string `json:"content"`
 		ReplyTo *int64 `json:"reply_to_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	req.Content = strings.TrimRight(req.Content, " \t\r\n")
@@ -1301,13 +1261,13 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	var replyToUserID *int64
 	if req.ReplyTo != nil {
 		parent, err := s.st.GetMessage(r.Context(), *req.ReplyTo)
-		if err != nil || parent.ChannelID != id || parent.DeletedAt != nil {
+		if err != nil || parent.ChannelID != ch.ID || parent.DeletedAt != nil {
 			writeErr(w, http.StatusBadRequest, "reply target not found in this channel")
 			return
 		}
 		replyToUserID = &parent.UserID
 	}
-	msg, err := s.st.CreateMessage(r.Context(), id, u.ID, req.Content, req.ReplyTo)
+	msg, err := s.st.CreateMessage(r.Context(), ch.ID, u.ID, req.Content, req.ReplyTo)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not send message")
 		return
@@ -1344,8 +1304,7 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
@@ -1413,21 +1372,11 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 // access the channel may view them).
 func (s *Server) handleListPinnedMessages(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
-		return
-	}
-	msgs, err := s.st.ListPinnedMessages(r.Context(), id)
+	msgs, err := s.st.ListPinnedMessages(r.Context(), ch.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list pinned messages")
 		return
@@ -1575,8 +1524,7 @@ func (s *Server) setReaction(w http.ResponseWriter, r *http.Request, add bool) {
 	var req struct {
 		Emoji string `json:"emoji"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	req.Emoji = strings.TrimSpace(req.Emoji)
@@ -1671,30 +1619,21 @@ func (s *Server) handleUnread(w http.ResponseWriter, r *http.Request) {
 // their other connections (self-audience) so every tab/device stays in sync.
 func (s *Server) setChannelMuted(w http.ResponseWriter, r *http.Request, muted bool) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
-		return
-	}
+	var err error
 	if muted {
-		err = s.st.MuteChannel(r.Context(), u.ID, id)
+		err = s.st.MuteChannel(r.Context(), u.ID, ch.ID)
 	} else {
-		err = s.st.UnmuteChannel(r.Context(), u.ID, id)
+		err = s.st.UnmuteChannel(r.Context(), u.ID, ch.ID)
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not update mute")
 		return
 	}
-	s.broadcast("mute.update", map[string]any{"channel_id": id, "muted": muted}, map[int64]bool{u.ID: true})
+	s.broadcast("mute.update", map[string]any{"channel_id": ch.ID, "muted": muted}, map[int64]bool{u.ID: true})
 	writeJSON(w, http.StatusOK, map[string]bool{"muted": muted})
 }
 
@@ -1711,33 +1650,22 @@ func (s *Server) handleUnmuteChannel(w http.ResponseWriter, r *http.Request) {
 // clears the badge together.
 func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
-		return
-	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	if !s.canAccessChannel(r, ch, u) {
-		writeErr(w, http.StatusForbidden, "no access to this channel")
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
 		return
 	}
 	var req struct {
 		MessageID int64 `json:"message_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
-	if err := s.st.MarkRead(r.Context(), u.ID, id, req.MessageID); err != nil {
+	if err := s.st.MarkRead(r.Context(), u.ID, ch.ID, req.MessageID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not mark read")
 		return
 	}
 	s.broadcast("read.update", map[string]int64{
-		"channel_id":           id,
+		"channel_id":           ch.ID,
 		"last_read_message_id": req.MessageID,
 	}, map[int64]bool{u.ID: true})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1751,8 +1679,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		DisplayName string `json:"display_name"`
 		Role        string `json:"role"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
@@ -1830,8 +1757,7 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Role string `json:"role"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	role := store.Role(req.Role)
@@ -1874,8 +1800,7 @@ func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Active bool `json:"active"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	target, err := s.st.GetUserByID(r.Context(), id)
@@ -1913,8 +1838,7 @@ func (s *Server) handleSetBot(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Bot bool `json:"bot"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if _, err := s.st.GetUserByID(r.Context(), id); err != nil {
@@ -2068,8 +1992,7 @@ func (s *Server) handleCreateBotToken(w http.ResponseWriter, r *http.Request) {
 		Name   string `json:"name"`
 		UserID *int64 `json:"user_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
