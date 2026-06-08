@@ -493,7 +493,7 @@ body.dm-active #members-toggle { display: none; }
 .notice { color: var(--text-dim); font-size: 0.85rem; padding: 0.4rem 0; }
 
 /* --- modal --- */
-.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.modal { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .modal-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 640px; max-height: 85vh; overflow-y: auto; padding: 1.4rem 1.6rem; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; }
 .modal-card h2 { margin: 0; }
