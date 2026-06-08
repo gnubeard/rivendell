@@ -255,6 +255,58 @@ const VIDEO_MAX_KBPS = 1000;
 // itself is the remaining suspect.
 const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 360 }, aspectRatio: { ideal: 16 / 9 }, frameRate: { ideal: 24 } };
 
+// The built-in default, exposed so the admin video console can show/restore it.
+export const DEFAULT_VIDEO_CONSTRAINTS = VIDEO_CONSTRAINTS;
+
+// Capture-constraint override. The video debugging console (admin panel) can
+// persist a tuned MediaTrackConstraints object here so real calls capture with
+// it — no rebuild, no code change — which is the whole point of the console: tune
+// live, save, then join an actual call and confirm. The override REPLACES the
+// default wholesale (the console always emits a complete object); a deep merge
+// would surprise by leaving a stale dimension behind. Anything malformed or empty
+// in storage is ignored, falling back to the default. Every camera-acquire path
+// (join + mid-call enable) routes through effectiveVideoConstraints().
+const VIDEO_CONSTRAINT_OVERRIDE_KEY = "rivendell.videoConstraints";
+
+export function getVideoConstraintOverride() {
+  try {
+    const raw = localStorage.getItem(VIDEO_CONSTRAINT_OVERRIDE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch { /* unavailable or corrupt -> no override */ }
+  return null;
+}
+
+export function setVideoConstraintOverride(constraints) {
+  try {
+    if (constraints && typeof constraints === "object" && !Array.isArray(constraints) && Object.keys(constraints).length) {
+      localStorage.setItem(VIDEO_CONSTRAINT_OVERRIDE_KEY, JSON.stringify(constraints));
+    } else {
+      localStorage.removeItem(VIDEO_CONSTRAINT_OVERRIDE_KEY);
+    }
+  } catch { /* best-effort; persistence is non-fatal */ }
+}
+
+export function clearVideoConstraintOverride() {
+  try { localStorage.removeItem(VIDEO_CONSTRAINT_OVERRIDE_KEY); } catch { /* non-fatal */ }
+}
+
+// effectiveVideoConstraints returns the persisted override if present, else the
+// built-in default. Used by every getUserMedia camera path so a console-saved
+// profile takes effect on the next call.
+function effectiveVideoConstraints() {
+  return getVideoConstraintOverride() || VIDEO_CONSTRAINTS;
+}
+
+// getLocalVideoTrack exposes the live local camera track (or null) so the video
+// console can read its settings/capabilities and applyConstraints to the REAL
+// call session in real time, rather than a separate standalone capture.
+export function getLocalVideoTrack() {
+  if (!localStream || typeof localStream.getVideoTracks !== "function") return null;
+  return localStream.getVideoTracks()[0] || null;
+}
+
 // needsLandscapeCoercion reports whether a live video track's settings look like
 // the FF-Android square-capture wedge: a square (or portrait) frame. The RTC HUD
 // caught FF-Android opening the camera at a square 360x360 that the hardware VP8
@@ -379,7 +431,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
 
   cameraEnabled = enableVideo;
   const audioConstraints = AUDIO_CONSTRAINTS;
-  const videoConstraint = cameraEnabled ? VIDEO_CONSTRAINTS : false;
+  const videoConstraint = cameraEnabled ? effectiveVideoConstraints() : false;
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: videoConstraint });
@@ -759,7 +811,7 @@ export function shouldRetryRelaxed(err) {
 // denial). Internal.
 async function acquireCameraStream() {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: VIDEO_CONSTRAINTS });
+    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: effectiveVideoConstraints() });
   } catch (err) {
     if (!shouldRetryRelaxed(err)) throw err;
     return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true });

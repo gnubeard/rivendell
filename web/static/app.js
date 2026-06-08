@@ -66,7 +66,13 @@ import {
   pttShouldFire,
   pttKeyLabel,
   micErrorMessage,
+  getLocalVideoTrack,
+  getVideoConstraintOverride,
+  setVideoConstraintOverride,
+  clearVideoConstraintOverride,
+  DEFAULT_VIDEO_CONSTRAINTS,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
+import { initVideoConsole, stopVideoConsole } from "./videoconsole.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -2914,7 +2920,7 @@ function wireControls() {
   };
 
   $("#admin-btn").onclick = openAdmin;
-  $("#admin-close").onclick = () => ($("#admin-panel").hidden = true);
+  $("#admin-close").onclick = () => { stopVideoConsole(); $("#admin-panel").hidden = true; };
 
   $("#about-btn").onclick = () => {
     closeDrawers(); // on mobile, get the sidebar drawer out from behind the modal
@@ -2976,7 +2982,7 @@ function wireControls() {
     if (open.length) { closeModal(open[open.length - 1]); return; }
     // The admin panel is a full-screen surface (not a .modal); Esc closes it too.
     const admin = $("#admin-panel");
-    if (!admin.hidden) admin.hidden = true;
+    if (!admin.hidden) { stopVideoConsole(); admin.hidden = true; }
   });
 
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
@@ -3215,6 +3221,17 @@ async function openAdmin() {
   await refreshAdminEmojis();
   await refreshDeletedChannels();
   await refreshAdminBotTokens();
+
+  // Video debugging console: a client-side camera/constraints lab. Inject the
+  // voice.js coupling so it can tune the live call track and persist a call
+  // default; it owns its own standalone capture otherwise.
+  initVideoConsole({
+    getCallTrack: getLocalVideoTrack,
+    getOverride: getVideoConstraintOverride,
+    setOverride: setVideoConstraintOverride,
+    clearOverride: clearVideoConstraintOverride,
+    defaultConstraints: DEFAULT_VIDEO_CONSTRAINTS,
+  });
 
   // Populate the user picker for the bot-token form from the already-loaded roster.
   const tokenUserSel = $("#admin-token-user");

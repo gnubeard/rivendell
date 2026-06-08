@@ -363,6 +363,64 @@
           </table>
         </section>
 
+        <section class="admin-section admin-section-wide" id="video-console">
+          <h3>Video debugging console</h3>
+          <p class="vc-hint">Open the camera with custom constraints and tune them live (<code>applyConstraints</code>) to find what your camera and the encoder will actually do. Save a profile as the call default to use it in real voice/DM calls. For in-call encoder/transport stats, add <code>?rtcdebug=1</code> to the URL.</p>
+          <div class="vc-grid">
+            <div class="vc-controls">
+              <label class="vc-field">Camera
+                <select id="vc-device"></select>
+              </label>
+              <div class="vc-presets" id="vc-presets"></div>
+              <div class="vc-row">
+                <label class="vc-field">Mode
+                  <select id="vc-mode">
+                    <option value="ideal">ideal (advisory)</option>
+                    <option value="exact">exact (forced)</option>
+                    <option value="min">min</option>
+                    <option value="max">max</option>
+                  </select>
+                </label>
+                <label class="vc-field">Width <input id="vc-width" type="number" min="1" step="1"></label>
+                <label class="vc-field">Height <input id="vc-height" type="number" min="1" step="1"></label>
+              </div>
+              <div class="vc-row">
+                <label class="vc-field">FPS <input id="vc-fps" type="number" min="1" step="1"></label>
+                <label class="vc-field">Aspect <select id="vc-ar"></select></label>
+                <label class="vc-field">Facing
+                  <select id="vc-facing">
+                    <option value="off">—</option>
+                    <option value="user">user (front)</option>
+                    <option value="environment">environment (rear)</option>
+                  </select>
+                </label>
+              </div>
+              <label class="vc-field">Raw JSON override (wins over the fields above)
+                <textarea id="vc-json" rows="3" placeholder='{"width":{"exact":1280},"height":{"exact":720}}'></textarea>
+              </label>
+              <div class="vc-actions">
+                <button id="vc-open" class="primary" type="button">Open / restart</button>
+                <button id="vc-apply" type="button">Apply live</button>
+                <button id="vc-stop" type="button">Stop</button>
+                <button id="vc-save" type="button">Save as call default</button>
+                <button id="vc-clear" type="button">Clear default</button>
+              </div>
+              <div id="vc-default" class="vc-default"></div>
+              <div id="vc-status" class="admin-out"></div>
+            </div>
+            <div class="vc-output">
+              <video id="vc-preview" autoplay playsinline muted></video>
+              <div id="vc-resolution" class="vc-resolution">—</div>
+              <div id="vc-live" class="vc-live"></div>
+              <div class="vc-readouts">
+                <div><h4>Requested</h4><pre id="vc-requested">—</pre></div>
+                <div><h4>Actual (getSettings)</h4><div id="vc-settings" class="vc-kv">—</div></div>
+                <div><h4>Camera capabilities (getCapabilities)</h4><div id="vc-caps" class="vc-kv">—</div></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="admin-section admin-section-wide">
           <h3>Deleted channels</h3>
           <table class="admin-table">
