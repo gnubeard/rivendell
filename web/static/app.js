@@ -9,6 +9,7 @@ import {
   shouldNotify,
   showNotification,
   showViaServiceWorker,
+  closeNotificationsByTag,
   requestNotificationPermission,
   currentPermission,
   notificationsSupported,
@@ -3533,6 +3534,47 @@ function firePing(evt, ch) {
   });
 }
 
+// Stable tag so repeat rings for the same incoming call coalesce into one
+// notification instead of stacking; `ringNotification` holds the page-context
+// Notification (the SW path is dismissed by tag) so clearRingNotification can
+// auto-dismiss it once the ring is answered/declined/times out.
+const RING_NOTIF_TAG = "rivendell-ring";
+let ringNotification = null;
+
+// fireRingNotification raises an OS notification for an incoming call when the
+// user has opted in and isn't looking at this tab — a backgrounded tab's audible
+// ring alone is easy to miss. Foreground only (a live tab): a ring is ephemeral
+// WS state, not a persisted message, so there's no Web Push path to a fully
+// closed app. Clicking it focuses the tab and opens the DM, mirroring firePing.
+function fireRingNotification(fromUserId, dmChannelId) {
+  if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: !tabUnfocused() })) {
+    return;
+  }
+  const caller = state.users[fromUserId];
+  const who = caller ? caller.display_name : "Someone";
+  const title = "📞 Call from " + who;
+  const icon = caller && caller.has_avatar ? api.avatarURL(caller.id) : undefined;
+  // messageId 0 = "just open the channel" (real ids start at 1); the SW click
+  // routing in initPushRouting treats it as selectChannel rather than a jump.
+  const url = "/" + permalinkHash(dmChannelId, 0);
+  showViaServiceWorker(title, { tag: RING_NOTIF_TAG, icon, url }).then((shown) => {
+    if (!shown) {
+      ringNotification = showNotification(title, { tag: RING_NOTIF_TAG, icon, onclick: () => selectChannel(dmChannelId) });
+    }
+  });
+}
+
+// clearRingNotification dismisses the incoming-call notification (both paths) once
+// the ring resolves, so a stale "Call from …" doesn't linger after accept/decline/
+// timeout/sibling-dismiss.
+function clearRingNotification() {
+  if (ringNotification) {
+    try { ringNotification.close(); } catch (e) { /* best-effort */ }
+    ringNotification = null;
+  }
+  closeNotificationsByTag(RING_NOTIF_TAG);
+}
+
 // enablePush registers the service worker and a push subscription, then sends it
 // to the server so DMs/@-mentions arrive when the app is fully closed. Idempotent
 // and best-effort — any failure (older browser, blocked SW, denied permission)
@@ -3574,7 +3616,10 @@ function initPushRouting() {
     const hash = data.url.indexOf("#") >= 0 ? data.url.slice(data.url.indexOf("#")) : "";
     const pl = parsePermalink(hash);
     if (pl && state.channels[pl.channelId]) {
-      jumpToMessage(pl.channelId, pl.messageId);
+      // messageId 0 is the "open the channel" sentinel a ring notification uses
+      // (real message ids start at 1) — there's no message to jump to.
+      if (pl.messageId) jumpToMessage(pl.channelId, pl.messageId);
+      else selectChannel(pl.channelId);
     }
     try { window.focus(); } catch (e) { /* best-effort */ }
   });
@@ -3731,6 +3776,7 @@ function wireVoiceControls() {
     if (!ringState) return;
     const chId = ringState.channelId;
     stopRingSound();
+    clearRingNotification();
     // Send acceptance before joining so the caller gets the signal promptly.
     socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: true });
     ringState = null;
@@ -3750,6 +3796,7 @@ function wireVoiceControls() {
     const chId = ringState.channelId;
     stopRingSound();
     stopPendingSound();
+    clearRingNotification();
     socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
     ringState = null;
     renderRingBanner();
@@ -3906,6 +3953,7 @@ async function onVoiceEvent(evt) {
     ringState = { channelId: p.dm_channel_id, direction: "incoming", fromUserId: p.from_user_id };
     renderRingBanner();
     startRingSound(audioCtx);
+    fireRingNotification(p.from_user_id, p.dm_channel_id);
     return;
   }
 
@@ -3914,6 +3962,7 @@ async function onVoiceEvent(evt) {
     if (!ringState) return;
     stopRingSound();
     stopPendingSound();
+    clearRingNotification();
     const accepted = p.accept;
     const chId = ringState.channelId;
     ringState = null;
@@ -3933,6 +3982,7 @@ async function onVoiceEvent(evt) {
     if (ringState && ringState.channelId === p.dm_channel_id) {
       stopRingSound();
       stopPendingSound();
+      clearRingNotification();
       ringState = null;
       renderRingBanner();
       renderChannelHeader(state.channels[state.activeChannelId]);
@@ -3946,6 +3996,7 @@ async function onVoiceEvent(evt) {
     if (ringState && ringState.channelId === p.dm_channel_id) {
       stopRingSound();
       stopPendingSound();
+      clearRingNotification();
       ringState = null;
       renderRingBanner();
       renderChannelHeader(state.channels[state.activeChannelId]);

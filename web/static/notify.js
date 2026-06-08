@@ -165,6 +165,24 @@ export async function showViaServiceWorker(title, { body = "", tag, icon, url } 
   }
 }
 
+// closeNotificationsByTag dismisses any currently-shown service-worker
+// notifications carrying the given tag. The OS won't remove a notification on its
+// own when the underlying event resolves (e.g. an incoming call that gets
+// answered/declined/times out), so callers use this to auto-dismiss it. Only the
+// SW path is addressable by tag after the fact; a page-context Notification must
+// be closed via its own handle. Never throws.
+export async function closeNotificationsByTag(tag) {
+  if (!tag) return;
+  try {
+    const reg = swRegistration || (pushSupported() ? await navigator.serviceWorker.getRegistration() : null);
+    if (!reg || typeof reg.getNotifications !== "function") return;
+    const list = await reg.getNotifications({ tag });
+    for (const n of list) n.close();
+  } catch (e) {
+    // best-effort — dismissing a stale notification should never surface an error
+  }
+}
+
 // showNotification raises a single OS notification, guarded on support and a
 // granted permission. `tag` collapses repeat pings for the same channel into one
 // notification rather than stacking. `onclick` fires when the user activates it.
