@@ -244,19 +244,20 @@ const VIDEO_MAX_KBPS = 1000;
 // no bandwidth gain. (A `max` ceiling here was the v1.3.18 regression that broke
 // Android video preview — getUserMedia rejected and the failure was swallowed.)
 //
-// We request the sensor's NATIVE 4:3 aspect, not a 16:9-ish size. The Pixel 7
-// (and any other 4:3-native sensor) exposes only 4:3 capture modes — there is no
-// real 16:9 mode, only a crop of the 4:3 frame. Asking for a 16:9-ish ideal
-// (the old `640x360`) backfired: FF-Android couldn't find that mode and cropped
-// BOTH dimensions down toward the smaller, collapsing to a *square* 360x360
-// capture — and FF-Android's sender-side scaler wedges on a 1:1 frame, feeding
-// the encoder 0x0 after ~3 frames (the freeze, confirmed codec-agnostic across
-// VP8/VP9/H.264; the RTC HUD showed enc frozen, 0x0, while the raw track stayed
-// live at 24fps). A 4:3 ideal (640x480) matches a real native mode, so the camera
-// opens it cleanly — landscape, even-dimensioned, no crop, no square. The video
-// tiles render whatever aspect arrives (object-fit, see style.css), so a 4:3
-// frame is handled gracefully rather than forced into a mode the hardware lacks.
-const VIDEO_CONSTRAINTS = { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } };
+// We impose NO spatial constraint — only a frame-rate ideal. This is forced by an
+// FF-Android quirk the RTC HUD pinned down: given any width/height ideal where
+// width != height, FF-Android does NOT pick a matching native mode; it crops to a
+// SQUARE whose side equals the requested HEIGHT. We measured it directly — a
+// `640x360` ideal yielded `360x360`, a `640x480` ideal yielded `480x480`. The
+// Pixel 7 sensor is 4:3-only, so there is no 16:9 mode to land on; FF squares it
+// instead. And FF-Android's sender-side scaler wedges on a 1:1 frame, feeding the
+// encoder 0x0 after ~3 frames (the freeze — codec-agnostic across VP8/VP9/H.264;
+// the HUD showed enc frozen at 0x0 while the raw track stayed live at 24fps).
+// A dimensional ideal is therefore a square-crop trap on this hardware. Omitting
+// width/height entirely leaves nothing to crop against, so the sensor opens its
+// own native (non-square) 4:3 mode. The tiles render whatever aspect arrives
+// (object-fit, see style.css), so a 4:3 — or even a portrait — frame is fine.
+const VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } };
 
 // The built-in default, exposed so the admin video console can show/restore it.
 export const DEFAULT_VIDEO_CONSTRAINTS = VIDEO_CONSTRAINTS;
@@ -465,10 +466,6 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   // which is the right trade-off for a camera video call.
   localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
 
-  // Drag a wedged FF-Android square capture into a landscape mode before the track
-  // is shown/published (no-op everywhere the camera already opened landscape).
-  if (cameraEnabled) await coerceLandscapeCapture(localStream.getVideoTracks()[0]);
-
   if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
   if (cameraEnabled) setupLocalVideo();
 
@@ -654,7 +651,6 @@ export async function setCameraEnabled(on) {
     const vt = combined.getVideoTracks()[0];
     const newAudio = combined.getAudioTracks()[0];
     if (vt) vt.contentHint = "motion";
-    if (vt) await coerceLandscapeCapture(vt); // drag FF-Android square capture to landscape before publishing
     if (newAudio) newAudio.enabled = !muted; // preserve current mute state
 
     // Swap each peer's audio sender to the new session's mic track (replaceTrack
