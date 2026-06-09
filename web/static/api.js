@@ -185,10 +185,6 @@ export const api = {
   // single message fetch (for same-origin message embed previews)
   getMessage: (id) => req("GET", `/api/messages/${id}`),
 
-  // link preview proxy (allowlisted hosts only: bsky/twitter/x/xcancel,
-  // github.com, *.wikipedia.org)
-  linkPreview: (url) => req("GET", `/api/link-preview?url=${encodeURIComponent(url)}`),
-
   // bot tokens
   listBotTokens: () => req("GET", "/api/admin/bot-tokens"),
   createBotToken: (name, userId) =>

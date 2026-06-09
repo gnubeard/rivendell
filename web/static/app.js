@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -91,9 +91,6 @@ const lastMarkedRead = {};
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
 const avatarVersion = {};
-// Link preview cache: url -> { title, description, image } | "loading" | "failed".
-// Populated lazily as messages scroll into view; persists for the session.
-const linkPreviewCache = new Map();
 // Cache for same-origin message embed previews: messageId -> Message | "loading" | "failed".
 const msgPreviewCache = new Map();
 // Debounce token: multiple preview fetches completing close together collapse into
@@ -1663,9 +1660,6 @@ async function loadChannel(id) {
     // A short first page means there's nothing older to scroll back to.
     if (msgs.length < PAGE) historyComplete.add(id);
     else historyComplete.delete(id);
-    // Pre-fire all link preview fetches in parallel so they arrive before (or
-    // close to) the first render rather than triggering individual re-renders.
-    msgs.forEach(m => { const u = extractPreviewableURL(m.content); if (u) fetchLinkPreview(u); });
     renderMessages(true); // opening a channel always lands at the newest message
     renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
@@ -2811,23 +2805,9 @@ function renderMsgEmbedCard(msg, channelId, messageId) {
   return card;
 }
 
-// fetchLinkPreview fetches preview metadata for a bsky/twitter URL and triggers
-// a re-render when done. Idempotent — a second call for a URL already in the
-// cache is a no-op.
-async function fetchLinkPreview(url) {
-  if (linkPreviewCache.has(url)) return;
-  linkPreviewCache.set(url, "loading");
-  try {
-    const data = await api.linkPreview(url);
-    linkPreviewCache.set(url, data);
-  } catch {
-    linkPreviewCache.set(url, "failed");
-  }
-  schedulePreviewRender();
-}
-
-// buildLinkPreview returns a preview card or YouTube embed DOM node for the
-// first bare previewable URL in content, or null if there is none / not ready.
+// buildLinkPreview returns a same-origin message-embed card or a YouTube embed
+// DOM node for the first matching bare URL in content, or null if there is none
+// / not ready.
 function buildLinkPreview(content) {
   // Same-origin message permalink: render an inline embed card.
   const pl = extractMessagePermalinkURL(content, location.origin);
@@ -2842,13 +2822,7 @@ function buildLinkPreview(content) {
   const ytID = extractYouTubeVideoID(content);
   if (ytID) return renderYouTubeEmbed(ytID);
 
-  const url = extractPreviewableURL(content);
-  if (!url) return null;
-  const cached = linkPreviewCache.get(url);
-  if (!cached) { fetchLinkPreview(url); return null; }
-  if (cached === "loading" || cached === "failed") return null;
-  if (!cached.title && !cached.description && !cached.image) return null;
-  return renderLinkPreviewCard(url, cached);
+  return null;
 }
 
 function renderYouTubeEmbed(videoID) {
@@ -2861,19 +2835,6 @@ function renderYouTubeEmbed(videoID) {
     el("img", { src: `https://i.ytimg.com/vi/${videoID}/hqdefault.jpg`, alt: "YouTube video", loading: "lazy" }),
     el("span", { class: "yt-play" }, "▶"),
   );
-}
-
-function renderLinkPreviewCard(url, p) {
-  const card = el("div", { class: "link-preview" });
-  if (p.image) {
-    card.append(el("img", { class: "link-preview-img", src: p.image, alt: "", loading: "lazy" }));
-  }
-  const text = el("div", { class: "link-preview-text" });
-  if (p.title) text.append(el("div", { class: "link-preview-title" }, p.title));
-  if (p.description) text.append(el("div", { class: "link-preview-desc" }, p.description));
-  card.append(text);
-  card.addEventListener("click", () => window.open(url, "_blank", "noopener,noreferrer"));
-  return card;
 }
 
 // commitEdit saves the inline edit. An empty draft on the most recent own message

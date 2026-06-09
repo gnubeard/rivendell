@@ -5,6 +5,16 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.3.101] - 2026-06-09
+
+### Removed
+- Link preview cards for external sites (Bluesky, Twitter/X, GitHub, Wikipedia). The server-side scraper behind them was a security liability (server-side fetch of a user-supplied URL — an SSRF surface that followed redirects off the host allowlist) and was already mostly broken from the server's IP (X serves a login wall, Tumblr blocks us, xcancel is flaky). Pasted links now render as ordinary clickable links. **YouTube embeds and links to other messages in this chat are unaffected** — those never made a server-side request
+
+## [1.3.100] - 2026-06-09
+
+### Fixed
+- Syntax highlighting of `bash` code blocks no longer hangs on a crafted unterminated double-quoted string (a regex with exponential backtracking — a posted code block could freeze every viewer's tab). The rule is now linear, and as a bonus correctly highlights strings containing a bare `$digit` like `"cost: $5"`, which previously rendered unhighlighted
+
 ## [1.3.99] - 2026-06-09
 
 ### Removed

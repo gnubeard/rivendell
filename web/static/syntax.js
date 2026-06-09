@@ -273,7 +273,7 @@ function shRules() {
     "echo","printf","read","test","true","false","null"]);
   return [
     { re: /#[^\n]*/y, cls: "hl-cm" },
-    { re: /"(?:[^"\\$]|\\.|\$\{[^}]*\}|\$[a-zA-Z_][a-zA-Z0-9_]*)*"/y, cls: "hl-str" },
+    { re: /"(?:[^"\\]|\\.)*"/y, cls: "hl-str" },
     { re: /'[^']*'/y, cls: "hl-str" },
     { re: /\$\{[^}]*\}/y, cls: "hl-bi" },
     { re: /\$[a-zA-Z_][a-zA-Z0-9_]*/y, cls: "hl-bi" },

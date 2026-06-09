@@ -113,7 +113,7 @@ function imageEmbed(url) {
 // on the gaps between links, so it can never mangle a URL. A bare URL pointing at
 // an image renders the image inline (unless embedImages is false, e.g. in search
 // rows, where it falls back to a plain link). A bare URL matching hideUrl is
-// suppressed entirely — its preview card renders it instead.
+// suppressed entirely — its YouTube embed (or message-permalink card) renders it instead.
 function inline(escaped, meLower, embedImages, hideUrl) {
   let out = "";
   let last = 0;
@@ -127,7 +127,7 @@ function inline(escaped, meLower, embedImages, hideUrl) {
     } else {
       const url = m[3];
       if (hideUrl && url === hideUrl) {
-        // suppressed: preview card or YouTube embed renders this URL
+        // suppressed: YouTube embed or message-permalink card renders this URL
       } else {
         out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url) : linkAnchor(url, url);
       }
@@ -181,26 +181,6 @@ export function parsePermalink(hash) {
   return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
 }
 
-// PREVIEW_HOST_RE tests whether a URL belongs to one of the special-cased
-// previewable hosts. Only bare (non-markdown-linked) URLs are previewed.
-const PREVIEW_HOST_RE = /^https:\/\/(?:bsky\.app|twitter\.com|x\.com|xcancel\.com|(?:www\.)?github\.com|(?:[a-z0-9-]+\.)?wikipedia\.org)\//;
-
-// extractPreviewableURL returns the first bare bsky/twitter/x/xcancel URL in
-// text, or null. "Bare" means the URL was typed standalone, not written as
-// [text](url) — those have author-chosen text and don't need a preview card.
-// Uses the same LINK_RE split logic as inline() so the two stay consistent.
-export function extractPreviewableURL(text) {
-  if (!text) return null;
-  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
-  let m;
-  while ((m = re.exec(String(text))) !== null) {
-    if (m[3] !== undefined && PREVIEW_HOST_RE.test(m[3])) {
-      return m[3];
-    }
-  }
-  return null;
-}
-
 // YOUTUBE_ID_RE extracts the 11-char video ID from youtube.com/watch, youtu.be,
 // youtube.com/shorts, and youtube.com/embed URLs.
 const YOUTUBE_ID_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
@@ -239,9 +219,9 @@ export function extractMessagePermalinkURL(text, origin) {
   return null;
 }
 
-// extractHideURL returns the first bare URL that would generate a preview card
-// or YouTube embed, so the caller can suppress its inline text rendering.
-// Pass origin (e.g. location.origin) to also suppress message permalink URLs.
+// extractHideURL returns the first bare URL that would generate a YouTube embed,
+// so the caller can suppress its inline text rendering. Pass origin (e.g.
+// location.origin) to also suppress message permalink URLs.
 export function extractHideURL(text, origin) {
   if (!text) return null;
   if (origin) {
@@ -251,7 +231,7 @@ export function extractHideURL(text, origin) {
   const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
   let m;
   while ((m = re.exec(String(text))) !== null) {
-    if (m[3] !== undefined && (YOUTUBE_ID_RE.test(m[3]) || PREVIEW_HOST_RE.test(m[3]))) {
+    if (m[3] !== undefined && YOUTUBE_ID_RE.test(m[3])) {
       return m[3];
     }
   }
