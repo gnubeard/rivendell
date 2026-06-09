@@ -182,7 +182,11 @@ export const api = {
   },
   blobURL: (hash) => `/api/blobs/${hash}`,
 
-  // link preview proxy (bsky.app and twitter.com/x.com only)
+  // single message fetch (for same-origin message embed previews)
+  getMessage: (id) => req("GET", `/api/messages/${id}`),
+
+  // link preview proxy (allowlisted hosts only: bsky/twitter/x/xcancel,
+  // github.com, *.wikipedia.org)
   linkPreview: (url) => req("GET", `/api/link-preview?url=${encodeURIComponent(url)}`),
 
   // bot tokens

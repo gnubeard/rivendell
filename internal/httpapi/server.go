@@ -136,10 +136,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/users/{id}/avatar", s.auth(s.handleGetAvatar))
 
 	// Custom emojis (instance-wide). Listing/image are any authed user; create
-	// and delete are admin-only.
+	// and delete are moderator+ (managed from the emoji picker or admin panel).
 	mux.HandleFunc("GET /api/emojis", s.auth(s.handleListEmojis))
-	mux.HandleFunc("POST /api/emojis", s.requireRole(store.RoleAdmin, s.handleCreateEmoji))
-	mux.HandleFunc("DELETE /api/emojis/{shortcode}", s.requireRole(store.RoleAdmin, s.handleDeleteEmoji))
+	mux.HandleFunc("POST /api/emojis", s.requireRole(store.RoleModerator, s.handleCreateEmoji))
+	mux.HandleFunc("DELETE /api/emojis/{shortcode}", s.requireRole(store.RoleModerator, s.handleDeleteEmoji))
 	mux.HandleFunc("GET /api/emojis/{shortcode}/image", s.auth(s.handleGetEmojiImage))
 
 	// Channels.
@@ -165,6 +165,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/channels/{id}/messages", s.auth(s.handleListMessages))
 	mux.HandleFunc("POST /api/channels/{id}/messages", s.auth(s.handleCreateMessage))
 	mux.HandleFunc("GET /api/channels/{id}/pins", s.auth(s.handleListPinnedMessages))
+	mux.HandleFunc("GET /api/messages/{id}", s.auth(s.handleGetMessage))
 	mux.HandleFunc("PATCH /api/messages/{id}", s.auth(s.handleEditMessage))
 	mux.HandleFunc("DELETE /api/messages/{id}", s.auth(s.handleDeleteMessage))
 	// Pin/unpin: moderator+ in normal channels, but either participant in a DM.
@@ -380,11 +381,12 @@ func (s *Server) broadcast(typ string, payload any, audience map[int64]bool) {
 // audienceForChannel returns nil (everyone) for public channels, or the set of
 // users who may receive a private channel's realtime events. That set mirrors
 // canAccessChannel exactly: the members, plus — for a non-DM private channel —
-// every moderator/admin, who hold a read/write bypass there even without
-// membership. Without the mod+ union, an admin who posts (or edits/deletes) in a
-// channel they aren't a member of never sees their own change echoed, since the
-// client renders messages only from the broadcast, not the POST response. DMs
-// are exempt from the bypass and stay strictly members-only.
+// every admin, who holds a read/write bypass there even without membership.
+// Moderators no longer get this bypass; only their own memberships determine
+// their audience. Without the admin union, an admin who posts (or edits/deletes)
+// in a channel they aren't a member of never sees their own change echoed, since
+// the client renders messages only from the broadcast, not the POST response.
+// DMs are exempt from the bypass and stay strictly members-only.
 func (s *Server) audienceForChannel(ctx context.Context, ch store.Channel) map[int64]bool {
 	if !ch.IsPrivate {
 		return nil
@@ -399,12 +401,12 @@ func (s *Server) audienceForChannel(ctx context.Context, ch store.Channel) map[i
 		set[id] = true
 	}
 	if !ch.IsDM {
-		mods, err := s.st.ListPrivilegedUserIDs(ctx)
+		admins, err := s.st.ListAdminUserIDs(ctx)
 		if err != nil {
-			log.Printf("audienceForChannel mods: %v", err)
+			log.Printf("audienceForChannel admins: %v", err)
 			return set // best-effort: members still receive the event
 		}
-		for _, id := range mods {
+		for _, id := range admins {
 			set[id] = true
 		}
 	}

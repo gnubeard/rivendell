@@ -63,7 +63,11 @@
     <div class="card">
       <h1 class="brand">rivendell</h1>
       <p id="su-intro" class="tagline">You're invited! Create your account.</p>
-      <form id="su-form">
+      <!-- novalidate: route every validation case through the JS submit handler,
+           which sets a persistent #su-error message. Native HTML5 validation
+           (required/pattern/minlength) instead pops a transient bubble that
+           flashes and vanishes, pre-empting our own descriptive errors. -->
+      <form id="su-form" novalidate>
         <label>Username
           <input id="su-username" autocomplete="username" autofocus required
                  pattern="[a-z0-9_]{2,32}" title="2-32 characters: lowercase letters, digits, or underscore">
@@ -211,6 +215,23 @@
     </div>
   </div>
 
+  <!-- CUSTOM EMOJIS MODAL (moderator+; opened from the emoji picker or admin panel) -->
+  <div id="emoji-manager-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Custom emojis</h2>
+        <button id="emoji-manager-close" class="icon-btn">×</button>
+      </header>
+      <form id="emoji-manager-form" class="admin-create">
+        <input id="emoji-manager-shortcode" placeholder="shortcode" required>
+        <input id="emoji-manager-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required>
+        <button type="submit" class="primary">Add emoji</button>
+      </form>
+      <div id="emoji-manager-out" class="admin-out"></div>
+      <div id="emoji-manager-list" class="admin-emoji-list"></div>
+    </div>
+  </div>
+
   <!-- INVITE MODAL -->
   <div id="invite-modal" class="modal" hidden>
     <div class="modal-card narrow">
@@ -220,6 +241,17 @@
       </header>
       <p id="invite-subtitle" class="tagline"></p>
       <ul id="invite-list" class="invite-list"></ul>
+    </div>
+  </div>
+
+  <!-- FORWARD MESSAGE MODAL -->
+  <div id="forward-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Forward to…</h2>
+        <button id="forward-close" class="icon-btn">×</button>
+      </header>
+      <ul id="forward-list" class="invite-list"></ul>
     </div>
   </div>
 
@@ -260,6 +292,12 @@
         </label>
         <label>Status text <span class="optional">(optional)</span>
           <input id="profile-status-text" maxlength="128" placeholder="what you're up to" autocomplete="off">
+        </label>
+        <label>Pronouns <span class="optional">(optional)</span>
+          <input id="profile-pronouns" maxlength="32" placeholder="she/her, they/them, …" autocomplete="off">
+        </label>
+        <label>About me <span class="optional">(optional)</span>
+          <textarea id="profile-bio" maxlength="1000" rows="4" placeholder="a free-format notes box — a little about you"></textarea>
         </label>
         <label>Theme
           <select id="profile-theme">
@@ -313,6 +351,17 @@
     </div>
   </div>
 
+  <!-- USER PROFILE CARD — read-only view opened by clicking an avatar/name. -->
+  <div id="user-modal" class="modal" hidden>
+    <div class="modal-card narrow">
+      <header class="modal-head">
+        <h2>Profile</h2>
+        <button id="user-close" class="icon-btn">×</button>
+      </header>
+      <div id="user-card" class="user-card"></div>
+    </div>
+  </div>
+
   <!-- ABOUT MODAL -->
   <div id="about-modal" class="modal" hidden>
     <div class="modal-card narrow">
@@ -331,6 +380,13 @@
   <div id="lightbox" class="modal lightbox" hidden>
     <button id="lightbox-close" class="lightbox-close icon-btn" title="Close (Esc)" aria-label="Close">×</button>
     <img id="lightbox-img" class="lightbox-img" alt="">
+  </div>
+
+  <!-- MOBILE MESSAGE CONTEXT SHEET (shown on long-press on mobile) -->
+  <div id="mobile-ctx" class="mobile-ctx" hidden>
+    <div id="mobile-ctx-sheet" class="mobile-ctx-sheet">
+      <div id="mobile-ctx-inner"></div>
+    </div>
   </div>
 
   <!-- ADMIN PANEL — a full-screen settings surface, not a modal. -->
@@ -354,13 +410,9 @@
 
         <section class="admin-section">
           <h3>Custom emojis</h3>
-          <form id="admin-emoji-form" class="admin-create">
-            <input id="admin-emoji-shortcode" placeholder="shortcode" required>
-            <input id="admin-emoji-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required>
-            <button type="submit" class="primary">Add emoji</button>
-          </form>
-          <div id="admin-emoji-out" class="admin-out"></div>
-          <div id="admin-emoji-list" class="admin-emoji-list"></div>
+          <p class="admin-hint">Add or remove instance-wide custom emojis. Moderators
+            can manage these from the emoji picker too.</p>
+          <button id="admin-emoji-manage" type="button" class="primary">Manage custom emojis</button>
         </section>
 
         <section class="admin-section">
@@ -396,6 +448,9 @@
       </div>
     </div>
   </section>
+
+  <!-- Ping toasts: brief top-of-screen alerts when a ping arrives while the tab is focused. -->
+  <div id="ping-toasts" class="ping-toasts"></div>
 
   <script type="module" src="/static/app.js?v=__RIVENDELL_VERSION__"></script>
 </body>

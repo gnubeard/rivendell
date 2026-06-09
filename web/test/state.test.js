@@ -341,3 +341,27 @@ test("applyEvent routes emoji.add and emoji.delete", () => {
   s = S.applyEvent(s, { type: "emoji.delete", payload: { shortcode: "party" } });
   assert.equal(s.emojis.party, undefined);
 });
+
+test("nextChannelId steps through the order and clamps at the ends", () => {
+  const order = [10, 20, 30, 40];
+  assert.equal(S.nextChannelId(order, 20, 1), 30, "down moves to the next");
+  assert.equal(S.nextChannelId(order, 20, -1), 10, "up moves to the previous");
+  assert.equal(S.nextChannelId(order, 40, 1), null, "down at the bottom is a no-op");
+  assert.equal(S.nextChannelId(order, 10, -1), null, "up at the top is a no-op");
+  assert.equal(S.nextChannelId(order, null, 1), 10, "no active channel, down -> first");
+  assert.equal(S.nextChannelId(order, null, -1), 40, "no active channel, up -> last");
+  assert.equal(S.nextChannelId([], 10, 1), null, "empty list -> null");
+});
+
+test("nextUnreadChannelId finds the nearest unread in a direction", () => {
+  const order = [10, 20, 30, 40, 50];
+  const unread = { 10: 2, 40: 1 };
+  assert.equal(S.nextUnreadChannelId(order, 20, unread, 1), 40, "skips read channels going down");
+  assert.equal(S.nextUnreadChannelId(order, 30, unread, -1), 10, "skips read channels going up");
+  assert.equal(S.nextUnreadChannelId(order, 40, unread, 1), null, "no unread below -> null");
+  assert.equal(S.nextUnreadChannelId(order, 10, unread, -1), null, "no unread above -> null");
+  assert.equal(S.nextUnreadChannelId(order, 40, unread, -1), 10, "looks past the active to a higher unread");
+  assert.equal(S.nextUnreadChannelId(order, null, unread, 1), 10, "no active, down -> first unread");
+  assert.equal(S.nextUnreadChannelId(order, null, unread, -1), 40, "no active, up -> last unread");
+  assert.equal(S.nextUnreadChannelId(order, 20, {}, 1), null, "nothing unread -> null");
+});

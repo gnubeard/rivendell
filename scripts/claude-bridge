@@ -22,16 +22,21 @@
 #   RIVENDELL_BOT_TOKEN  Bearer token from POST /api/admin/bot-tokens
 #
 # Optional env:
-#   RIVENDELL_CLAUDE_CHANNEL  Channel name to watch (default: claude)
-#   RIVENDELL_REPO_DIR        Repo directory Claude runs in (default: parent of this script)
-#   RIVENDELL_POLL_INTERVAL   Seconds between polls (default: 3)
-#   RIVENDELL_STATE_DIR       Where to persist the last-seen message id (default: /tmp)
-#   RIVENDELL_WORKING_EMOJI   "In progress" reaction (default: 👍 — a literal
-#                             Unicode emoji, which every instance accepts with no
-#                             setup). To override with a CUSTOM emoji, give the bare
-#                             shortcode, no colons (e.g. working, not :working:) — and
-#                             register it on the instance first, or the reactions API
-#                             rejects it with 400 (silently swallowed here).
+#   RIVENDELL_CLAUDE_CHANNEL         Channel name to watch (default: claude)
+#   RIVENDELL_REPO_DIR               Repo directory Claude runs in (default: parent of this script)
+#   RIVENDELL_POLL_INTERVAL          Seconds between polls (default: 3)
+#   RIVENDELL_STATE_DIR              Where to persist the last-seen message id (default: /tmp)
+#   RIVENDELL_WORKING_EMOJI          "In progress" reaction (default: 👍 — a literal
+#                                    Unicode emoji, which every instance accepts with no
+#                                    setup). To override with a CUSTOM emoji, give the bare
+#                                    shortcode, no colons (e.g. working, not :working:) — and
+#                                    register it on the instance first, or the reactions API
+#                                    rejects it with 400 (silently swallowed here).
+#   RIVENDELL_RELEASE_UPDATE_CHANNEL Channel name (no # prefix) to post release notes in
+#                                    whenever a job produces a user-visible change (new
+#                                    feature, bugfix, breaking change). Must be a public
+#                                    channel or one the bot is a member of. When unset,
+#                                    release note posting is disabled.
 #
 # Setup checklist:
 #   1. Create a bot user via the admin panel (e.g. username "claude-bot").
@@ -54,6 +59,7 @@ STATE_DIR="${RIVENDELL_STATE_DIR:-/tmp}"
 STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
 WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
+RELEASE_UPDATE_CHANNEL="${RIVENDELL_RELEASE_UPDATE_CHANNEL:-}"
 MAX_RESPONSE=3800  # chars; leaves headroom under Rivendell's default 4096-byte limit
 
 # Standing instructions prepended to every request before it reaches Claude.
@@ -72,6 +78,21 @@ BRIDGE_PREAMBLE='Project standing instructions (injected by claude-bridge — al
    patch Version constant in internal/config/config.go in that same commit, unless
    the change is helper-script/docs-only and does not affect the built binary.
    Do not sweep in unrelated uncommitted working-tree changes you did not author.
+
+3. Changelog: for user-visible changes (new feature, bugfix, breaking change),
+   update CHANGELOG.md in the same commit: rename the existing `## [Unreleased]`
+   heading to `## [new-version] - YYYY-MM-DD` (matching the version just bumped
+   and today'\''s date), add the change as a `### Added`, `### Fixed`, or
+   `### Changed` bullet under it, and insert a fresh `## [Unreleased]\n` line
+   above it. Internal-only changes (refactor, docs, tests, tooling, scripts) do
+   not warrant a changelog entry — leave CHANGELOG.md untouched.
+
+4. Release notes signal: at the very end of your response, if you made a
+   user-visible change, append exactly one line in this format:
+       RELEASE_NOTE: <plain-language one-line summary of the change>
+   Omit this line entirely for internal-only changes. Do not add any label,
+   explanation, or blank line after it — the bridge strips it before showing
+   the response to the requester and uses it to post a release notification.
 
 ----- user request follows -----
 '
@@ -115,6 +136,11 @@ react() {
 unreact() {
     api DELETE "/messages/$1/reactions" \
         --data "$(jq -n --arg e "$2" '{emoji:$e}')" >/dev/null 2>&1 || true
+}
+
+# pin_msg <message_id> — pin a message. Best-effort; a failure must not derail the job.
+pin_msg() {
+    api PUT "/messages/$1/pin" >/dev/null 2>&1 || true
 }
 
 set_status() {
@@ -291,8 +317,15 @@ $img_paths"
     fi
     rm -rf "$img_dir"
 
+    # Extract any RELEASE_NOTE sentinel before building the user-facing reply.
+    # Claude appends exactly one line "RELEASE_NOTE: <text>" for user-visible changes.
+    local release_note=""
+    release_note=$(grep '^RELEASE_NOTE: ' <<<"$claude_out" | tail -1 | cut -c15-) || true
+    local claude_out_display
+    claude_out_display=$(grep -v '^RELEASE_NOTE: ' <<<"$claude_out") || true
+
     local trimmed reply
-    trimmed=$(trim_output "$claude_out")
+    trimmed=$(trim_output "$claude_out_display")
     if [ "$claude_exit" -eq 0 ]; then
         reply="${trimmed:-✅ Done.}"
     else
@@ -306,6 +339,24 @@ $trimmed"
     reply_msg "$channel_id" "$msg_id" "$reply" >/dev/null 2>&1 \
         || post_msg "$channel_id" "$reply" >/dev/null 2>&1 || true
     unreact "$msg_id" "$WORKING_EMOJI"
+
+    # Post release note to the configured channel if this was a user-visible change,
+    # then pin it so it's easy to find in the release history.
+    if [ "$claude_exit" -eq 0 ] && [ -n "$release_note" ] && [ -n "${RELEASE_UPDATE_CHANNEL_ID:-}" ]; then
+        local version=""
+        version=$(grep -oP '(?<=const Version = ")[^"]+' \
+            "$REPO_DIR/internal/config/config.go" 2>/dev/null || true)
+        local note_msg
+        if [ -n "$version" ]; then
+            note_msg="📦 **v${version}** — ${release_note}"
+        else
+            note_msg="📦 ${release_note}"
+        fi
+        local note_resp note_id
+        note_resp=$(post_msg "$RELEASE_UPDATE_CHANNEL_ID" "$note_msg" 2>/dev/null) || true
+        note_id=$(jq -r '.id // empty' <<<"$note_resp" 2>/dev/null) || true
+        [ -n "$note_id" ] && pin_msg "$note_id"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -333,6 +384,18 @@ EOF
     exit 1
 fi
 echo "  channel id: $CHANNEL_ID"
+
+# Resolve the optional release-notes channel.
+RELEASE_UPDATE_CHANNEL_ID=""
+if [ -n "$RELEASE_UPDATE_CHANNEL" ]; then
+    RELEASE_UPDATE_CHANNEL_ID=$(api GET /channels \
+        | jq -r --arg n "$RELEASE_UPDATE_CHANNEL" '.[] | select(.name == $n) | .id' 2>/dev/null || true)
+    if [ -z "$RELEASE_UPDATE_CHANNEL_ID" ]; then
+        echo "  warn: release channel #$RELEASE_UPDATE_CHANNEL not found or bot has no access — release notes disabled"
+    else
+        echo "  release notes:  #$RELEASE_UPDATE_CHANNEL (id $RELEASE_UPDATE_CHANNEL_ID)"
+    fi
+fi
 
 # Seed the last-seen cursor so we don't replay history on first start.
 if [ ! -f "$STATE_FILE" ]; then

@@ -486,6 +486,48 @@ func TestChannelAndMessageFlow(t *testing.T) {
 	}
 }
 
+func TestGetMessage(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, adminUser := seedAdmin(t, ts, st)
+
+	// Create a public channel and post a message.
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+	_, body = doJSON(t, adminC, "POST", ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]string{
+		"content": "hello embed",
+	})
+	var msg store.Message
+	json.Unmarshal(body, &msg)
+
+	// Fetching by ID returns the message.
+	resp, body := doJSON(t, adminC, "GET", ts.URL+"/api/messages/"+itoa(msg.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get message: %d %s", resp.StatusCode, body)
+	}
+	var got store.Message
+	json.Unmarshal(body, &got)
+	if got.ID != msg.ID || got.Content != "hello embed" {
+		t.Fatalf("unexpected message: %+v", got)
+	}
+
+	// Non-existent ID returns 404.
+	resp, _ = doJSON(t, adminC, "GET", ts.URL+"/api/messages/999999", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing message, got %d", resp.StatusCode)
+	}
+
+	// Member cannot fetch a message from a private channel they're not in.
+	ctx := context.Background()
+	privCh, _ := st.CreateChannel(ctx, "secret", "", true, adminUser.ID)
+	privMsg, _ := st.CreateMessage(ctx, privCh.ID, adminUser.ID, "private msg", nil)
+	memberC, _ := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+	resp, _ = doJSON(t, memberC, "GET", ts.URL+"/api/messages/"+itoa(privMsg.ID), nil)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for private channel message, got %d", resp.StatusCode)
+	}
+}
+
 func TestMessageReply(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	adminC, _ := seedAdmin(t, ts, st)
@@ -885,8 +927,10 @@ func TestInstanceName(t *testing.T) {
 		t.Fatalf("instance: %d %s", resp.StatusCode, body)
 	}
 	var inst struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
+		Name           string `json:"name"`
+		Version        string `json:"version"`
+		MaxImageBytes  int    `json:"max_image_bytes"`
+		MaxAvatarBytes int    `json:"max_avatar_bytes"`
 	}
 	json.Unmarshal(body, &inst)
 	if inst.Name != "rivendell-test" {
@@ -894,6 +938,12 @@ func TestInstanceName(t *testing.T) {
 	}
 	if inst.Version != config.Version {
 		t.Fatalf("instance version = %q, want %q", inst.Version, config.Version)
+	}
+	if inst.MaxImageBytes != 5*1024*1024 {
+		t.Fatalf("instance max_image_bytes = %d, want %d", inst.MaxImageBytes, 5*1024*1024)
+	}
+	if inst.MaxAvatarBytes != 1<<20 {
+		t.Fatalf("instance max_avatar_bytes = %d, want %d", inst.MaxAvatarBytes, 1<<20)
 	}
 }
 
@@ -1363,6 +1413,34 @@ func TestUpdateProfileValidation(t *testing.T) {
 	resp, _ = doJSON(t, adminC, "PATCH", ts.URL+"/api/me", map[string]string{"theme": "bogus"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid theme should 400, got %d", resp.StatusCode)
+	}
+
+	// Pronouns and bio round-trip and persist across a reload.
+	resp, body = doJSON(t, adminC, "PATCH", ts.URL+"/api/me",
+		map[string]string{"pronouns": "they/them", "bio": "I like notes boxes."})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("profile update: %d %s", resp.StatusCode, body)
+	}
+	json.Unmarshal(body, &me)
+	if me.Pronouns != "they/them" || me.Bio != "I like notes boxes." {
+		t.Fatalf("pronouns/bio not updated: %s", body)
+	}
+	resp, body = doJSON(t, adminC, "GET", ts.URL+"/api/me", nil)
+	json.Unmarshal(body, &me)
+	if me.Pronouns != "they/them" || me.Bio != "I like notes boxes." {
+		t.Fatalf("pronouns/bio not durable: %s", body)
+	}
+
+	// Over-long pronouns/bio are rejected (and leave the persisted values alone).
+	resp, _ = doJSON(t, adminC, "PATCH", ts.URL+"/api/me",
+		map[string]string{"pronouns": strings.Repeat("x", 33)})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("over-long pronouns should 400, got %d", resp.StatusCode)
+	}
+	resp, _ = doJSON(t, adminC, "PATCH", ts.URL+"/api/me",
+		map[string]string{"bio": strings.Repeat("x", 1001)})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("over-long bio should 400, got %d", resp.StatusCode)
 	}
 }
 
@@ -2013,15 +2091,15 @@ func TestSearchMessages(t *testing.T) {
 	privMsg := postMessage(t, adminC, ts, priv.ID, "secret deploy of the rocket")
 
 	// Alice (non-member) must not match it; admin (member) must; a moderator
-	// keeps the private-channel bypass and matches it too.
+	// who is not a member must not see it (only admins get the bypass).
 	if hasID(search(aliceC, "deploy"), privMsg.ID) {
 		t.Fatal("non-member matched a private-channel message")
 	}
 	if !hasID(search(adminC, "deploy"), privMsg.ID) {
 		t.Fatal("member should match their private-channel message")
 	}
-	if !hasID(search(mollyC, "deploy"), privMsg.ID) {
-		t.Fatal("moderator should match a private (non-DM) channel via the mod bypass")
+	if hasID(search(mollyC, "deploy"), privMsg.ID) {
+		t.Fatal("non-member moderator must not match a private-channel message")
 	}
 
 	// Scoping: a DM between admin and bob is members-only — even a moderator may
@@ -2075,10 +2153,12 @@ func TestSearchMessages(t *testing.T) {
 }
 
 // TestAudienceMirrorsAccess locks the realtime audience to the access model:
-// a non-DM private channel's audience includes moderators/admins (who can read
-// and write it without membership), so an admin posting into a channel they
-// aren't a member of receives their own broadcast echo. A DM's audience stays
-// members-only — even a moderator who isn't a participant is excluded.
+// a non-DM private channel's audience includes admins (who can read and write
+// it without membership), so an admin posting into a channel they aren't a
+// member of receives their own broadcast echo. Moderators no longer get this
+// bypass — only their own memberships determine their audience. A DM's
+// audience stays members-only — even an admin who isn't a participant is
+// excluded.
 func TestAudienceMirrorsAccess(t *testing.T) {
 	ts, st, cfg := newTestServer(t)
 	adminC, admin := seedAdmin(t, ts, st)
@@ -2110,7 +2190,7 @@ func TestAudienceMirrorsAccess(t *testing.T) {
 
 	privAud := srv.audienceForChannel(ctx, priv)
 	if !privAud[admin.ID] {
-		t.Error("private-channel audience must include a non-member admin (mod+ bypass)")
+		t.Error("private-channel audience must include a non-member admin (admin bypass)")
 	}
 	if !privAud[molly.ID] {
 		t.Error("private-channel audience must include its member")
@@ -2183,6 +2263,17 @@ func TestCustomEmojis(t *testing.T) {
 	resp, _ = doUpload(t, memberC, "POST", ts.URL+"/api/emojis?shortcode=party", "image/png", img)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member upload should be 403, got %d", resp.StatusCode)
+	}
+
+	// Moderators can manage custom emojis (create + delete), not just admins.
+	modC, _ := seedMember(t, ts, st, "mallory", "Mallory", store.RoleModerator)
+	resp, body = doUpload(t, modC, "POST", ts.URL+"/api/emojis?shortcode=modparty", "image/png", img)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("moderator upload: %d %s", resp.StatusCode, body)
+	}
+	resp, _ = doJSON(t, modC, "DELETE", ts.URL+"/api/emojis/modparty", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("moderator delete should be 200, got %d", resp.StatusCode)
 	}
 
 	// Bad shortcode is rejected.
@@ -2521,6 +2612,10 @@ func TestLinkPreviewValidation(t *testing.T) {
 		{"https://x.com/user/status/1", true},
 		{"https://xcancel.com/user/status/1", true},
 		{"https://twitter.com/user/status/1", true},
+		{"https://github.com/owner/repo", true},
+		{"https://en.wikipedia.org/wiki/Rivendell", true}, // language subdomain
+		{"https://staff.tumblr.com/post/123", false},      // tumblr no longer allowlisted
+		{"https://notwikipedia.org/phish", false},         // lookalike, not a subdomain
 	}
 	for _, c := range cases {
 		u := ts.URL + "/api/link-preview"
@@ -2539,5 +2634,154 @@ func TestLinkPreviewValidation(t *testing.T) {
 				t.Errorf("url %q: got %d, want 400", c.url, resp.StatusCode)
 			}
 		}
+	}
+}
+
+// TestParseOGTags covers the meta scraper, including the non-OpenGraph fallbacks
+// (a plain <meta name="description"> and the <title> element) that pages like
+// Wikipedia rely on, plus the precedence of og:* over those fallbacks.
+func TestParseOGTags(t *testing.T) {
+	cases := []struct {
+		name                string
+		html                string
+		wantT, wantD, wantI string
+	}{
+		{
+			name:  "full opengraph",
+			html:  `<meta property="og:title" content="Hello"><meta property="og:description" content="A desc"><meta property="og:image" content="https://x/i.png">`,
+			wantT: "Hello", wantD: "A desc", wantI: "https://x/i.png",
+		},
+		{
+			name:  "description and title fallbacks",
+			html:  `<head><title>Page &amp; Co. — Site</title><meta name="description" content="Plain meta desc"></head>`,
+			wantT: "Page & Co. — Site", wantD: "Plain meta desc", wantI: "",
+		},
+		{
+			name:  "og wins over fallbacks",
+			html:  `<title>Ignored</title><meta name="description" content="ignored"><meta property="og:title" content="OG Title"><meta property="og:description" content="OG desc">`,
+			wantT: "OG Title", wantD: "OG desc", wantI: "",
+		},
+		{
+			name:  "twitter card fallback for image",
+			html:  `<meta name="twitter:image" content="https://x/t.png">`,
+			wantT: "", wantD: "", wantI: "https://x/t.png",
+		},
+		{
+			name:  "title whitespace collapsed",
+			html:  "<title>\n  Multi\n  line\n</title>",
+			wantT: "Multi line", wantD: "", wantI: "",
+		},
+		{
+			// A messy real-world head shape: a doubled <!DOCTYPE>, IE conditional
+			// comments, and a bunch of pre-<head> scripting, then a <title> +
+			// <meta name="description"> carrying HTML entities. Proves the parser
+			// yields a usable card even from this much noise.
+			name: "messy real-world head",
+			html: `<!DOCTYPE html><script>var __pbpa = true;</script><script type="text/javascript" src="https://assets.tumblr.com/x.js"></script><!DOCTYPE html>` +
+				"\n<!--[if IE 9]><html class=\"lt-ie10\"> <![endif]-->\n" +
+				`    <head prefix="og: http://ogp.me/ns#">` +
+				"\n        <meta charset=\"utf-8\">\n" +
+				`        <title>while snakes devour time and tail &mdash; hey, do you know any rules or guidelines for...</title>` +
+				"\n" +
+				`        <meta name="description" content="meridianverge: &ldquo;snugglesquiggle: &ldquo;hey, do you know any rules or guidelines for writing style?...">`,
+			wantT: "while snakes devour time and tail — hey, do you know any rules or guidelines for...",
+			wantD: "meridianverge: “snugglesquiggle: “hey, do you know any rules or guidelines for writing style?...",
+			wantI: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := parseOGTags([]byte(c.html))
+			if p.Title != c.wantT || p.Description != c.wantD || p.Image != c.wantI {
+				t.Errorf("parseOGTags = {%q,%q,%q}, want {%q,%q,%q}",
+					p.Title, p.Description, p.Image, c.wantT, c.wantD, c.wantI)
+			}
+		})
+	}
+}
+
+// TestFetchOGPreviewDeepHead guards deep-head scraping: some hosts bury their
+// og:* block under hundreds of KiB of inline <head> state, past the fixed prefix
+// the scraper used to read, so the preview came back empty. fetchOGPreview now
+// reads up to </head>, so the depth no longer matters.
+func TestFetchOGPreviewDeepHead(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html><html><head>\n<title>Early</title>\n")
+	// ~700 KiB of filler before the og block — well past the old 512 KiB cap.
+	b.WriteString(strings.Repeat(`<meta name="x" content="padding-padding">`+"\n", 17000))
+	b.WriteString(`<meta property="og:title" content="Deep Title">`)
+	b.WriteString(`<meta property="og:description" content="Deep desc">`)
+	b.WriteString(`<meta property="og:image" content="https://img/x.png">`)
+	b.WriteString("\n</head><body>")
+	// An og:title in the body must never win — readHead stops at </head>.
+	b.WriteString(`<meta property="og:title" content="BODY MUST BE IGNORED">`)
+	b.WriteString("</body></html>")
+	page := b.String()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(page))
+	}))
+	defer srv.Close()
+
+	p := fetchOGPreview(context.Background(), srv.URL, previewUserAgent)
+	if p.Title != "Deep Title" || p.Description != "Deep desc" || p.Image != "https://img/x.png" {
+		t.Fatalf("fetchOGPreview = %+v, want the deep-head og tags", p)
+	}
+}
+
+// TestFetchOGPreviewForwardsUA checks fetchOGPreview sends the User-Agent it's
+// handed (verbatim) plus an Accept-Language header.
+func TestFetchOGPreviewForwardsUA(t *testing.T) {
+	var gotUA, gotLang string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		gotLang = r.Header.Get("Accept-Language")
+		w.Write([]byte(`<head><title>T</title></head>`))
+	}))
+	defer srv.Close()
+
+	fetchOGPreview(context.Background(), srv.URL, "test-agent/9.9")
+	if gotUA != "test-agent/9.9" {
+		t.Errorf("OG scrape User-Agent = %q, want it forwarded verbatim", gotUA)
+	}
+	if gotLang == "" {
+		t.Errorf("OG scrape sent no Accept-Language header")
+	}
+}
+
+// TestWikipediaUserAgentCompliesWithPolicy guards the empty-Wikipedia-summary
+// fix: the Wikimedia REST API 403s a generic or browser-spoofing User-Agent, so
+// the UA we send it must identify the app and a contact and must NOT masquerade
+// as a browser (the previewUserAgent does — that one is for everyone else).
+func TestWikipediaUserAgentCompliesWithPolicy(t *testing.T) {
+	if strings.Contains(wikipediaUserAgent, "Mozilla") {
+		t.Errorf("wikipediaUserAgent %q spoofs a browser; Wikimedia policy rejects that", wikipediaUserAgent)
+	}
+	if !strings.Contains(wikipediaUserAgent, "http") {
+		t.Errorf("wikipediaUserAgent %q lacks a contact URL", wikipediaUserAgent)
+	}
+	if wikipediaUserAgent == previewUserAgent {
+		t.Errorf("wikipedia and generic UAs must differ (opposite host requirements)")
+	}
+}
+
+// TestReadHead stops at the closing </head> (case-insensitively, even when the
+// tag straddles a read boundary) and otherwise returns everything up to the cap.
+func TestReadHead(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		max            int64
+	}{
+		{"stops at head", "<head><title>T</title></HEAD><body>junk</body>", "<head><title>T</title></HEAD>", 1 << 20},
+		{"no head tag", "<title>T</title>", "<title>T</title>", 1 << 20},
+		{"capped before head", "<head>" + strings.Repeat("x", 100) + "</head>", "<head>" + strings.Repeat("x", 14), 20},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := string(readHead(strings.NewReader(c.in), c.max))
+			if got != c.want {
+				t.Errorf("readHead = %q, want %q", got, c.want)
+			}
+		})
 	}
 }

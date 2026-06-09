@@ -161,6 +161,31 @@ function sortChannels(channels) {
     .map((c) => c.id);
 }
 
+// nextChannelId returns the id one step (delta -1 up / +1 down) from activeId in
+// the given top-to-bottom order, clamped at the ends (no wrap). With no active
+// channel it returns the first (down) or last (up) id. Returns null if the move
+// would run off either end or the list is empty. Pure — unit-tested.
+export function nextChannelId(order, activeId, delta) {
+  if (!order.length) return null;
+  const idx = order.indexOf(activeId);
+  const next = idx === -1 ? (delta > 0 ? 0 : order.length - 1) : idx + delta;
+  if (next < 0 || next >= order.length) return null;
+  return order[next];
+}
+
+// nextUnreadChannelId returns the nearest id with a truthy unread count in the
+// given direction (delta -1 up / +1 down) from activeId, or null if none lies
+// that way. `unread` is the channelId→count map. Pure — unit-tested.
+export function nextUnreadChannelId(order, activeId, unread, delta) {
+  if (!order.length) return null;
+  const idx = order.indexOf(activeId);
+  const start = idx === -1 ? (delta > 0 ? -1 : order.length) : idx;
+  for (let i = start + delta; i >= 0 && i < order.length; i += delta) {
+    if (unread[order[i]]) return order[i];
+  }
+  return null;
+}
+
 export function setChannels(state, list) {
   const channels = {};
   for (const c of list || []) channels[c.id] = c;

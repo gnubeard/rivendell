@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID, extractHideURL, replySnippet } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -75,6 +75,11 @@ let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
 let isIdle = false;    // tracks client-side idle state for re-signaling on reconnect
 let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
 let appVersion = ""; // server-reported semantic version, shown in the About dialog
+// Server-reported upload size ceilings (bytes), used to reject oversized files
+// client-side before uploading. 0 = unknown (instance fetch failed) → skip the
+// pre-check and let the server enforce its own limit.
+let maxImageBytes = 0;
+let maxAvatarBytes = 0;
 
 // Desktop-notification opt-in (per browser). The OS permission is separate and
 // owned by the browser; this is the user's in-app preference that gates it.
@@ -89,6 +94,8 @@ const avatarVersion = {};
 // Link preview cache: url -> { title, description, image } | "loading" | "failed".
 // Populated lazily as messages scroll into view; persists for the session.
 const linkPreviewCache = new Map();
+// Cache for same-origin message embed previews: messageId -> Message | "loading" | "failed".
+const msgPreviewCache = new Map();
 // Debounce token: multiple preview fetches completing close together collapse into
 // one renderMessages() call instead of one per URL.
 let _previewRenderTimer = null;
@@ -102,6 +109,11 @@ function schedulePreviewRender() {
 const liveDeleted = new Set();
 // Composer draft text saved per channel so switching channels doesn't discard work.
 const channelDrafts = new Map(); // channelId -> string
+// Composer attachment tiles saved per channel alongside the draft text.
+const channelAttachments = new Map(); // channelId -> pendingUploads array
+// Set by wireComposer once it has closure access to pendingUploads.
+let saveComposerUploads = (_id) => {};
+let restoreComposerUploads = (_id) => {};
 
 function loadNotifPref() {
   try {
@@ -383,9 +395,32 @@ async function applyInstanceName() {
       document.title = inst.name;
       for (const node of document.querySelectorAll(".brand")) node.textContent = inst.name;
     }
+    if (inst.max_image_bytes) maxImageBytes = inst.max_image_bytes;
+    if (inst.max_avatar_bytes) maxAvatarBytes = inst.max_avatar_bytes;
   } catch {
     /* keep the default branding */
   }
+}
+
+// humanBytes renders a byte count as a compact, human-friendly size for error
+// messages (e.g. 5242880 → "5 MB").
+function humanBytes(n) {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let val = n / 1024, i = 0;
+  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+  const rounded = val >= 10 || val === Math.floor(val) ? Math.round(val) : val.toFixed(1);
+  return `${rounded} ${units[i]}`;
+}
+
+// fileTooLarge fails fast when a chosen file exceeds the server's upload ceiling,
+// alerting the user instead of spending the upload bandwidth on a doomed POST.
+// A 0/unknown limit (instance fetch failed) skips the check — the server still
+// enforces it. Returns true if the file was rejected.
+function fileTooLarge(file, limit, label) {
+  if (!limit || file.size <= limit) return false;
+  alert(`That ${label} is ${humanBytes(file.size)}, which is over the ${humanBytes(limit)} limit.`);
+  return true;
 }
 
 function wireLogin() {
@@ -695,7 +730,7 @@ function startRealtime() {
         // start/stop rendering as images, and refresh any open emoji surfaces.
         renderMessages();
         if (emojiPickerOpen()) renderEmojiPicker();
-        refreshAdminEmojisIfOpen();
+        refreshEmojiManagerIfOpen();
       }
       if (evt.type === "reaction.update") {
         // applyEvent already folded the new groups into the message; just repaint
@@ -756,6 +791,9 @@ function startRealtime() {
           } else if (isNewFromOther) {
             // You're looking right at it — keep the read cursor current.
             markActiveChannelRead();
+            // If the admin panel is covering the conversation, a ping in the
+            // active channel is still invisible — fire a toast so it's not silent.
+            if (pingsMe && !muted && !$("#admin-panel").hidden) firePing(evt, ch);
           }
         } else if (isNewFromOther && !muted) {
           // A new message in a channel we're not looking at: flag it unread,
@@ -871,6 +909,29 @@ function regularChannelOrder() {
   return state.channelOrder.filter((id) => !state.channels[id].is_dm);
 }
 
+// sidebarChannelOrder is the full top-to-bottom visual order of the sidebar:
+// regular channels first, then DMs — matching how renderChannels()/renderDMs()
+// paint them. Used by the ctrl-arrow navigation shortcuts so "up"/"down" track
+// what the user actually sees.
+function sidebarChannelOrder() {
+  return [...regularChannelOrder(), ...state.channelOrder.filter((id) => state.channels[id].is_dm)];
+}
+
+// navigateChannels moves the selection one row up (delta -1) or down (delta +1)
+// through the sidebar order. Clamps at the ends (no wrap).
+function navigateChannels(delta) {
+  const next = S.nextChannelId(sidebarChannelOrder(), state.activeChannelId, delta);
+  if (next != null) selectChannel(next);
+}
+
+// navigateUnread jumps to the nearest unread conversation above (delta -1) or
+// below (delta +1) the current one in sidebar order. No-op if there's none in
+// that direction.
+function navigateUnread(delta) {
+  const next = S.nextUnreadChannelId(sidebarChannelOrder(), state.activeChannelId, state.unread, delta);
+  if (next != null) selectChannel(next);
+}
+
 // dmDisplayName resolves a DM channel to the other participant's display name,
 // falling back to the raw channel name if that user isn't loaded.
 function dmDisplayName(ch) {
@@ -891,9 +952,16 @@ function muteToggle(id) {
 }
 
 function renderChannels() {
+  // Don't repaint mid-drag: we mutate the row order in the DOM live while a mod
+  // is dragging, and a rebuild from state would yank the row out from under the
+  // pointer. The drop's broadcasts re-render once the drag has ended.
+  if (chDrag.active) return;
   const list = $("#channel-list");
   list.innerHTML = "";
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  // Mods can reorder by dragging a row (mouse) or long-pressing then dragging
+  // (touch); the grab cursor is the affordance that replaced the ↑/↓ glyphs.
+  list.classList.toggle("reorderable", isMod);
   const order = regularChannelOrder();
   for (let i = 0; i < order.length; i++) {
     const id = order[i];
@@ -901,10 +969,6 @@ function renderChannels() {
     const active = id === state.activeChannelId;
     const controls = el("span", { class: "ch-controls" },
       muteToggle(id),
-      isMod ? el("button", { class: "ch-ctl", title: "Move up", disabled: i === 0 ? "disabled" : null,
-        onclick: (e) => { e.stopPropagation(); moveChannel(id, -1); } }, "↑") : null,
-      isMod ? el("button", { class: "ch-ctl", title: "Move down", disabled: i === order.length - 1 ? "disabled" : null,
-        onclick: (e) => { e.stopPropagation(); moveChannel(id, +1); } }, "↓") : null,
       isMod ? el("button", { class: "ch-ctl danger", title: "Delete channel",
         onclick: (e) => { e.stopPropagation(); deleteChannel(id); } }, "✕") : null);
     const unread = state.unread[id] || 0;
@@ -914,15 +978,15 @@ function renderChannels() {
     const voiceRow = roster.length ? el("span", { class: "ch-voice" },
       "🔊 " + roster.map(p => (state.users[p.user_id] || {}).display_name || "?").join(", ")
     ) : null;
-    list.append(
-      el("li", { class: cls, onclick: () => selectChannel(id) },
-        el("span", { class: "ch-hash" }, ch.is_private ? "🔒" : "#"),
-        el("span", { class: "ch-name" }, ch.name),
-        unread ? el("span", { class: mentioned ? "unread-badge mention" : "unread-badge" }, mentioned ? `@${unread}` : String(unread)) : null,
-        controls,
-        voiceRow
-      )
+    const li = el("li", { class: cls, "data-ch-id": String(id), onclick: () => selectChannel(id) },
+      el("span", { class: "ch-hash" }, ch.is_private ? "🔒" : "#"),
+      el("span", { class: "ch-name" }, ch.name),
+      unread ? el("span", { class: mentioned ? "unread-badge mention" : "unread-badge" }, mentioned ? `@${unread}` : String(unread)) : null,
+      controls,
+      voiceRow
     );
+    if (isMod) wireChannelDrag(li, id);
+    list.append(li);
   }
 }
 
@@ -1065,26 +1129,168 @@ function renderAdminVisibility() {
   $("#new-channel-btn").hidden = !isMod;
 }
 
-// moveChannel swaps a channel with its neighbor (dir -1 = up, +1 = down) and
-// persists the result. Positions default to 0 (channels then sort by name), so a
-// bare two-channel swap of equal positions would be a no-op; instead we
-// renormalize the whole list to contiguous indices and PATCH only the channels
-// whose stored position actually changed. The channel.update broadcasts then
-// re-render the list for everyone.
-async function moveChannel(id, dir) {
-  const order = regularChannelOrder();
-  const i = order.indexOf(id);
-  const j = i + dir;
-  if (i < 0 || j < 0 || j >= order.length) return;
-  const next = [...order];
-  [next[i], next[j]] = [next[j], next[i]];
-  const patches = next
-    .map((cid, idx) => (state.channels[cid].position === idx ? null : api.updateChannel(cid, { position: idx })))
+// --- channel reordering (moderator+) -------------------------------------
+// Replaces the old up/down arrow glyphs (too easy to mis-hit). Desktop: press
+// and drag a channel row with the mouse. Mobile: long-press to "unstick" the
+// row, then drag. A plain click/tap still selects the channel; a vertical
+// touch-drag before the long-press fires still scrolls the sidebar.
+const chDrag = {
+  active: false,   // a drag is engaged — the row is "unstuck" and following the pointer
+  li: null,        // the <li> being dragged
+  id: null,        // its channel id
+  lpTimer: null,   // touch long-press timer (null once fired/cancelled)
+  startX: 0,
+  startY: 0,
+};
+let chMousePending = null; // {li, id} captured on mousedown, before the move threshold
+
+// beginDrag lifts a row out of the flow so it visibly follows the pointer.
+function beginDrag(li, id) {
+  chDrag.active = true;
+  chDrag.li = li;
+  chDrag.id = id;
+  li.classList.add("dragging");
+  document.body.classList.add("ch-dragging");
+}
+
+// updateDrag relocates the dragged row among its siblings: insert it before the
+// first row whose vertical midpoint is below the pointer, else append to the end.
+function updateDrag(clientY) {
+  const li = chDrag.li;
+  if (!li) return;
+  const list = $("#channel-list");
+  let before = null;
+  for (const row of list.querySelectorAll(".channel")) {
+    if (row === li) continue;
+    const r = row.getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) { before = row; break; }
+  }
+  if (before) {
+    if (before !== li.nextElementSibling) list.insertBefore(li, before);
+  } else if (li !== list.lastElementChild) {
+    list.append(li);
+  }
+}
+
+// endDrag drops the row. On commit it persists whatever order the DOM now shows;
+// otherwise (cancel) it re-renders from the authoritative state.
+function endDrag(commit) {
+  const li = chDrag.li;
+  if (li) li.classList.remove("dragging");
+  document.body.classList.remove("ch-dragging");
+  chDrag.active = false;
+  chDrag.li = null;
+  chDrag.id = null;
+  if (commit) {
+    const ids = [...$("#channel-list").querySelectorAll(".channel")]
+      .map((row) => Number(row.dataset.chId));
+    persistChannelOrder(ids);
+  } else {
+    renderChannels();
+  }
+}
+
+// persistChannelOrder renormalizes the regular channels to contiguous positions
+// and PATCHes only the ones whose stored position actually changed. Positions
+// default to 0 (channels then sort by name), so the first reorder on a fresh
+// install rewrites several. It optimistically folds the new order into local
+// state so a stray re-render before the channel.update broadcasts arrive can't
+// snap the row back; a failed PATCH reverts via resync().
+function persistChannelOrder(ids) {
+  const patches = ids
+    .map((cid, idx) => (state.channels[cid].position === idx ? null : { cid, idx }))
     .filter(Boolean);
-  try {
-    await Promise.all(patches);
-  } catch (ex) {
-    alert(ex.message);
+  if (!patches.length) return;
+  const updated = Object.values(state.channels).map((c) => {
+    const pos = ids.indexOf(c.id);
+    return pos === -1 ? c : { ...c, position: pos };
+  });
+  state = S.setChannels(state, updated);
+  Promise.all(patches.map((p) => api.updateChannel(p.cid, { position: p.idx })))
+    .catch((ex) => { alert(ex.message); resync(); });
+}
+
+// wireChannelDrag attaches the press/long-press drag handlers to a mod's channel
+// row. Touch arms on a long-press (so taps and scrolls are unaffected); mouse
+// arms once the pointer moves past a small threshold (so plain clicks select).
+function wireChannelDrag(li, id) {
+  li.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1 || e.target.closest(".ch-controls")) return;
+    chDrag.startX = e.touches[0].clientX;
+    chDrag.startY = e.touches[0].clientY;
+    clearTimeout(chDrag.lpTimer);
+    chDrag.lpTimer = setTimeout(() => {
+      chDrag.lpTimer = null;
+      if (!li.isConnected) return; // re-rendered out from under us
+      beginDrag(li, id);
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 450);
+  }, { passive: true });
+
+  li.addEventListener("touchmove", (e) => {
+    if (chDrag.active && chDrag.li === li) {
+      e.preventDefault(); // we own the gesture now — suppress sidebar scroll
+      updateDrag(e.touches[0].clientY);
+      return;
+    }
+    if (chDrag.lpTimer) {
+      const dx = e.touches[0].clientX - chDrag.startX;
+      const dy = e.touches[0].clientY - chDrag.startY;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        clearTimeout(chDrag.lpTimer);
+        chDrag.lpTimer = null;
+      }
+    }
+  }, { passive: false });
+
+  li.addEventListener("touchend", (e) => {
+    clearTimeout(chDrag.lpTimer);
+    chDrag.lpTimer = null;
+    if (chDrag.active && chDrag.li === li) {
+      e.preventDefault(); // suppress the trailing click that would select the row
+      endDrag(true);
+    }
+  }, { passive: false });
+
+  li.addEventListener("touchcancel", () => {
+    clearTimeout(chDrag.lpTimer);
+    chDrag.lpTimer = null;
+    if (chDrag.active && chDrag.li === li) endDrag(false);
+  });
+
+  li.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || e.target.closest(".ch-controls")) return;
+    chDrag.startX = e.clientX;
+    chDrag.startY = e.clientY;
+    chMousePending = { li, id };
+    document.addEventListener("mousemove", onChMouseMove);
+    document.addEventListener("mouseup", onChMouseUp);
+  });
+}
+
+function onChMouseMove(e) {
+  if (chDrag.active) {
+    updateDrag(e.clientY);
+    return;
+  }
+  if (!chMousePending) return;
+  if (Math.abs(e.clientX - chDrag.startX) > 5 || Math.abs(e.clientY - chDrag.startY) > 5) {
+    if (!chMousePending.li.isConnected) { chMousePending = null; return; }
+    beginDrag(chMousePending.li, chMousePending.id);
+    updateDrag(e.clientY);
+  }
+}
+
+function onChMouseUp() {
+  document.removeEventListener("mousemove", onChMouseMove);
+  document.removeEventListener("mouseup", onChMouseUp);
+  chMousePending = null;
+  if (chDrag.active) {
+    endDrag(true);
+    // Swallow the click that fires after mouseup so the drop doesn't also select.
+    const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    document.addEventListener("click", swallow, { capture: true, once: true });
+    setTimeout(() => document.removeEventListener("click", swallow, true), 0);
   }
 }
 
@@ -1209,6 +1415,7 @@ async function selectChannel(id) {
     const draft = $("#composer-input").value;
     if (draft.trim()) channelDrafts.set(leaving, draft);
     else channelDrafts.delete(leaving);
+    saveComposerUploads(leaving);
   }
   // Leaving a channel abandons any inline edit or pending reply in progress.
   editingMessageId = null;
@@ -1231,9 +1438,10 @@ async function selectChannel(id) {
   renderVideoGrid();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
-  // Restore any saved draft for this channel and resize the composer to fit.
+  // Restore any saved draft and attachments for this channel.
   const composerInput = $("#composer-input");
   composerInput.value = channelDrafts.get(id) || "";
+  restoreComposerUploads(id);
   composerInput.style.height = "auto";
   composerInput.style.height = composerInput.scrollHeight + "px";
   if (!window.matchMedia("(hover: none)").matches) composerInput.focus();
@@ -1835,7 +2043,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const editing = m.id === editingMessageId;
     const replyQuote = editing ? null : buildReplyQuote(m);
     const preview = editing ? null : buildLinkPreview(m.content);
-    const hideUrl = preview ? extractHideURL(m.content) : null;
+    const hideUrl = preview ? extractHideURL(m.content, location.origin) : null;
     const body = editing
       ? editorFor(m)
       : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
@@ -1850,6 +2058,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
       el("button", { class: "link", title: "Add reaction",
         onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "react"),
       el("button", { class: "link", title: "Reply to this message", onclick: () => startReply(m) }, "reply"),
+      !m.deleted_at ? el("button", { class: "link", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "forward") : null,
       isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
       canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
       canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null);
@@ -1871,15 +2080,22 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     if (grouped) {
       wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, replyQuote, body, preview, reactions, rowActions)));
     } else {
+      // Clicking the avatar or name opens the author's profile card.
+      const openCard = author ? () => openUserCard(author.id) : null;
+      const avatarAttrs = author
+        ? { class: "msg-avatar clickable", title: "View profile", onclick: openCard }
+        : { class: "msg-avatar" };
       const avatar = author && author.has_avatar
-        ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(author.id)})` })
-        : el("div", { class: "msg-avatar" }, initials(author ? author.display_name : "?"));
+        ? el("div", { ...avatarAttrs, style: `background-image:url(${avatarSrc(author.id)})` })
+        : el("div", avatarAttrs, initials(author ? author.display_name : "?"));
       wrap.append(
         el("div", { class: cls, "data-msg-id": m.id },
           avatar,
           el("div", { class: "msg-main" },
             el("div", { class: "msg-head" },
-              el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
+              el("span", author
+                ? { class: "msg-author clickable", title: "View profile", onclick: openCard }
+                : { class: "msg-author" }, author ? author.display_name : "unknown"),
               permalink,
               pinMark
             ),
@@ -2003,10 +2219,7 @@ function wireComposer() {
   const TYPING_INTERVAL_MS = 1500;
   let lastTypingSent = 0;
 
-  const autoGrow = () => {
-    input.style.height = "auto";
-    input.style.height = input.scrollHeight + "px";
-  };
+  const autoGrow = () => resizeComposerInput();
   autoGrow(); // size the input correctly for any value the browser may have restored
 
   function filterMentions(partial) {
@@ -2175,6 +2388,19 @@ function wireComposer() {
     }
   }
 
+  // Save/restore attachment tray state when the user switches channels, so
+  // uploads stay with the channel they belong to rather than following the user.
+  saveComposerUploads = (channelId) => {
+    if (pendingUploads.length) channelAttachments.set(channelId, pendingUploads);
+    else channelAttachments.delete(channelId);
+    pendingUploads = [];
+    renderAttachments();
+  };
+  restoreComposerUploads = (channelId) => {
+    pendingUploads = channelAttachments.get(channelId) || [];
+    renderAttachments();
+  };
+
   function removeUpload(id) {
     const idx = pendingUploads.findIndex((u) => u.id === id);
     if (idx === -1) return;
@@ -2196,6 +2422,7 @@ function wireComposer() {
   // tile. The local file is previewed immediately (object URL) so the user sees
   // their image right away; the tile shows a spinner until the upload resolves.
   async function uploadAndInsert(file) {
+    if (fileTooLarge(file, maxImageBytes, "image")) return;
     const item = { id: ++uploadSeq, objectUrl: URL.createObjectURL(file), status: "uploading", markdown: "", spoiler: false };
     pendingUploads.push(item);
     renderAttachments();
@@ -2274,8 +2501,9 @@ function wireComposer() {
       cancelReply();
       return;
     }
-    // Up arrow on an empty composer → edit the most recent own message.
-    if (e.key === "ArrowUp" && !input.value && !editingMessageId) {
+    // Up arrow on an empty composer → edit the most recent own message. Ctrl/Meta
+    // is the channel-navigation shortcut (handled globally), not an edit trigger.
+    if (e.key === "ArrowUp" && !e.ctrlKey && !e.metaKey && !input.value && !editingMessageId) {
       const msgs = state.messages[state.activeChannelId] || [];
       const own = msgs.filter((m) => m.user_id === state.me.id && !m.deleted_at);
       if (own.length) { e.preventDefault(); startEdit(own[own.length - 1]); }
@@ -2399,6 +2627,14 @@ function renderEmojiPicker() {
       }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
     }
   }
+  // Moderators+ get a ➕ pinned to the bottom-right that opens the custom-emoji
+  // manager (the same interface as the admin panel).
+  if (isModPlus()) {
+    picker.append(el("button", {
+      type: "button", class: "emoji-manage-btn", title: "Manage custom emojis",
+      onclick: (e) => { e.stopPropagation(); $("#emoji-picker").hidden = true; openEmojiManager(); },
+    }, "➕"));
+  }
 }
 
 // chooseEmoji routes a picked emoji to the popup's current target. isCustom marks a
@@ -2468,10 +2704,31 @@ function insertIntoComposer(token) {
   input.dispatchEvent(new Event("input"));
 }
 
+// resizeComposerInput sizes the main composer textarea to fit its content.
+// Module-level (not just a wireComposer closure) so it can be re-run when the
+// composer is revealed after being display:none'd — e.g. ending a mobile video
+// call, which sets body.video-active to hide the composer. Sizing a hidden
+// textarea reads scrollHeight 0 and would write height:0px, leaving the box
+// "crushed" to a sliver once it reappears; the offsetParent guard skips that.
+function resizeComposerInput() {
+  const input = $("#composer-input");
+  if (!input || input.offsetParent === null) return; // not laid out → don't crush it
+  input.style.height = "auto";
+  // box-sizing is border-box, but scrollHeight is content+padding only (no
+  // border). Setting height = scrollHeight would leave the content box short
+  // by the vertical border, so the cursor scrolls into that 2px of slack —
+  // the "jiggle". Add the border back (offsetHeight − clientHeight) so the
+  // box fits the text exactly.
+  input.style.height = input.scrollHeight + (input.offsetHeight - input.clientHeight) + "px";
+}
+
 // autoGrowEdit sizes the inline-edit textarea to its content (capped by CSS).
 function autoGrowEdit(ta) {
   ta.style.height = "auto";
-  ta.style.height = ta.scrollHeight + "px";
+  // Add the vertical border back: scrollHeight is content+padding only, and the
+  // box is border-box, so height = scrollHeight would under-size by the border
+  // and the cursor would scroll into the slack (see autoGrow in wireComposer).
+  ta.style.height = ta.scrollHeight + (ta.offsetHeight - ta.clientHeight) + "px";
 }
 
 // editorFor builds the inline editor that replaces a message's body while editing.
@@ -2517,6 +2774,43 @@ function cancelEdit() {
 
 // --- link previews -------------------------------------------------------
 
+// fetchMsgPreview fetches a message for an embed preview card and triggers a
+// re-render when done. Idempotent — a second call for an already-cached id is a
+// no-op.
+async function fetchMsgPreview(messageId) {
+  if (msgPreviewCache.has(messageId)) return;
+  msgPreviewCache.set(messageId, "loading");
+  try {
+    const msg = await api.getMessage(messageId);
+    msgPreviewCache.set(messageId, msg);
+  } catch {
+    msgPreviewCache.set(messageId, "failed");
+  }
+  schedulePreviewRender();
+}
+
+// renderMsgEmbedCard builds the inline preview card for a same-origin message
+// permalink. Clicking navigates the same way as the message timestamp link.
+function renderMsgEmbedCard(msg, channelId, messageId) {
+  const author = state.users[msg.user_id];
+  const card = el("div", { class: "msg-embed" });
+  const head = el("div", { class: "msg-embed-head" });
+  head.append(
+    el("span", { class: "msg-embed-author" }, author ? author.display_name : "unknown"),
+    el("span", { class: "msg-embed-time" }, formatTime(msg.created_at)),
+  );
+  card.append(head);
+  const body = el("div", { class: "msg-embed-body" });
+  if (msg.deleted_at) {
+    body.append(el("span", { class: "deleted" }, "message deleted"));
+  } else {
+    body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false });
+  }
+  card.append(body);
+  card.addEventListener("click", (e) => { e.preventDefault(); jumpToMessage(channelId, messageId); });
+  return card;
+}
+
 // fetchLinkPreview fetches preview metadata for a bsky/twitter URL and triggers
 // a re-render when done. Idempotent — a second call for a URL already in the
 // cache is a no-op.
@@ -2535,6 +2829,15 @@ async function fetchLinkPreview(url) {
 // buildLinkPreview returns a preview card or YouTube embed DOM node for the
 // first bare previewable URL in content, or null if there is none / not ready.
 function buildLinkPreview(content) {
+  // Same-origin message permalink: render an inline embed card.
+  const pl = extractMessagePermalinkURL(content, location.origin);
+  if (pl) {
+    const cached = msgPreviewCache.get(pl.messageId);
+    if (!cached) { fetchMsgPreview(pl.messageId); return null; }
+    if (cached === "loading" || cached === "failed") return null;
+    return renderMsgEmbedCard(cached, pl.channelId, pl.messageId);
+  }
+
   // YouTube embed is purely client-side — no async fetch needed.
   const ytID = extractYouTubeVideoID(content);
   if (ytID) return renderYouTubeEmbed(ytID);
@@ -2662,8 +2965,8 @@ function reactionsRow(m) {
         ? el("span", { class: "r-emoji" }, "🪦")
         : el("span", { class: "r-emoji" }, g.emoji);
     const titleText = isOrphan
-      ? `${names} · :${g.emoji}: (emoji deleted${mine ? " — click to remove" : ""})`
-      : names;
+      ? `${g.emoji}: ${names} (emoji deleted${mine ? " — click to remove" : ""})`
+      : `${g.emoji}: ${names}`;
     row.append(el("button", {
       class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
       title: titleText,
@@ -2693,6 +2996,119 @@ async function toggleReaction(messageId, emoji, knownMine) {
   } catch (ex) {
     alert(ex.message);
   }
+}
+
+// --- forward message -----------------------------------------------------
+
+// openForwardModal shows a channel picker to forward a message as a permalink.
+// Sending the permalink URL causes it to render as an embed card in the target
+// channel (via extractMessagePermalinkURL in buildLinkPreview).
+function openForwardModal(m) {
+  if (m.deleted_at) return;
+  const srcChannelId = state.activeChannelId;
+  const msgId = m.id;
+  const list = $("#forward-list");
+  list.innerHTML = "";
+  for (const id of state.channelOrder) {
+    const ch = state.channels[id];
+    if (!ch) continue;
+    const label = ch.is_dm ? dmDisplayName(ch) : "#" + ch.name;
+    list.append(el("li", { class: "invite-item", onclick: async () => {
+      $("#forward-modal").hidden = true;
+      try {
+        await api.sendMessage(id, `${location.origin}/${permalinkHash(srcChannelId, msgId)}`, null);
+      } catch (ex) {
+        alert("Failed to forward: " + ex.message);
+      }
+    }}, label));
+  }
+  $("#forward-modal").hidden = false;
+}
+
+// --- mobile long-press context menu --------------------------------------
+
+// openMobileCtx shows the bottom-sheet action menu for a message. Called when
+// the user long-presses a message row on a touch device.
+function openMobileCtx(m) {
+  document.getElementById("mobile-ctx").hidden = false;
+  showMobileCtxActions(m);
+}
+
+function showMobileCtxActions(m) {
+  const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  const isOwn = m.user_id === state.me.id;
+  const canDelete = isOwn || isMod;
+  const isDeleted = !!m.deleted_at;
+  const inner = document.getElementById("mobile-ctx-inner");
+  inner.innerHTML = "";
+
+  const closeBtn = (label, handler, cls) => el("button", {
+    class: "mobile-ctx-btn" + (cls ? " " + cls : ""),
+    onclick: () => { closeMobileCtx(); handler(); },
+  }, label);
+
+  // stopPropagation prevents the document-level click handler that dismisses the
+  // emoji picker from firing on the same event that opens it.
+  inner.append(el("button", {
+    class: "mobile-ctx-btn",
+    onclick: (e) => {
+      e.stopPropagation();
+      closeMobileCtx();
+      openReactionPicker(m.id, {
+        getBoundingClientRect: () => ({
+          left: window.innerWidth / 2 - 119,
+          right: window.innerWidth / 2 + 119,
+          top: window.innerHeight - 60,
+          bottom: window.innerHeight - 40,
+        }),
+      });
+    },
+  }, "😊  React"));
+
+  if (!isDeleted) inner.append(closeBtn("↩  Reply", () => startReply(m)));
+  if (!isDeleted) inner.append(closeBtn("↪  Forward", () => openForwardModal(m)));
+  if (isOwn && !isDeleted) inner.append(closeBtn("✏  Edit", () => startEdit(m)));
+  if (isMod && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
+
+  if (canDelete && !isDeleted) {
+    inner.append(el("div", { class: "mobile-ctx-sep" }));
+    inner.append(closeBtn("🗑  Delete", () => deleteMessage(m), "danger"));
+  }
+
+  if (m.reactions && m.reactions.length > 0) {
+    inner.append(el("div", { class: "mobile-ctx-sep" }));
+    inner.append(el("button", {
+      class: "mobile-ctx-btn",
+      onclick: () => showMobileCtxReactions(m),
+    }, "👁  Reactions (" + m.reactions.length + ")"));
+  }
+}
+
+function showMobileCtxReactions(m) {
+  const inner = document.getElementById("mobile-ctx-inner");
+  inner.innerHTML = "";
+  inner.append(el("button", { class: "mobile-ctx-btn", onclick: () => showMobileCtxActions(m) }, "← Back"));
+  inner.append(el("div", { class: "mobile-ctx-sep" }));
+  const panel = el("div", { class: "mobile-ctx-reactions" });
+  if (!m.reactions || !m.reactions.length) {
+    panel.append(el("p", { class: "mobile-ctx-no-reactions" }, "No reactions"));
+  } else {
+    for (const g of m.reactions) {
+      const ids = g.user_ids || [];
+      const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
+      const glyph = state.emojis[g.emoji]
+        ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:`, style: "height:1.3rem;width:auto;" })
+        : el("span", {}, g.emoji);
+      panel.append(el("div", { class: "mobile-ctx-reaction-row" },
+        el("span", { class: "mobile-ctx-reaction-emoji" }, glyph),
+        el("span", { class: "mobile-ctx-reaction-names" }, names || "—")));
+    }
+  }
+  inner.append(panel);
+}
+
+function closeMobileCtx() {
+  document.getElementById("mobile-ctx").hidden = true;
 }
 
 // --- pinned messages -----------------------------------------------------
@@ -2918,6 +3334,7 @@ function wireControls() {
 
   $("#me-name").onclick = openProfileModal;
   $("#me-status-text").onclick = openProfileModal;
+  $("#user-close").onclick = () => { $("#user-modal").hidden = true; };
   // Closing the modal without saving must drop a live theme preview.
   $("#profile-close").onclick = () => { $("#profile-modal").hidden = true; applyTheme(myTheme()); };
   // Live-preview the theme as the user browses the list; persisted on Save,
@@ -2950,9 +3367,11 @@ function wireControls() {
     err.textContent = "";
     const display_name = $("#profile-display").value.trim();
     const status_text = $("#profile-status-text").value.trim();
+    const pronouns = $("#profile-pronouns").value.trim();
+    const bio = $("#profile-bio").value.trim();
     const theme = $("#profile-theme").value;
     try {
-      const me = await api.updateMe({ display_name, status_text, theme });
+      const me = await api.updateMe({ display_name, status_text, pronouns, bio, theme });
       state = S.upsertUser(state, me);
       state = S.setMe(state, me);
       renderMe(); // also re-applies the (now persisted) theme
@@ -2971,7 +3390,9 @@ function wireControls() {
   };
   $("#avatar-input").onchange = async (e) => {
     const file = e.target.files[0];
+    e.target.value = ""; // allow re-picking the same file after a rejection
     if (!file) return;
+    if (fileTooLarge(file, maxAvatarBytes, "avatar")) return;
     try {
       await api.uploadAvatar(file);
       const me = await api.me();
@@ -3023,6 +3444,63 @@ function wireControls() {
   $("#update-reload").onclick = () => location.reload();
   $("#update-dismiss").onclick = () => ($("#update-banner").hidden = true);
 
+  $("#forward-close").onclick = () => ($("#forward-modal").hidden = true);
+
+  // Mobile context sheet: backdrop tap (the ::before pseudo-element catches it)
+  // closes the sheet. Clicks that reach the sheet itself (not the inner card) also
+  // close it. Sheet clicks are stopped inside by the button handlers.
+  document.getElementById("mobile-ctx").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("mobile-ctx") ||
+        e.target === document.getElementById("mobile-ctx-sheet")) {
+      closeMobileCtx();
+    }
+  });
+
+  // Long-press detection on the message list for mobile. touchmove cancels if the
+  // finger drifts (scroll intent); touchend suppresses the follow-on click when a
+  // long-press was actually delivered. contextmenu fires on a long tap in some
+  // browsers — suppress it so the OS menu doesn't compete with ours.
+  {
+    let lpTimer = null, lpStartX = 0, lpStartY = 0, lpFired = false;
+    const ml = $("#message-list");
+
+    ml.addEventListener("touchstart", (e) => {
+      const row = e.target.closest && e.target.closest("[data-msg-id]");
+      if (!row) return;
+      lpFired = false;
+      lpStartX = e.touches[0].clientX;
+      lpStartY = e.touches[0].clientY;
+      clearTimeout(lpTimer);
+      lpTimer = setTimeout(() => {
+        lpFired = true;
+        lpTimer = null;
+        const msgId = parseInt(row.dataset.msgId, 10);
+        const m = findMessage(msgId);
+        if (m) openMobileCtx(m);
+      }, 450);
+    }, { passive: true });
+
+    ml.addEventListener("touchmove", (e) => {
+      if (!lpTimer) return;
+      const dx = e.touches[0].clientX - lpStartX;
+      const dy = e.touches[0].clientY - lpStartY;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        clearTimeout(lpTimer);
+        lpTimer = null;
+      }
+    }, { passive: true });
+
+    ml.addEventListener("touchend", (e) => {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+      if (lpFired) { e.preventDefault(); lpFired = false; }
+    }, { passive: false });
+
+    ml.addEventListener("contextmenu", (e) => {
+      if (e.target.closest("[data-msg-id]")) e.preventDefault();
+    });
+  }
+
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
 
@@ -3040,6 +3518,34 @@ function wireControls() {
       $("#emoji-picker").hidden = true;
     }
   });
+
+  // Custom-emoji manager (moderator+): one shared modal reached from the picker's
+  // ➕ and the admin panel's "Manage custom emojis" button.
+  $("#admin-emoji-manage").onclick = openEmojiManager;
+  $("#emoji-manager-close").onclick = () => ($("#emoji-manager-modal").hidden = true);
+  $("#emoji-manager-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const out = $("#emoji-manager-out");
+    out.textContent = "";
+    const shortcode = $("#emoji-manager-shortcode").value.trim().toLowerCase();
+    const file = $("#emoji-manager-file").files[0];
+    if (!file) {
+      out.textContent = "Choose an image.";
+      return;
+    }
+    if (maxAvatarBytes && file.size > maxAvatarBytes) {
+      out.textContent = `That image is ${humanBytes(file.size)}, which is over the ${humanBytes(maxAvatarBytes)} limit.`;
+      return;
+    }
+    try {
+      await api.uploadEmoji(shortcode, file);
+      $("#emoji-manager-shortcode").value = "";
+      $("#emoji-manager-file").value = "";
+      await refreshEmojiManager();
+    } catch (ex) {
+      out.textContent = ex.message;
+    }
+  };
 
   $("#search-btn").onclick = openSearchModal;
   $("#search-close").onclick = () => ($("#search-modal").hidden = true);
@@ -3081,7 +3587,24 @@ function wireControls() {
     if (open.length) { closeModal(open[open.length - 1]); return; }
     // The admin panel is a full-screen surface (not a .modal); Esc closes it too.
     const admin = $("#admin-panel");
-    if (!admin.hidden) { admin.hidden = true; }
+    if (!admin.hidden) { admin.hidden = true; return; }
+    // Cancel an inline edit when Esc fires outside the edit textarea (the
+    // textarea's own handler covers the focused case via stopPropagation).
+    if (editingMessageId != null) cancelEdit();
+  });
+
+  // Channel navigation: Ctrl+Up/Down step through the sidebar conversation list;
+  // Ctrl+Shift+Up/Down jump to the nearest unread above/below. Works regardless of
+  // focus (the composer's plain-ArrowUp edit shortcut bows out when Ctrl is held).
+  // Skipped while a modal is open so the keys don't move a channel behind it.
+  document.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    if ([...document.querySelectorAll(".modal")].some((m) => !m.hidden)) return;
+    e.preventDefault();
+    const delta = e.key === "ArrowUp" ? -1 : 1;
+    if (e.shiftKey) navigateUnread(delta);
+    else navigateChannels(delta);
   });
 
   // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
@@ -3277,12 +3800,48 @@ function openProfileModal() {
   $("#profile-error").textContent = "";
   $("#profile-display").value = me.display_name || "";
   $("#profile-status-text").value = me.status_text || "";
+  $("#profile-pronouns").value = me.pronouns || "";
+  $("#profile-bio").value = me.bio || "";
   $("#profile-theme").value = THEMES.includes(me.theme) ? me.theme : "default";
   renderNotifControl();
   pttCapturing = false; // never reopen mid-rebind
   renderPttControl();
   $("#profile-modal").hidden = false;
   $("#profile-display").focus();
+}
+
+// openUserCard shows a read-only profile card for any user. The full roster
+// (incl. pronouns/bio) already lives in state.users, so no fetch is needed;
+// clicking your own card just routes to the editable profile modal.
+function openUserCard(userId) {
+  const u = state.users[userId];
+  if (!u) return;
+  if (u.id === state.me.id) { openProfileModal(); return; }
+  closeDrawers();
+  const card = $("#user-card");
+  card.innerHTML = "";
+  const avatar = u.has_avatar
+    ? el("div", { class: "user-card-avatar", style: `background-image:url(${avatarSrc(u.id)})` })
+    : el("div", { class: "user-card-avatar" }, initials(u.display_name));
+  const badges = el("div", { class: "user-card-badges" },
+    u.role === "admin" || u.role === "moderator"
+      ? el("span", { class: "bot-badge" }, u.role) : null,
+    u.is_bot ? el("span", { class: "bot-badge" }, "bot") : null);
+  card.append(...[
+    avatar,
+    el("div", { class: "user-card-name" },
+      el("span", {}, u.display_name),
+      u.pronouns ? el("span", { class: "user-card-pronouns" }, u.pronouns) : null),
+    el("div", { class: "user-card-handle" }, "@" + u.username),
+    badges,
+    u.status_text ? el("div", { class: "user-card-status" }, u.status_text) : null,
+    u.bio
+      ? el("div", { class: "user-card-bio", html: formatMessage(u.bio, state.me.username, state.emojis, { embedImages: false }) })
+      : null,
+    el("div", { class: "user-card-since hint" }, "Member since " + new Date(u.created_at).toLocaleDateString()),
+    el("button", { class: "primary small", onclick: () => { $("#user-modal").hidden = true; startDM(u.id); } }, "Message"),
+  ].filter(x => x != null));
+  $("#user-modal").hidden = false;
 }
 
 // --- admin panel ---------------------------------------------------------
@@ -3318,7 +3877,6 @@ async function openAdmin() {
   refreshAdminStats();
   await refreshAdminUsers();
   await refreshAdminInvitations();
-  await refreshAdminEmojis();
   await refreshDeletedChannels();
   await refreshAdminBotTokens();
 
@@ -3330,26 +3888,6 @@ async function openAdmin() {
     .forEach((u) => tokenUserSel.append(
       el("option", { value: u.id }, `${u.display_name} (${u.username})`),
     ));
-
-  $("#admin-emoji-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const out = $("#admin-emoji-out");
-    out.textContent = "";
-    const shortcode = $("#admin-emoji-shortcode").value.trim().toLowerCase();
-    const file = $("#admin-emoji-file").files[0];
-    if (!file) {
-      out.textContent = "Choose an image.";
-      return;
-    }
-    try {
-      await api.uploadEmoji(shortcode, file);
-      $("#admin-emoji-shortcode").value = "";
-      $("#admin-emoji-file").value = "";
-      await refreshAdminEmojis();
-    } catch (ex) {
-      out.textContent = ex.message;
-    }
-  };
 
   $("#admin-token-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -3479,7 +4017,9 @@ async function refreshAdminUsers() {
       style: "display:none",
       onchange: async (e) => {
         const file = e.target.files[0];
+        e.target.value = ""; // allow re-picking the same file after a rejection
         if (!file) return;
+        if (fileTooLarge(file, maxAvatarBytes, "avatar")) return;
         try { await api.adminUploadAvatar(u.id, file); await refreshAdminUsers(); } catch (ex) { alert(ex.message); }
       },
     });
@@ -3509,15 +4049,24 @@ async function refreshAdminUsers() {
   }
 }
 
-// refreshAdminEmojis renders the custom-emoji grid with delete controls. Realtime
-// emoji.add/emoji.delete events also call refreshAdminEmojisIfOpen so the list
-// stays current if another admin changes it while the panel is open. An upload
+// openEmojiManager shows the custom-emoji modal (moderator+) and renders its list.
+// It's the single interface for managing emojis — reached from the emoji picker's
+// ➕ and from the admin panel's "Manage custom emojis" button.
+function openEmojiManager() {
+  $("#emoji-manager-out").textContent = "";
+  $("#emoji-manager-modal").hidden = false;
+  refreshEmojiManager();
+}
+
+// refreshEmojiManager renders the custom-emoji grid with delete controls. Realtime
+// emoji.add/emoji.delete events also call refreshEmojiManagerIfOpen so the list
+// stays current if someone else changes it while the modal is open. An upload
 // fires both an explicit refresh and (via its own broadcast echo) a realtime one,
 // so two runs can overlap — we fetch FIRST, then clear+append in one synchronous
 // block, making concurrent runs last-writer-wins (always the full list once,
 // never doubled).
-async function refreshAdminEmojis() {
-  const box = $("#admin-emoji-list");
+async function refreshEmojiManager() {
+  const box = $("#emoji-manager-list");
   let list;
   try {
     list = await api.emojis();
@@ -3535,7 +4084,7 @@ async function refreshAdminEmojis() {
     const del = el("button", {
       class: "link danger", title: `Delete :${e.shortcode}:`, onclick: async () => {
         if (!confirm(`Delete :${e.shortcode}:? Messages using it will show the literal text.`)) return;
-        try { await api.deleteEmoji(e.shortcode); await refreshAdminEmojis(); } catch (ex) { alert(ex.message); }
+        try { await api.deleteEmoji(e.shortcode); await refreshEmojiManager(); } catch (ex) { alert(ex.message); }
       },
     }, "✕");
     box.append(el("span", { class: "admin-emoji" },
@@ -3545,8 +4094,8 @@ async function refreshAdminEmojis() {
   }
 }
 
-function refreshAdminEmojisIfOpen() {
-  if (!$("#admin-panel").hidden) refreshAdminEmojis();
+function refreshEmojiManagerIfOpen() {
+  if (!$("#emoji-manager-modal").hidden) refreshEmojiManager();
 }
 
 // refreshDeletedChannels renders archived channels with restore / permanent-delete
@@ -3645,14 +4194,42 @@ function renderNotificationTotal() {
   document.title = n > 0 ? `(${n}) ${baseTitle}` : baseTitle;
 }
 
+// showPingToast renders a brief top-of-screen toast for a ping that arrives while
+// the tab is focused (where OS notifications are suppressed). Auto-dismisses after
+// 4 s; tapping navigates to the channel. Mobile only — on desktop the toast is more
+// intrusive than useful (the message is already on screen or one click away), so it
+// is gated behind the mobile-layout breakpoint.
+function showPingToast(evt, ch) {
+  if (!window.matchMedia("(max-width: 720px)").matches) return;
+  const container = $("#ping-toasts");
+  if (!container) return;
+  const author = state.users[evt.payload.user_id];
+  const who = author ? author.display_name : "Someone";
+  const label = ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
+  const body = (evt.payload.content || "").replace(/\n+/g, " ");
+  const toast = el("div", { class: "ping-toast" },
+    el("span", { class: "ping-toast-who" }, label),
+    body ? el("span", { class: "ping-toast-body" }, body) : null,
+  );
+  let timer;
+  const dismiss = () => { clearTimeout(timer); toast.remove(); };
+  toast.onclick = () => { dismiss(); selectChannel(evt.payload.channel_id); };
+  container.append(toast);
+  timer = setTimeout(dismiss, 4000);
+}
+
 // firePing alerts the user to a ping (DM or @-mention): always a soft chime, plus
-// an OS notification when they've opted in and aren't already looking here. The
-// notification routes through the service worker when one is registered (works
-// on mobile, and clicks deep-link via the SW), falling back to a page-context
-// Notification with an onclick.
+// an in-app toast when the tab is focused (OS notifications are suppressed then),
+// or an OS notification when they've opted in and aren't looking here. The OS path
+// routes through the service worker when one is registered (works on mobile, and
+// clicks deep-link via the SW), falling back to a page-context Notification.
 function firePing(evt, ch) {
   boop();
-  if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: !tabUnfocused() })) {
+  if (!tabUnfocused()) {
+    showPingToast(evt, ch);
+    return;
+  }
+  if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: false })) {
     return;
   }
   const author = state.users[evt.payload.user_id];
@@ -4467,6 +5044,16 @@ function onSpeaking(userId, speaking) {
   if (li) li.classList.toggle("speaking", speaking);
 }
 
+// setVideoActive toggles body.video-active (which hides the composer/message list
+// behind the video grid). When the class clears, the composer goes from
+// display:none back to visible, so re-size its textarea — any autosize that ran
+// while it was hidden left a bogus height:0px that would render it crushed.
+function setVideoActive(on) {
+  const was = document.body.classList.contains("video-active");
+  document.body.classList.toggle("video-active", on);
+  if (was && !on) resizeComposerInput();
+}
+
 // renderVideoGrid builds the 2-tile DM video layout (remote tile + optional local
 // PiP) inside #video-grid. Only shown when we're in a DM call AND viewing that DM.
 // Remote tile: video when camera is on, dark avatar tile when camera is off.
@@ -4479,7 +5066,7 @@ function renderVideoGrid() {
 
   if (!ch || !ch.is_dm || voiceCallState.channelId !== state.activeChannelId) {
     grid.hidden = true;
-    document.body.classList.remove("video-active");
+    setVideoActive(false);
     return;
   }
 
@@ -4492,14 +5079,14 @@ function renderVideoGrid() {
   if (voiceCallState.videoMuted && remoteVideoMuted) {
     videoViewHidden = false;
     grid.hidden = true;
-    document.body.classList.remove("video-active");
+    setVideoActive(false);
     return;
   }
 
   // On mobile the user may have chosen to view chat instead of video.
   if (videoViewHidden) {
     grid.hidden = true;
-    document.body.classList.remove("video-active");
+    setVideoActive(false);
     return;
   }
   const remoteVideo = otherId != null ? getVideoEl(otherId) : null;
@@ -4545,7 +5132,7 @@ function renderVideoGrid() {
   grid.appendChild(fsBtn);
 
   grid.hidden = false;
-  document.body.classList.add("video-active");
+  setVideoActive(true);
 }
 
 function renderCallStrip() {

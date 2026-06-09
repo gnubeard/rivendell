@@ -183,7 +183,7 @@ export function parsePermalink(hash) {
 
 // PREVIEW_HOST_RE tests whether a URL belongs to one of the special-cased
 // previewable hosts. Only bare (non-markdown-linked) URLs are previewed.
-const PREVIEW_HOST_RE = /^https:\/\/(?:bsky\.app|twitter\.com|x\.com|xcancel\.com)\//;
+const PREVIEW_HOST_RE = /^https:\/\/(?:bsky\.app|twitter\.com|x\.com|xcancel\.com|(?:www\.)?github\.com|(?:[a-z0-9-]+\.)?wikipedia\.org)\//;
 
 // extractPreviewableURL returns the first bare bsky/twitter/x/xcancel URL in
 // text, or null. "Bare" means the URL was typed standalone, not written as
@@ -220,10 +220,34 @@ export function extractYouTubeVideoID(text) {
   return null;
 }
 
-// extractHideURL returns the first bare URL that would generate a preview card or
-// YouTube embed, so the caller can suppress its inline text rendering.
-export function extractHideURL(text) {
+// extractMessagePermalinkURL returns the first bare same-origin message
+// permalink URL in text as { url, channelId, messageId }, or null. origin is
+// e.g. "https://chat.example.com". Markdown-linked URLs are skipped (the
+// author chose a label; those already render as plain links with their text).
+export function extractMessagePermalinkURL(text, origin) {
+  if (!text || !origin) return null;
+  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  let m;
+  while ((m = re.exec(String(text))) !== null) {
+    if (m[3] === undefined) continue;
+    const url = m[3];
+    if (!url.startsWith(origin)) continue;
+    const rest = url.slice(origin.length); // e.g. "/#c28/m1684"
+    const pl = rest.match(/^\/?#c(\d+)\/m(\d+)$/);
+    if (pl) return { url, channelId: parseInt(pl[1], 10), messageId: parseInt(pl[2], 10) };
+  }
+  return null;
+}
+
+// extractHideURL returns the first bare URL that would generate a preview card
+// or YouTube embed, so the caller can suppress its inline text rendering.
+// Pass origin (e.g. location.origin) to also suppress message permalink URLs.
+export function extractHideURL(text, origin) {
   if (!text) return null;
+  if (origin) {
+    const pl = extractMessagePermalinkURL(text, origin);
+    if (pl) return pl.url;
+  }
   const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
   let m;
   while ((m = re.exec(String(text))) !== null) {
@@ -251,6 +275,72 @@ function emojiImg(name) {
   return `<img class="emoji" src="/api/emojis/${name}/image" alt=":${name}:" title=":${name}:" loading="lazy">`;
 }
 
+// --- Markdown tables (GFM-style) ------------------------------------------
+// A table is a header row, then a delimiter row, then zero+ body rows. Rows are
+// pipe-delimited; outer pipes are optional. The delimiter row's colons set
+// per-column alignment. All of this runs on the *escaped* string (| : - and \
+// all survive escapeHtml untouched), and cell text is rendered through the same
+// inlineWithCode pipeline as everything else, so the escape-first XSS invariant
+// holds — the only tags we emit are the fixed <table>/<tr>/<th>/<td> we build.
+
+// TABLE_DELIM_RE matches a delimiter row: each cell is optional-colon, 1+ dashes,
+// optional-colon (e.g. `---`, `:--`, `--:`, `:--:`), with optional outer pipes.
+const TABLE_DELIM_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+// isTableRow: a candidate row must contain at least one pipe. (We only ever treat
+// it as a table when the *next* line is a delimiter row, so this stays cheap.)
+function isTableRow(line) {
+  return line.includes("|");
+}
+
+// splitRow splits a pipe-delimited row into trimmed cells, honoring \| escapes
+// and stripping optional leading/trailing pipes.
+function splitRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+  const cells = [];
+  let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && s[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (s[i] === "|") { cells.push(cur); cur = ""; continue; }
+    cur += s[i];
+  }
+  cells.push(cur);
+  return cells.map((c) => c.trim());
+}
+
+// cellAlign maps a delimiter cell to a CSS text-align value (or "" for default).
+function cellAlign(spec) {
+  const s = spec.trim();
+  const left = s.startsWith(":");
+  const right = s.endsWith(":");
+  if (left && right) return "center";
+  if (right) return "right";
+  if (left) return "left";
+  return "";
+}
+
+function renderTable(header, aligns, body, meLower, emojis, embedImages, hideUrl) {
+  const ncols = header.length;
+  const fmt = (c) => inlineWithCode(c || "", meLower, emojis, embedImages, hideUrl);
+  // align values are from a fixed {left,right,center,""} set — safe to inline.
+  const alignAttr = (i) => (aligns[i] ? ` style="text-align:${aligns[i]}"` : "");
+  let out = '<table class="md-table"><thead><tr>';
+  for (let i = 0; i < ncols; i++) out += `<th${alignAttr(i)}>${fmt(header[i])}</th>`;
+  out += "</tr></thead>";
+  if (body.length) {
+    out += "<tbody>";
+    for (const row of body) {
+      out += "<tr>";
+      for (let i = 0; i < ncols; i++) out += `<td${alignAttr(i)}>${fmt(row[i])}</td>`;
+      out += "</tr>";
+    }
+    out += "</tbody>";
+  }
+  return out + "</table>";
+}
+
 // formatMessage opts: { embedImages, hideUrl } — embedImages: when false, bare
 // image URLs render as plain links instead of inline <img> (search rows). hideUrl:
 // a URL to suppress from inline rendering when its preview card is shown instead.
@@ -275,23 +365,39 @@ export function formatMessage(text, me, emojis, opts) {
       const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
       html += `<pre class="code-block"${langAttr}><code>${highlight(code, lang)}</code></pre>`;
     } else {
-      // Outside a fence: escape then handle inline code, blockquotes, headers, line breaks.
+      // Outside a fence: escape then handle inline code, blockquotes, headers,
+      // tables, line breaks.
       const escaped = escapeHtml(parts[i]);
       const lines = escaped.split("\n");
-      const rendered = lines.map((line) => {
+      const rendered = [];
+      for (let li = 0; li < lines.length; li++) {
+        // Table: a pipe-bearing row immediately followed by a delimiter row.
+        if (li + 1 < lines.length && isTableRow(lines[li]) && TABLE_DELIM_RE.test(lines[li + 1])) {
+          const header = splitRow(lines[li]);
+          const aligns = splitRow(lines[li + 1]).map(cellAlign);
+          const body = [];
+          let j = li + 2;
+          for (; j < lines.length && isTableRow(lines[j]); j++) body.push(splitRow(lines[j]));
+          rendered.push(renderTable(header, aligns, body, meLower, emojis, embedImages, hideUrl));
+          li = j - 1;
+          continue;
+        }
+        const line = lines[li];
         if (/^&gt;\s?/.test(line)) {
           const body = line.replace(/^&gt;\s?/, "");
-          return `<blockquote>${inlineWithCode(body, meLower, emojis, embedImages, hideUrl)}</blockquote>`;
+          rendered.push(`<blockquote>${inlineWithCode(body, meLower, emojis, embedImages, hideUrl)}</blockquote>`);
+          continue;
         }
         const hm = line.match(/^(#{1,3})\s+(.*)/);
         if (hm) {
           const tag = ["h3", "h4", "h5"][hm[1].length - 1];
-          return `<${tag}>${inlineWithCode(hm[2], meLower, emojis, embedImages, hideUrl)}</${tag}>`;
+          rendered.push(`<${tag}>${inlineWithCode(hm[2], meLower, emojis, embedImages, hideUrl)}</${tag}>`);
+          continue;
         }
-        return inlineWithCode(line, meLower, emojis, embedImages, hideUrl);
-      });
+        rendered.push(inlineWithCode(line, meLower, emojis, embedImages, hideUrl));
+      }
       // Block elements don't need <br> separators — their block formatting provides the newline.
-      const isBlock = (s) => /^<(?:blockquote|h[1-6])/.test(s);
+      const isBlock = (s) => /^<(?:blockquote|h[1-6]|table)/.test(s);
       html += rendered.reduce((acc, item, idx) => {
         if (idx === 0) return item;
         return acc + (isBlock(rendered[idx - 1]) || isBlock(item) ? "" : "<br>") + item;

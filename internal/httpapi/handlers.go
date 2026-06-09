@@ -180,6 +180,8 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		DisplayName *string `json:"display_name"`
 		StatusText  *string `json:"status_text"`
 		Theme       *string `json:"theme"`
+		Pronouns    *string `json:"pronouns"`
+		Bio         *string `json:"bio"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -208,7 +210,23 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.st.UpdateProfile(r.Context(), u.ID, displayName, statusText, theme); err != nil {
+	pronouns := u.Pronouns
+	if req.Pronouns != nil {
+		pronouns = strings.TrimSpace(*req.Pronouns)
+		if len(pronouns) > 32 {
+			writeErr(w, http.StatusBadRequest, "pronouns must be at most 32 characters")
+			return
+		}
+	}
+	bio := u.Bio
+	if req.Bio != nil {
+		bio = strings.TrimSpace(*req.Bio)
+		if len(bio) > 1000 {
+			writeErr(w, http.StatusBadRequest, "bio must be at most 1000 characters")
+			return
+		}
+	}
+	if err := s.st.UpdateProfile(r.Context(), u.ID, displayName, statusText, theme, pronouns, bio); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not update profile")
 		return
 	}
@@ -348,9 +366,13 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 // handleInstance reports public, unauthenticated instance metadata (the display
 // name) so the web client can brand itself before login.
 func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"name":    s.cfg.InstanceName,
 		"version": config.Version,
+		// Upload size ceilings so the client can reject oversized files before
+		// spending the upload bandwidth (the server still enforces these).
+		"max_image_bytes":  s.cfg.MaxImageBytes,
+		"max_avatar_bytes": s.cfg.MaxAvatarBytes,
 	})
 }
 
@@ -567,7 +589,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if isMember || roleRank(u.Role) >= roleRank(store.RoleModerator) {
+		if isMember || roleRank(u.Role) >= roleRank(store.RoleAdmin) {
 			visible = append(visible, ch)
 		}
 	}
@@ -856,7 +878,7 @@ func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Reques
 	}
 	// Capture the audience (current members, INCLUDING the one leaving) before the
 	// removal, so one event reaches both the departing user and everyone who
-	// stays. (A moderator viewing via bypass isn't a member and so isn't notified
+	// stays. (An admin viewing via bypass isn't a member and so isn't notified
 	// live — consistent with how other private-channel events are scoped; they'll
 	// see the change on next open.)
 	audience := s.audienceForChannel(r.Context(), ch)
@@ -882,12 +904,12 @@ func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.Use
 	}
 	member, err := s.st.IsChannelMember(r.Context(), ch.ID, u.ID)
 	isMember := err == nil && member
-	// A DM is readable only by its two participants — moderators/admins have no
-	// access to others' DMs. Regular private channels keep the moderator+ bypass.
+	// A DM is readable only by its two participants — no bypass for anyone.
+	// Private non-DM channels keep the admin-only bypass (not moderators).
 	if ch.IsDM {
 		return isMember
 	}
-	return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
+	return isMember || roleRank(u.Role) >= roleRank(store.RoleAdmin)
 }
 
 // requireChannelAccess parses the channel id from the path, fetches the channel,
@@ -1294,6 +1316,39 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, msg)
 }
 
+// handleGetMessage fetches a single message by ID, verifying the caller has
+// access to the channel it belongs to. Used by the client for message embed
+// previews when a same-origin permalink URL appears in a message body.
+func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid message id")
+		return
+	}
+	msg, err := s.st.GetMessage(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "message not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not fetch message")
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), msg.ChannelID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not fetch channel")
+		return
+	}
+	if !s.canAccessChannel(r, ch, u) {
+		writeErr(w, http.StatusForbidden, "access denied")
+		return
+	}
+	msgs := []store.Message{msg}
+	s.attachReactions(r.Context(), msgs)
+	writeJSON(w, http.StatusOK, msgs[0])
+}
+
 func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	id, err := pathInt(r, "id")
@@ -1410,8 +1465,9 @@ func (s *Server) setMessagePinned(w http.ResponseWriter, r *http.Request, pinned
 		return
 	}
 	// In a DM, either participant may pin (canAccessChannel already proved
-	// membership). Everywhere else pinning is a moderator+ action.
-	if !ch.IsDM && roleRank(u.Role) < roleRank(store.RoleModerator) {
+	// membership). Bots may pin anywhere they have access (they act on behalf of
+	// an admin). Everywhere else pinning is a moderator+ action.
+	if !ch.IsDM && !u.IsBot && roleRank(u.Role) < roleRank(store.RoleModerator) {
 		writeErr(w, http.StatusForbidden, "only moderators can pin in this channel")
 		return
 	}
@@ -2129,11 +2185,38 @@ type linkPreview struct {
 	Image       string `json:"image"`
 }
 
+// allowedPreviewHosts is the exact-match allowlist of hosts the link-preview
+// proxy will fetch.
 var allowedPreviewHosts = map[string]bool{
-	"bsky.app":    true,
-	"twitter.com": true,
-	"x.com":       true,
-	"xcancel.com": true,
+	"bsky.app":       true,
+	"twitter.com":    true,
+	"x.com":          true,
+	"xcancel.com":    true,
+	"github.com":     true,
+	"www.github.com": true,
+}
+
+// allowedPreviewSuffixes additionally permits the registrable domain itself and
+// any subdomain of it — Wikipedia serves each language from its own subdomain
+// (en.wikipedia.org, de.wikipedia.org, …). Matched as
+// `host == suffix || host endswith "."+suffix` so a lookalike like
+// notwikipedia.org is rejected.
+var allowedPreviewSuffixes = []string{
+	"wikipedia.org",
+}
+
+// previewHostAllowed reports whether host (already lowercased) may be fetched by
+// the link-preview proxy.
+func previewHostAllowed(host string) bool {
+	if allowedPreviewHosts[host] {
+		return true
+	}
+	for _, suf := range allowedPreviewSuffixes {
+		if host == suf || strings.HasSuffix(host, "."+suf) {
+			return true
+		}
+	}
+	return false
 }
 
 // previewClient is a dedicated http.Client for link preview fetches with a
@@ -2150,6 +2233,28 @@ var previewClient = &http.Client{
 
 const previewCacheTTL = time.Hour
 
+// previewUserAgent is the default sent for generic OpenGraph scrapes. It is
+// shaped like a real desktop browser, which most hosts (bsky, github, …) serve
+// og-rich HTML to.
+const previewUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+// wikipediaUserAgent is sent only to the Wikimedia REST API, which enforces the
+// Wikimedia User-Agent policy: a generic library UA — or a browser-spoofing one
+// like previewUserAgent — is rejected (HTTP 403), so the summary came back empty
+// while the article's <title> still scraped from the lenient CDN-served HTML. An
+// honest, app-identifying UA with a contact URL is what the policy asks for.
+const wikipediaUserAgent = "RivendellChat/1.0 (link preview; +https://github.com/gnubeard/rivendell)"
+
+// previewAcceptLanguage nudges hosts that vary on it toward English OG metadata.
+const previewAcceptLanguage = "en-US,en;q=0.9"
+
+// previewMaxBytes is the hard cap on how much of an upstream page we buffer
+// before giving up. The OpenGraph/meta block we want always lives in <head>,
+// and readHead stops at </head>, so this only bites a page whose <head> alone
+// is pathologically large (or never closes). Some hosts carry a lot of inline
+// state in <head> before their og:* block, so the cap is deliberately generous.
+const previewMaxBytes = 2 * 1024 * 1024
+
 func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 	rawURL := r.URL.Query().Get("url")
 	if rawURL == "" {
@@ -2161,7 +2266,7 @@ func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid url")
 		return
 	}
-	if !allowedPreviewHosts[strings.ToLower(u.Hostname())] {
+	if !previewHostAllowed(strings.ToLower(u.Hostname())) {
 		writeErr(w, http.StatusBadRequest, "unsupported host")
 		return
 	}
@@ -2176,27 +2281,7 @@ func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	s.previewMu.Unlock()
 
-	req, err := http.NewRequestWithContext(r.Context(), "GET", rawURL, nil)
-	if err != nil {
-		writeJSON(w, http.StatusOK, linkPreview{})
-		return
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Rivendell link-preview/1.0)")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-
-	resp, err := previewClient.Do(req)
-	if err != nil {
-		writeJSON(w, http.StatusOK, linkPreview{})
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		writeJSON(w, http.StatusOK, linkPreview{})
-		return
-	}
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	p := parseOGTags(body)
+	p := fetchPreview(r.Context(), rawURL, u)
 
 	s.previewMu.Lock()
 	s.previewCache[rawURL] = previewCacheEntry{preview: p, exp: time.Now().Add(previewCacheTTL)}
@@ -2206,15 +2291,191 @@ func (s *Server) handleLinkPreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
-// parseOGTags extracts Open Graph / Twitter card meta values from HTML.
+// fetchPreview retrieves preview metadata for an already-allowlisted https URL.
+// Wikipedia article pages go through the REST summary API (which reliably yields
+// a title, plain-text summary, and thumbnail — the article HTML itself carries
+// no og:description); everything else fetches the page and scrapes OpenGraph /
+// Twitter-card meta. Any failure yields a zero linkPreview, so the handler never
+// surfaces a 5xx for a flaky upstream.
+func fetchPreview(ctx context.Context, rawURL string, u *url.URL) linkPreview {
+	host := strings.ToLower(u.Hostname())
+	if (host == "wikipedia.org" || strings.HasSuffix(host, ".wikipedia.org")) && strings.HasPrefix(u.EscapedPath(), "/wiki/") {
+		if p := wikipediaSummary(ctx, u); p != (linkPreview{}) {
+			return p
+		}
+		// fall through to a generic OG scrape if the summary API came up empty
+	}
+	return fetchOGPreview(ctx, rawURL, previewUserAgent)
+}
+
+// fetchOGPreview GETs a page (identifying as userAgent) and scrapes its
+// OpenGraph/Twitter-card meta.
+func fetchOGPreview(ctx context.Context, rawURL, userAgent string) linkPreview {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return linkPreview{}
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", previewAcceptLanguage)
+
+	resp, err := previewClient.Do(req)
+	if err != nil {
+		log.Printf("link-preview: GET %s: %v", rawURL, err)
+		return linkPreview{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		log.Printf("link-preview: GET %s: status %d", rawURL, resp.StatusCode)
+		return linkPreview{}
+	}
+	head := readHead(resp.Body, previewMaxBytes)
+	p := parseOGTags(head)
+	if p == (linkPreview{}) {
+		// Empty result is the symptom users see as "no preview". Log enough to
+		// tell a tag-less consent/SPA shell from a block or truncated read.
+		log.Printf("link-preview: GET %s: status %d, final %s, %d head bytes, no og/title found",
+			rawURL, resp.StatusCode, resp.Request.URL.String(), len(head))
+	}
+	return p
+}
+
+// readHead reads from r up to and including the closing </head> tag, or until
+// maxBytes is reached, whichever comes first. Every value we scrape (og:*,
+// twitter:*, <title>, <meta name="description">) lives in <head>, so once we
+// see </head> there is nothing more worth reading — and stopping there avoids
+// buffering the (often multi-megabyte) <body> of a content-heavy page. The scan is
+// ASCII-case-insensitive and O(n): each new chunk is matched against the marker
+// with a small carry-over so a </head> split across two reads is still found.
+func readHead(r io.Reader, maxBytes int64) []byte {
+	const marker = "</head>"
+	lr := io.LimitReader(r, maxBytes)
+	var buf []byte
+	tmp := make([]byte, 32*1024)
+	searched := 0
+	for {
+		n, err := lr.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			from := searched - (len(marker) - 1)
+			if from < 0 {
+				from = 0
+			}
+			if i := indexFold(buf[from:], marker); i >= 0 {
+				return buf[:from+i+len(marker)]
+			}
+			searched = len(buf)
+		}
+		if err != nil {
+			return buf
+		}
+	}
+}
+
+// indexFold reports the index of the first ASCII-case-insensitive occurrence of
+// sub in b, or -1. sub must be lowercase ASCII.
+func indexFold(b []byte, sub string) int {
+	last := len(b) - len(sub)
+	for i := 0; i <= last; i++ {
+		j := 0
+		for ; j < len(sub); j++ {
+			c := b[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != sub[j] {
+				break
+			}
+		}
+		if j == len(sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// wikipediaSummary fetches the REST summary for a /wiki/<title> URL and maps it
+// to a linkPreview. Returns a zero value on any error (so the caller falls back
+// to a generic scrape). The article's existing host/subdomain is preserved, so
+// per-language Wikipedias hit their own REST endpoint.
+func wikipediaSummary(ctx context.Context, u *url.URL) linkPreview {
+	title := strings.TrimPrefix(u.EscapedPath(), "/wiki/")
+	if title == "" {
+		return linkPreview{}
+	}
+	// title is already percent-encoded in the source URL; concatenate it raw so
+	// it isn't double-encoded. Host carries the language subdomain.
+	apiURL := "https://" + u.Host + "/api/rest_v1/page/summary/" + title
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return linkPreview{}
+	}
+	req.Header.Set("User-Agent", wikipediaUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := previewClient.Do(req)
+	if err != nil {
+		return linkPreview{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return linkPreview{}
+	}
+	var data struct {
+		Title     string `json:"title"`
+		Extract   string `json:"extract"`
+		Thumbnail struct {
+			Source string `json:"source"`
+		} `json:"thumbnail"`
+		OriginalImage struct {
+			Source string `json:"source"`
+		} `json:"originalimage"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, previewMaxBytes)).Decode(&data); err != nil {
+		return linkPreview{}
+	}
+	img := data.Thumbnail.Source
+	if img == "" {
+		img = data.OriginalImage.Source
+	}
+	return linkPreview{Title: data.Title, Description: data.Extract, Image: img}
+}
+
+// parseOGTags extracts Open Graph / Twitter card meta values from HTML, falling
+// back to the standard <meta name="description"> and the <title> element when a
+// page omits the OpenGraph equivalents (Wikipedia, for one, ships neither
+// og:title nor og:description).
 func parseOGTags(rawHTML []byte) linkPreview {
 	doc := string(rawHTML)
 	docLow := strings.ToLower(doc)
-	return linkPreview{
+	p := linkPreview{
 		Title:       firstMeta(doc, docLow, "og:title", "twitter:title"),
-		Description: firstMeta(doc, docLow, "og:description", "twitter:description"),
+		Description: firstMeta(doc, docLow, "og:description", "twitter:description", "description"),
 		Image:       firstMeta(doc, docLow, "og:image", "twitter:image"),
 	}
+	if p.Title == "" {
+		p.Title = titleTag(doc, docLow)
+	}
+	return p
+}
+
+// titleTag returns the unescaped, whitespace-collapsed text of the first <title>
+// element, or "" if there is none.
+func titleTag(doc, docLow string) string {
+	start := strings.Index(docLow, "<title")
+	if start < 0 {
+		return ""
+	}
+	open := strings.IndexByte(docLow[start:], '>')
+	if open < 0 {
+		return ""
+	}
+	contentStart := start + open + 1
+	end := strings.Index(docLow[contentStart:], "</title>")
+	if end < 0 {
+		return ""
+	}
+	return strings.Join(strings.Fields(html.UnescapeString(doc[contentStart:contentStart+end])), " ")
 }
 
 func firstMeta(doc, docLow string, keys ...string) string {

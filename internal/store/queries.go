@@ -12,7 +12,7 @@ import (
 var ErrNotFound = errors.New("store: not found")
 
 // userCols is the canonical projection used by scanUser.
-const userCols = `id, username, display_name, role, status, status_text, theme,
+const userCols = `id, username, display_name, role, status, status_text, theme, pronouns, bio,
 	(avatar IS NOT NULL) AS has_avatar, (password_hash IS NOT NULL) AS has_password,
 	is_active, is_bot, created_at, last_seen_at, identity_key`
 
@@ -21,7 +21,7 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var lastSeen sql.NullTime
 	var identityKey sql.NullString
 	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.Status,
-		&u.StatusText, &u.Theme, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.IsBot, &u.CreatedAt, &lastSeen, &identityKey)
+		&u.StatusText, &u.Theme, &u.Pronouns, &u.Bio, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.IsBot, &u.CreatedAt, &lastSeen, &identityKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -76,9 +76,9 @@ func (s *Store) SetPassword(ctx context.Context, id int64, hash string) error {
 	return s.exec(ctx, `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`, id, hash)
 }
 
-func (s *Store) UpdateProfile(ctx context.Context, id int64, displayName, statusText, theme string) error {
-	return s.exec(ctx, `UPDATE users SET display_name = $2, status_text = $3, theme = $4, updated_at = now() WHERE id = $1`,
-		id, displayName, statusText, theme)
+func (s *Store) UpdateProfile(ctx context.Context, id int64, displayName, statusText, theme, pronouns, bio string) error {
+	return s.exec(ctx, `UPDATE users SET display_name = $2, status_text = $3, theme = $4, pronouns = $5, bio = $6, updated_at = now() WHERE id = $1`,
+		id, displayName, statusText, theme, pronouns, bio)
 }
 
 func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {
@@ -193,13 +193,13 @@ func (s *Store) EmojiExists(ctx context.Context, shortcode string) (bool, error)
 	return ok, err
 }
 
-// ListPrivilegedUserIDs returns the ids of active moderators and admins. They
-// hold a read/write bypass on private (non-DM) channels even when they aren't
-// members, so realtime audiences for those channels include them — keeping the
-// realtime delivery model in step with canAccessChannel.
-func (s *Store) ListPrivilegedUserIDs(ctx context.Context) ([]int64, error) {
+// ListAdminUserIDs returns the ids of active admins. Admins hold a read/write
+// bypass on private (non-DM) channels even when they aren't members, so
+// realtime audiences for those channels include them — keeping the realtime
+// delivery model in step with canAccessChannel.
+func (s *Store) ListAdminUserIDs(ctx context.Context) ([]int64, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM users WHERE is_active AND role IN ('admin', 'moderator')`)
+		`SELECT id FROM users WHERE is_active AND role = 'admin'`)
 	if err != nil {
 		return nil, err
 	}

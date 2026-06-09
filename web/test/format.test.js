@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, replySnippet } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractPreviewableURL, extractMessagePermalinkURL, replySnippet } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 test("escapes HTML to prevent XSS", () => {
@@ -174,6 +174,63 @@ test("# without space is not a header", () => {
   assert.ok(!out.includes("<h"));
 });
 
+test("markdown table renders header + body rows", () => {
+  const out = formatMessage("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |");
+  assert.ok(out.includes('<table class="md-table">'));
+  assert.ok(out.includes("<thead><tr><th>A</th><th>B</th></tr></thead>"));
+  assert.ok(out.includes("<tbody><tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></tbody>"));
+  // No stray <br> around the block table.
+  assert.ok(!out.includes("<br>"));
+});
+
+test("table without outer pipes still parses", () => {
+  const out = formatMessage("A | B\n--- | ---\n1 | 2");
+  assert.ok(out.includes("<th>A</th><th>B</th>"));
+  assert.ok(out.includes("<td>1</td><td>2</td>"));
+});
+
+test("table column alignment from delimiter colons", () => {
+  const out = formatMessage("| L | C | R |\n| :-- | :-: | --: |\n| a | b | c |");
+  assert.ok(out.includes('<th style="text-align:left">L</th>'));
+  assert.ok(out.includes('<th style="text-align:center">C</th>'));
+  assert.ok(out.includes('<th style="text-align:right">R</th>'));
+  assert.ok(out.includes('<td style="text-align:center">b</td>'));
+});
+
+test("table cells run the inline pipeline (bold, code)", () => {
+  const out = formatMessage("| H |\n| --- |\n| **x** `y` |");
+  assert.ok(out.includes("<td><strong>x</strong> <code>y</code></td>"));
+});
+
+test("table cell content is escaped (XSS-safe)", () => {
+  const out = formatMessage("| H |\n| --- |\n| <img src=x> |");
+  assert.ok(out.includes("&lt;img src=x&gt;"));
+  assert.ok(!out.includes("<img src=x>"));
+});
+
+test("ragged body rows pad/truncate to header width", () => {
+  const out = formatMessage("| A | B |\n| --- | --- |\n| 1 |\n| x | y | z |");
+  assert.ok(out.includes("<tr><td>1</td><td></td></tr>"), "missing cell padded");
+  assert.ok(out.includes("<tr><td>x</td><td>y</td></tr>"), "extra cell dropped");
+});
+
+test("pipe line without a delimiter row is not a table", () => {
+  const out = formatMessage("a | b | c\nd | e | f");
+  assert.ok(!out.includes("<table"));
+  assert.ok(out.includes("a | b | c<br>d | e | f"));
+});
+
+test("escaped pipe stays literal inside a cell", () => {
+  const out = formatMessage("| H |\n| --- |\n| a \\| b |");
+  assert.ok(out.includes("<td>a | b</td>"));
+});
+
+test("header-only table (no body rows) renders just a head", () => {
+  const out = formatMessage("| A | B |\n| --- | --- |");
+  assert.ok(out.includes("<thead><tr><th>A</th><th>B</th></tr></thead>"));
+  assert.ok(!out.includes("<tbody>"));
+});
+
 test("a link inside escaped text keeps entities intact", () => {
   const out = formatMessage("https://x.com/?a=1&b=2");
   // & was escaped to &amp; before linking; the href should contain it.
@@ -344,7 +401,22 @@ test("extractPreviewableURL skips markdown-linked bsky/twitter URLs", () => {
 
 test("extractPreviewableURL ignores non-previewable hosts", () => {
   assert.equal(extractPreviewableURL("https://example.com/page"), null);
-  assert.equal(extractPreviewableURL("https://github.com/foo/bar"), null);
+  assert.equal(extractPreviewableURL("https://reddit.com/r/foo"), null);
+  // Tumblr is no longer an allowlisted preview host.
+  assert.equal(extractPreviewableURL("https://staff.tumblr.com/post/123"), null);
+  // Lookalike domains must not match the suffix-based hosts.
+  assert.equal(extractPreviewableURL("https://notwikipedia.org/x"), null);
+});
+
+test("extractPreviewableURL finds bare github / wikipedia URLs", () => {
+  assert.equal(
+    extractPreviewableURL("https://github.com/foo/bar"),
+    "https://github.com/foo/bar"
+  );
+  assert.equal(
+    extractPreviewableURL("see https://en.wikipedia.org/wiki/Rivendell"),
+    "https://en.wikipedia.org/wiki/Rivendell"
+  );
 });
 
 test("extractPreviewableURL returns null for empty or null input", () => {
@@ -480,4 +552,44 @@ test("parsePermalink rejects the old /m/ slash form and junk", () => {
   assert.equal(parsePermalink("#/"), null);
   assert.equal(parsePermalink(""), null);
   assert.equal(parsePermalink(null), null);
+});
+
+// extractMessagePermalinkURL
+test("extractMessagePermalinkURL finds a bare same-origin permalink", () => {
+  const r = extractMessagePermalinkURL("https://chat.example.com/#c28/m1684", "https://chat.example.com");
+  assert.deepEqual(r, { url: "https://chat.example.com/#c28/m1684", channelId: 28, messageId: 1684 });
+});
+
+test("extractMessagePermalinkURL finds permalink embedded in surrounding text", () => {
+  const r = extractMessagePermalinkURL("see https://chat.example.com/#c5/m99 for context", "https://chat.example.com");
+  assert.deepEqual(r, { url: "https://chat.example.com/#c5/m99", channelId: 5, messageId: 99 });
+});
+
+test("extractMessagePermalinkURL ignores markdown-linked permalinks", () => {
+  const r = extractMessagePermalinkURL("[link](https://chat.example.com/#c1/m2)", "https://chat.example.com");
+  assert.equal(r, null);
+});
+
+test("extractMessagePermalinkURL ignores cross-origin URLs", () => {
+  const r = extractMessagePermalinkURL("https://other.example.com/#c1/m2", "https://chat.example.com");
+  assert.equal(r, null);
+});
+
+test("extractMessagePermalinkURL ignores non-permalink same-origin URLs", () => {
+  const r = extractMessagePermalinkURL("https://chat.example.com/some/path", "https://chat.example.com");
+  assert.equal(r, null);
+});
+
+test("extractMessagePermalinkURL returns null for empty or null input", () => {
+  assert.equal(extractMessagePermalinkURL("", "https://chat.example.com"), null);
+  assert.equal(extractMessagePermalinkURL(null, "https://chat.example.com"), null);
+  assert.equal(extractMessagePermalinkURL("https://chat.example.com/#c1/m2", null), null);
+});
+
+test("extractMessagePermalinkURL returns first match when multiple permalinks present", () => {
+  const r = extractMessagePermalinkURL(
+    "https://chat.example.com/#c1/m10 and https://chat.example.com/#c2/m20",
+    "https://chat.example.com"
+  );
+  assert.deepEqual(r, { url: "https://chat.example.com/#c1/m10", channelId: 1, messageId: 10 });
 });
