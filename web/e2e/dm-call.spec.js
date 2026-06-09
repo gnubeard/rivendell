@@ -27,8 +27,9 @@ async function uiLogin(page, username) {
   await page.fill("#login-username", username);
   await page.fill("#login-password", PASSWORD);
   await page.press("#login-password", "Enter");
-  // Logged in when the sidebar channel list renders.
-  await expect(page.locator("#channel-list")).toBeVisible();
+  // Logged in when the sidebar user profile renders (always non-empty, unlike
+  // #channel-list which has zero height on a fresh database with no channels).
+  await expect(page.locator("#me-name")).toBeVisible();
 }
 
 // openDM creates (or reopens) the DM with `otherUsername` through the public

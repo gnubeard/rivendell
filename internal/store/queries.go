@@ -223,6 +223,16 @@ func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountChannels returns the number of live (non-archived) channels, DMs
+// included. Used by first-boot bootstrap to decide whether to seed a default
+// channel on a fresh instance.
+func (s *Store) CountChannels(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM channels WHERE archived_at IS NULL`).Scan(&n)
+	return n, err
+}
+
 // Stats holds at-a-glance server metrics for the admin panel.
 type Stats struct {
 	TotalUsers      int `json:"total_users"`

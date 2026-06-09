@@ -185,7 +185,10 @@ Diagnostics: `RIVENDELL_DEBUG_TELEMETRY` (bool, default false) enables the WebRT
 debug-telemetry endpoint + advertises capture to clients (see Feature notes).
 See `.env.example`. On an empty install the server creates a first admin
 (`RIVENDELL_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
-this fires only when there are zero admins.
+this fires only when there are zero admins. The same bootstrap seeds a default
+public `#general` channel, but only when the instance has **zero** channels — so
+it never resurrects `#general` on an instance whose operator has since renamed or
+removed it (`TestBootstrap*` in `cmd/server`).
 
 ## Deployment notes (behind nginx + TLS)
 

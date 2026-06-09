@@ -156,6 +156,20 @@ func maybeBootstrap(ctx context.Context, cfg config.Config, st *store.Store) {
 	log.Printf("bootstrap: open this one-time link to set the password (expires %s):",
 		expires.Format(time.RFC1123))
 	log.Printf("bootstrap:   %s", url)
+
+	// Seed a default public channel so a brand-new instance isn't a blank
+	// sidebar (and so the first arrival has somewhere to talk). Only on a truly
+	// empty instance — if any channel already exists, leave the room layout
+	// alone. Best-effort: a failure here never blocks startup.
+	if n, err := st.CountChannels(ctx); err != nil {
+		log.Printf("bootstrap: channel count check failed: %v", err)
+	} else if n == 0 {
+		if ch, err := st.CreateChannel(ctx, "general", "", false, u.ID); err != nil {
+			log.Printf("bootstrap: could not create default #general channel: %v", err)
+		} else {
+			log.Printf("bootstrap: created default channel #%s (id %d)", ch.Name, ch.ID)
+		}
+	}
 }
 
 // mintSetPasswordLink creates a single-use set_password magic link for a user

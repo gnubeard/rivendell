@@ -19,8 +19,8 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const BASE = process.env.E2E_BASE_URL || "http://localhost:18080";
-export const ADMIN = "e2e-admin";
-export const USER2 = "e2e-user2";
+export const ADMIN = "e2e_admin";
+export const USER2 = "e2e_user2";
 export const PASSWORD = "rivendell-e2e-pw"; // ≥10 chars (server minimum)
 
 const STATE_FILE = path.join(here, ".e2e-state.json");
