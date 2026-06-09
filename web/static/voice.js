@@ -27,6 +27,7 @@ let sendFn = null;            // (obj) -> void — socket.send wrapper
 let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMuted}) -> void
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedia failure to the UI
+let callHeartbeatTimer = null;
 
 // dbg is the optional WebRTC telemetry hook (see rtcdebug.js). null unless the
 // operator/client enabled debug telemetry, so production and the unit tests run
@@ -188,6 +189,33 @@ export async function fetchIceServers() {
   return iceServers;
 }
 
+// startCallHeartbeat sends a no-op WS frame every 45 s while a call is active.
+// The server ignores the "heartbeat" type; the frame's arrival causes the Go
+// readPump to loop and reset its 90 s read-deadline, preventing a spurious
+// timeout disconnect on a call where no chat messages are sent.
+function startCallHeartbeat() {
+  stopCallHeartbeat();
+  callHeartbeatTimer = setInterval(() => {
+    if (activeChannelId !== null && sendFn) sendFn({ type: "heartbeat" });
+  }, 45000);
+}
+function stopCallHeartbeat() {
+  if (callHeartbeatTimer !== null) {
+    clearInterval(callHeartbeatTimer);
+    callHeartbeatTimer = null;
+  }
+}
+
+// reconcilePeers closes any open RTCPeerConnection whose remote user_id is no
+// longer in activeUserIds. Called by app.js after a WS reconnect to drop stale
+// peers that left while our socket was down (and whose voice.state we missed).
+export function reconcilePeers(activeUserIds) {
+  const ids = new Set(activeUserIds);
+  for (const userId of [...peerConns.keys()]) {
+    if (!ids.has(userId)) closePeer(userId);
+  }
+}
+
 // joinVoiceChannel acquires the microphone (and optionally the camera), informs
 // the server (voice.join), and waits for voice.state updates to establish peer
 // connections. Pass { enableVideo: true } to start with camera on; camera failure
@@ -244,6 +272,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   // that to video_muted:false here or their video tile would never appear; a
   // mic-muted caller (mute persists across calls) likewise announces it.
   sendFn({ type: "voice.mute", channel_id: channelId, muted, video_muted: !cameraEnabled });
+  startCallHeartbeat();
   notifyState();
 
   // Greet AFTER the mic is live and the AEC has settled — this lands the tone in
@@ -255,6 +284,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
 
 export async function leaveVoiceChannel() {
   if (activeChannelId === null) return;
+  stopCallHeartbeat();
   const chId = activeChannelId;
   activeChannelId = null;
   participants = [];
@@ -279,6 +309,7 @@ export async function leaveVoiceChannel() {
 // server-side, so re-sending voice.leave would be redundant.
 export async function endCallLocally() {
   if (activeChannelId === null) return;
+  stopCallHeartbeat();
   activeChannelId = null;
   participants = [];
   notifyState();

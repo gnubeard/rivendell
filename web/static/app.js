@@ -68,6 +68,7 @@ import {
   pttKeyLabel,
   micErrorMessage,
   registerDebug,
+  reconcilePeers,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
 
@@ -881,7 +882,12 @@ async function resync() {
     if (isInCall()) {
       try {
         const pts = await api.voiceParticipants(voiceChannelId());
-        if (!pts.some((p) => p.user_id === state.me.id)) endCallLocally();
+        if (!pts.some((p) => p.user_id === state.me.id)) {
+          endCallLocally();
+        } else {
+          // Close any peer connection whose user left while our WS was down.
+          reconcilePeers(pts.map((p) => p.user_id));
+        }
       } catch { /* non-fatal; if the check fails we'll eventually clean up via ICE */ }
     }
   } catch (ex) {

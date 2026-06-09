@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.3.108] - 2026-06-09
+
+### Fixed
+- Voice/video calls no longer drop at ~90 seconds: the client now sends a keepalive heartbeat every 45 s during a call so the WebSocket read-deadline is reset, and a WS reconnect mid-call now closes stale peer connections for any participant who left while the socket was down
+
 ## [1.3.106] - 2026-06-09
 
 ### Added
