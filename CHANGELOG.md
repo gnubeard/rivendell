@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.3.103] - 2026-06-09
+
+### Fixed
+- When someone signs up via an invitation, users already online now see the new account appear immediately — in the member list and as the author of their first message — instead of "unknown user" until the next refresh. The server now broadcasts the new user on signup, like it already did for profile/role changes
+
 ## [1.3.101] - 2026-06-09
 
 ### Removed

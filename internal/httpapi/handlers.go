@@ -1796,6 +1796,10 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
+	// Tell everyone already online about the new account so their rosters and
+	// message-author lookups resolve without a refresh. state.js's user.update
+	// case upserts a previously-unknown id, so this is an insert for them.
+	s.broadcast("user.update", u, nil)
 	writeJSON(w, http.StatusCreated, u)
 }
 

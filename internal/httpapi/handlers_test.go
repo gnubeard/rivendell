@@ -369,6 +369,53 @@ func TestInvitationSignupFlow(t *testing.T) {
 	}
 }
 
+// TestSignupBroadcastsNewUser guards that a successful invitation signup
+// broadcasts a user.update carrying the new account, so clients already online
+// learn of the new user without a refresh. Without it, their rosters and
+// message-author lookups fall back to "unknown user" until the next resync.
+func TestSignupBroadcastsNewUser(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	// An admin is already online over WebSocket when the new user signs up.
+	adminConn, adminR := wsDial(t, ts, adminC)
+	defer adminConn.Close()
+
+	_, token, _ := adminCreateInvitation(t, ts, adminC)
+
+	userC := newClient(t)
+	resp, body := doJSON(t, userC, "POST", ts.URL+"/api/auth/signup", map[string]string{
+		"token": token, "username": "frodo", "password": "ringbearer-pw",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("signup: %d %s", resp.StatusCode, body)
+	}
+
+	// The already-online admin must receive a user.update carrying the new user.
+	_ = adminConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	defer adminConn.SetReadDeadline(time.Time{})
+	for {
+		op, payload, err := wsReadFrame(adminR)
+		if err != nil {
+			t.Fatalf("waiting for user.update: %v", err)
+		}
+		if op != 0x1 && op != 0x2 { // skip control frames
+			continue
+		}
+		var ev struct {
+			Type    string     `json:"type"`
+			Payload store.User `json:"payload"`
+		}
+		if json.Unmarshal(payload, &ev) != nil || ev.Type != "user.update" {
+			continue
+		}
+		if ev.Payload.Username != "frodo" {
+			t.Fatalf("expected user.update for frodo, got %q", ev.Payload.Username)
+		}
+		break
+	}
+}
+
 // TestInvitationRevoke checks an admin can revoke an unused invitation, after
 // which the link no longer validates or redeems.
 func TestInvitationRevoke(t *testing.T) {
