@@ -6,6 +6,11 @@
 // Peer connection role: the participant with the LOWER numeric user_id is the
 // offerer. This deterministic rule avoids signaling glare when both sides join
 // at roughly the same time, without requiring a separate negotiation step.
+// Layered on top is the standard Perfect Negotiation pattern for everything
+// after initial setup (renegotiation, ICE restarts): the lower user_id is the
+// IMPOLITE peer (its offer wins a collision), the higher user_id is the POLITE
+// peer (it implicitly rolls back its own colliding offer and answers). See
+// politeFor / onOffer / onnegotiationneeded.
 //
 // Topology: full P2P mesh (just two nodes in Phase 2). The server never touches
 // media; it only relays offer/answer/ICE via the existing WS hub.
@@ -124,6 +129,18 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 // mode. The tiles render whatever aspect arrives (object-fit, see style.css),
 // so a 4:3 — or even a portrait — frame is fine.
 const VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } };
+
+// Per-sender outgoing video bitrate ceiling (RTCRtpSender.setParameters
+// maxBitrate). This is a STABILITY cap for variable networks — it bounds what a
+// single video sender may consume so a burst of motion can't saturate a phone's
+// uplink and starve the audio/ICE path (the browser's REMB/TWCC congestion
+// control still adapts freely *below* the ceiling). History note: an earlier
+// live setParameters cap was tried as a fix for the FF-Android encoder freeze
+// and removed when it (correctly) didn't help — that freeze is an upstream
+// encoder bug (see docs/video.md). This cap is not a freeze cure and must not
+// be re-litigated as one; it's bandwidth hygiene for the mesh.
+// 800 kbps comfortably carries the ~360p-class video the mesh is sized for.
+const VIDEO_MAX_BITRATE_BPS = 800000;
 
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
@@ -663,7 +680,14 @@ export async function handleVoiceSignal(evt) {
 //     is truly gone but the server hasn't yet pruned it from voice.state).
 //   - Restarts are bounded (MAX_ICE_RESTARTS); past that, or once the peer has
 //     left the roster, we give up and close the peer.
-const ICE_DISCONNECT_GRACE_MS = 2000;   // "disconnected" may self-heal; wait before restarting
+// "disconnected" may self-heal; wait before restarting. 5 s, not the original
+// 2 s: now that iceConnectionState also feeds the reconnect plan (below), we see
+// "disconnected" *earlier* — Firefox in particular reports it on the ICE state
+// well before connectionState moves — and transient blips (Wi-Fi roam, brief
+// relay hiccup, phone radio handover) routinely take 2–4 s to self-heal. A 2 s
+// grace turned those into restart churn; 5 s rides them out while still
+// reacting faster end-to-end than the old late-detection + 2 s ever did.
+const ICE_DISCONNECT_GRACE_MS = 5000;
 const ICE_RESTART_RETRY_MS = 4000;      // re-check cadence after a restart attempt
 const ANSWERER_FAIL_TIMEOUT_MS = 20000; // answerer drops a peer stuck failed this long
 const MAX_ICE_RESTARTS = 4;             // give up (close peer) after this many attempts
@@ -705,6 +729,30 @@ export function restartOutcome(connectionState, restarts, maxRestarts, inRoster)
 
 function isOfferer(remoteUserId) { return myUserId < remoteUserId; }
 
+// politeFor decides which side is the "polite" peer under Perfect Negotiation
+// (https://w3c.github.io/webrtc-pc/#perfect-negotiation-example): the HIGHER
+// user_id. This is the same deterministic rule as the offerer election, seen
+// from the other end — the lower user_id stays the initial offerer and the
+// impolite peer (it ignores colliding offers), the higher user_id is the
+// answerer and the polite peer (it rolls back its own offer and answers).
+// Pure; exported for unit testing.
+export function politeFor(myId, remoteId) { return myId > remoteId; }
+
+// effectiveConnectionState folds connectionState and iceConnectionState into the
+// single worst-of state the reconnect plan should act on. Rationale: the two
+// state machines disagree in exactly the window that matters — Firefox moves
+// iceConnectionState to "disconnected"/"failed" well before connectionState
+// follows (sometimes connectionState never reaches "failed" at all), so a plan
+// keyed on connectionState alone reacts late or not at all. "closed" is read
+// only from connectionState (iceConnectionState "closed" is deprecated and
+// unreliable). Pure; exported for unit testing.
+export function effectiveConnectionState(connectionState, iceConnectionState) {
+  if (connectionState === "closed") return "closed";
+  if (connectionState === "failed" || iceConnectionState === "failed") return "failed";
+  if (connectionState === "disconnected" || iceConnectionState === "disconnected") return "disconnected";
+  return connectionState;
+}
+
 // armTimer schedules fn after delayMs, unless a reconnect timer is already in
 // flight for this peer (a recovery/retry cycle owns the single per-peer slot).
 function armTimer(meta, delayMs, fn) {
@@ -716,11 +764,15 @@ function clearReconnectTimer(meta) {
   if (meta && meta.timer) { clearTimeout(meta.timer); meta.timer = null; }
 }
 
-// applyReconnectPlan runs the reconnectPlan for a peer's current connectionState.
+// applyReconnectPlan runs the reconnectPlan for a peer's current state. Both
+// onconnectionstatechange and oniceconnectionstatechange funnel here; the plan
+// is keyed on the worst-of effectiveConnectionState so whichever state machine
+// notices trouble first (Firefox: the ICE one) drives the reaction.
 function applyReconnectPlan(remoteUserId, pc) {
   const meta = peerMeta.get(remoteUserId);
   if (!meta) return;
-  const plan = reconnectPlan(pc.connectionState, isOfferer(remoteUserId));
+  const state = effectiveConnectionState(pc.connectionState, pc.iceConnectionState);
+  const plan = reconnectPlan(state, isOfferer(remoteUserId));
   switch (plan.action) {
   case "clear":
     clearReconnectTimer(meta);
@@ -732,7 +784,9 @@ function applyReconnectPlan(remoteUserId, pc) {
   case "drop":
     armTimer(meta, plan.delayMs, () => {
       const p = peerConns.get(remoteUserId);
-      if (p && (p.connectionState === "failed" || p.connectionState === "disconnected")) {
+      if (!p) return;
+      const st = effectiveConnectionState(p.connectionState, p.iceConnectionState);
+      if (st === "failed" || st === "disconnected") {
         closePeer(remoteUserId);
         if (activeChannelId !== null) sendFn({ type: "voice.join", channel_id: activeChannelId });
       }
@@ -750,7 +804,8 @@ async function doIceRestart(remoteUserId) {
   const meta = peerMeta.get(remoteUserId);
   if (!pc || !meta || activeChannelId === null) return;
   const inRoster = participants.some(p => p.user_id === remoteUserId);
-  const outcome = restartOutcome(pc.connectionState, meta.restarts, MAX_ICE_RESTARTS, inRoster);
+  const state = effectiveConnectionState(pc.connectionState, pc.iceConnectionState);
+  const outcome = restartOutcome(state, meta.restarts, MAX_ICE_RESTARTS, inRoster);
   if (outcome === "recovered") { meta.restarts = 0; return; }
   if (outcome === "gone") { closePeer(remoteUserId); return; }
   if (outcome === "give-up") {
@@ -767,10 +822,15 @@ async function doIceRestart(remoteUserId) {
   if (isOfferer(remoteUserId)) {
     dbgEvent(remoteUserId, "ice-restart-attempt", { attempt: meta.restarts, conn: pc.connectionState });
     try {
+      // makingOffer marks the Perfect Negotiation collision window for this
+      // manual (non-negotiationneeded) offer too, so a crossing remote offer is
+      // correctly ignored by us (impolite side) instead of mis-answered.
+      meta.makingOffer = true;
       const offer = await pc.createOffer({ iceRestart: true });
       await pc.setLocalDescription(offer);
       sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: offer.sdp });
     } catch { /* re-check below will retry */ }
+    finally { meta.makingOffer = false; }
   }
   armTimer(meta, ICE_RESTART_RETRY_MS, () => doIceRestart(remoteUserId));
 }
@@ -849,6 +909,44 @@ function preferVideoCodec(pc) {
   }
 }
 
+// withVideoBitrateCap returns a copy of an RTCRtpSendParameters with maxBitrate
+// set on every encoding, or null when there is nothing to do — params missing,
+// encodings absent/empty (the array is only populated once negotiation has
+// materialized the sender, and the spec forbids *adding* encodings via
+// setParameters), or every encoding already carries the cap. Returning null
+// lets the caller skip a pointless setParameters round-trip; the cap is then
+// re-attempted at the next call site (post-negotiation / on connected). Never
+// mutates its input. Pure; exported for unit testing.
+export function withVideoBitrateCap(params, maxBitrate) {
+  if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return null;
+  let changed = false;
+  const encodings = params.encodings.map(e => {
+    if (e && e.maxBitrate === maxBitrate) return e;
+    changed = true;
+    return { ...e, maxBitrate };
+  });
+  if (!changed) return null;
+  return { ...params, encodings };
+}
+
+// applyVideoBitrateCaps caps every video sender on a peer connection at
+// VIDEO_MAX_BITRATE_BPS (see that constant for the rationale). Idempotent and
+// best-effort: pre-negotiation senders report empty encodings and are skipped
+// (withVideoBitrateCap returns null), so this is called wherever encodings may
+// have just materialized — after each completed offer/answer exchange and on
+// the connection reaching "connected". A setParameters failure never touches
+// the call.
+function applyVideoBitrateCaps(pc) {
+  for (const sender of pc.getSenders()) {
+    if (!sender.track || sender.track.kind !== "video") continue;
+    let params;
+    try { params = sender.getParameters(); } catch { continue; }
+    const capped = withVideoBitrateCap(params, VIDEO_MAX_BITRATE_BPS);
+    if (!capped) continue;
+    try { Promise.resolve(sender.setParameters(capped)).catch(() => {}); } catch { /* best-effort */ }
+  }
+}
+
 async function onVoiceState(payload) {
   if (payload.channel_id !== activeChannelId) return;
   participants = payload.participants || [];
@@ -863,12 +961,20 @@ async function onVoiceState(payload) {
     if (p.user_id === myUserId) continue;
     if (!peerConns.has(p.user_id)) {
       const pc = createPC(p.user_id);
-      // Lower user_id is the offerer.
+      // Lower user_id is the offerer. The explicit offer here (rather than
+      // waiting for onnegotiationneeded) keeps the initial connection setup
+      // deterministic and one-round; makingOffer marks the Perfect Negotiation
+      // collision window so a crossing offer from the peer is handled correctly.
       if (myUserId < p.user_id) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sendFn({ type: "voice.offer", to_user_id: p.user_id, channel_id: activeChannelId, sdp: offer.sdp });
-        dbgEvent(p.user_id, "offer-sent", { reason: "join" });
+        const meta = peerMeta.get(p.user_id);
+        try {
+          if (meta) meta.makingOffer = true;
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sendFn({ type: "voice.offer", to_user_id: p.user_id, channel_id: activeChannelId, sdp: offer.sdp });
+          dbgEvent(p.user_id, "offer-sent", { reason: "join" });
+        } catch { /* peer setup failure; reconnect/ICE paths will recover or close */ }
+        finally { if (meta) meta.makingOffer = false; }
       }
     }
   }
@@ -893,21 +999,30 @@ async function onOffer(payload) {
   const fromId = payload.from_user_id;
   let pc = peerConns.get(fromId);
   if (!pc) pc = createPC(fromId);
+  const meta = peerMeta.get(fromId);
   dbgEvent(fromId, "offer-recv", {});
-  // If we already have a local offer (glare), the lower ID wins: if we're the
-  // lower ID we're the offerer — ignore their offer. Otherwise rollback.
-  if (pc.signalingState === "have-local-offer") {
-    if (myUserId < fromId) { dbgEvent(fromId, "glare-ignore", {}); return; } // we're the offerer, ignore
-    // We're the answerer; rollback our incorrect offer
-    dbgEvent(fromId, "glare-rollback", {});
-    try { await pc.setLocalDescription({ type: "rollback" }); } catch {}
-  }
+  // Perfect Negotiation (w3c webrtc-pc §perfect-negotiation-example), with the
+  // deterministic role mapping documented at the top of the file: the lower
+  // user_id is the impolite peer, the higher is polite (politeFor). A collision
+  // is "we're mid-offer ourselves" — either the offer is still being created
+  // (makingOffer, signaling still stable) or it's already local
+  // (have-local-offer). The impolite peer IGNORES the colliding remote offer
+  // (its own offer wins; the polite peer will answer it). The polite peer
+  // accepts it: setRemoteDescription(offer) in have-local-offer performs an
+  // implicit rollback of our own offer first (supported by all evergreen
+  // engines; this replaced the old explicit {type:"rollback"} dance, which
+  // couldn't cover the makingOffer-but-still-stable half of the window).
+  const polite = politeFor(myUserId, fromId);
+  const collision = (meta && meta.makingOffer) || pc.signalingState !== "stable";
+  if (meta) meta.ignoreOffer = !polite && collision;
+  if (meta && meta.ignoreOffer) { dbgEvent(fromId, "glare-ignore", {}); return; }
+  if (collision) dbgEvent(fromId, "glare-rollback", {});
   await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
   preferVideoCodec(pc); // VP8-first on transceivers materialized by the remote offer
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: answer.sdp });
+  await pc.setLocalDescription(); // no-arg: implicit createAnswer
+  sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
+  applyVideoBitrateCaps(pc); // encodings exist once the answer is local
   dbgEvent(fromId, "answer-sent", {});
 }
 
@@ -917,6 +1032,7 @@ async function onAnswer(payload) {
   if (!pc || pc.signalingState !== "have-local-offer") return;
   await pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
+  applyVideoBitrateCaps(pc); // offer/answer complete — sender encodings are live
   dbgEvent(fromId, "answer-recv", {});
 }
 
@@ -933,13 +1049,20 @@ async function onICE(payload) {
     q.push(payload.candidate);
     return;
   }
+  // Errors are swallowed deliberately: under Perfect Negotiation, candidates
+  // belonging to an offer we just IGNORED (meta.ignoreOffer) are expected to
+  // fail addIceCandidate — they describe a description we never applied.
   try { await pc.addIceCandidate(payload.candidate); } catch {}
 }
 
 function createPC(remoteUserId) {
   const pc = new RTCPeerConnection({ iceServers });
   peerConns.set(remoteUserId, pc);
-  peerMeta.set(remoteUserId, { restarts: 0, timer: null });
+  // Per-peer bookkeeping: reconnect (restarts/timer) + Perfect Negotiation
+  // (makingOffer marks the local-offer-in-flight window; ignoreOffer records
+  // that we dropped the peer's colliding offer, so its trailing ICE candidates
+  // are expected to fail).
+  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false });
   if (dbg) { try { dbg.attachPeer(remoteUserId, pc); } catch { /* no-op */ } }
 
   if (localStream) {
@@ -997,41 +1120,47 @@ function createPC(remoteUserId) {
     }
   };
 
-  // Mid-call camera enable: addTrack fires onnegotiationneeded and we re-offer.
-  // EITHER peer may need to renegotiate — whoever adds the track must be the one
-  // to offer, because a fresh offer carries only the offerer's own m-lines (the
-  // offerer can't add an m-line on the answerer's behalf). So we do NOT gate this
-  // on isOfferer: the deterministic offerer rule governs the *initial* glare, not
-  // renegotiation. Simultaneous toggles are resolved by the lower-id-wins rollback
-  // already in onOffer. (Gating this on isOfferer was a bug: when the higher-id
-  // answerer enabled its camera mid-call, its track was never negotiated and the
-  // peer received no video — visible as `in fps=undefined` while `out fps` runs.)
+  // Renegotiation (mid-call camera enable, ICE restart fallback, future screen
+  // share): addTrack fires onnegotiationneeded and we offer. EITHER peer may
+  // need to renegotiate — whoever adds the track must be the one to offer,
+  // because a fresh offer carries only the offerer's own m-lines. So this is
+  // NOT gated on isOfferer: the deterministic offerer rule governs the
+  // *initial* setup only; simultaneous renegotiations are resolved by Perfect
+  // Negotiation in onOffer (impolite lower-id offer wins, polite higher-id
+  // rolls back implicitly and answers). makingOffer brackets the whole
+  // create-and-set window so a remote offer crossing it is detected as a
+  // collision even before our offer reaches have-local-offer.
   pc.onnegotiationneeded = async () => {
     if (activeChannelId === null) return;
-    // Guard: don't re-offer while already mid-negotiation. The event can fire
-    // at the wrong time (e.g. during a parallel ICE restart); skipping here is
-    // safe — the browser will re-fire once we're back to stable if still needed.
+    // Per spec the event only fires in "stable"; the guard stays because older
+    // engines have misfired it (e.g. during a parallel ICE restart). Skipping
+    // is safe — the browser re-fires once back in stable if still needed.
     if (pc.signalingState !== "stable") return;
+    const meta = peerMeta.get(remoteUserId);
     try {
-      preferVideoCodec(pc); // VP8-first on the newly-added (mid-call camera) video track
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: offer.sdp });
+      if (meta) meta.makingOffer = true;
+      preferVideoCodec(pc); // VP8-first on the newly-added video track
+      await pc.setLocalDescription(); // no-arg: implicit createOffer
+      sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
       dbgEvent(remoteUserId, "offer-sent", { reason: "reneg" });
     } catch {}
+    finally { if (meta) meta.makingOffer = false; }
   };
 
-  // ICE connection state is logged for diagnostics only (no behavior change yet —
-  // Phase 2 will feed it into the reconnect plan). A consent-freshness / NAT
-  // timeout often surfaces here as disconnected→failed before connectionState moves.
+  // BOTH state machines feed the reconnect plan via the worst-of
+  // effectiveConnectionState. The ICE one matters because Firefox reports
+  // disconnected/failed there first (sometimes connectionState never reaches
+  // "failed" at all) — keying on connectionState alone reacted late or never.
   pc.oniceconnectionstatechange = () => {
     dbgEvent(remoteUserId, "iceconnectionstatechange", { ice: pc.iceConnectionState });
+    applyReconnectPlan(remoteUserId, pc);
   };
 
   // Reconnect rather than tear down on trouble: an ICE restart re-negotiates
   // transport on this same connection. See the reconnection section above.
   pc.onconnectionstatechange = () => {
     dbgEvent(remoteUserId, "connectionstatechange", { conn: pc.connectionState });
+    if (pc.connectionState === "connected") applyVideoBitrateCaps(pc); // encodings are definitely live now
     applyReconnectPlan(remoteUserId, pc);
   };
 
@@ -1048,6 +1177,8 @@ function closePeer(userId) {
   if (pc) {
     pc.onicecandidate = null;
     pc.ontrack = null;
+    pc.onnegotiationneeded = null;
+    pc.oniceconnectionstatechange = null;
     pc.onconnectionstatechange = null;
     try { pc.close(); } catch {}
     peerConns.delete(userId);

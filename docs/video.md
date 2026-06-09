@@ -241,9 +241,13 @@ the root cause (#2) was understood as an upstream bug.
 - **Codec:** VP8-first (`orderVideoCodecsVP8First`) as a safe cross-browser default;
   it does **not** fix the freeze (#2).
 - **Render:** `object-fit` on the tiles absorbs any aspect ratio.
-- **Bandwidth:** shaped by `contentHint = "motion"` — not by a capture-resolution or
-  sender-bitrate cap. (A live `setParameters` bitrate cap was a dead end and was
-  removed.)
+- **Bandwidth:** `contentHint = "motion"` biases the encoder toward frame rate, and
+  every video sender carries a `setParameters` `maxBitrate` ceiling
+  (`VIDEO_MAX_BITRATE_BPS`, 800 kbps) as a stability cap — it bounds what one sender
+  can take from a phone's uplink under variable network conditions; REMB/TWCC still
+  adapts freely below it. (An earlier live bitrate cap was tried *as a fix for the
+  FF-Android encoder freeze* and removed when it correctly didn't help — the cap is
+  bandwidth hygiene, not a freeze cure; don't re-litigate it as one.)
 
 ### Commit trail (so the reasoning isn't lost)
 

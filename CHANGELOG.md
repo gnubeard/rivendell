@@ -5,6 +5,14 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+### Changed
+- Call signaling now uses the standard WebRTC Perfect Negotiation pattern (lower user_id = impolite, higher = polite), making simultaneous renegotiations — both parties toggling cameras at once, a camera toggle crossing an ICE restart — converge reliably instead of depending on lucky timing
+- Call reconnection now reacts to ICE-level connection trouble as well, which Firefox reports earlier (and sometimes exclusively) — dropped connections are detected and repaired sooner; the grace period before acting on a transient "disconnected" was raised from 2 s to 5 s so brief blips (Wi-Fi roam, radio handover) self-heal instead of triggering restart churn
+- Outgoing call video is now capped at 800 kbps per recipient, so a burst of motion can't saturate a phone's uplink and degrade the call's audio or stability
+
+### Added
+- End-to-end WebRTC test suite (`make test-e2e`, Playwright, dev-only): two real browsers exercise the DM call happy path, mid-call camera renegotiation, simultaneous-camera glare, and both-parties hang-up against a real server
+
 ## [1.3.108] - 2026-06-09
 
 ### Fixed

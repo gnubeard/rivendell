@@ -585,3 +585,53 @@ test("orderVideoCodecsVP8First tolerates junk input", () => {
   assert.equal(out[0].mimeType, "video/VP8");
   assert.equal(out.length, 2);
 });
+
+// --- Phase 2 hardening: Perfect Negotiation role + effective state + bitrate cap
+
+test("politeFor: the higher user_id is the polite peer", () => {
+  assert.equal(voice.politeFor(1, 2), false); // lower id: impolite (initial offerer)
+  assert.equal(voice.politeFor(2, 1), true);  // higher id: polite (answerer)
+  // exactly one side of any pair is polite
+  assert.notEqual(voice.politeFor(7, 12), voice.politeFor(12, 7));
+});
+
+test("effectiveConnectionState: ICE trouble dominates a lagging connectionState", () => {
+  // Firefox case: ICE reports failed/disconnected first (or exclusively).
+  assert.equal(voice.effectiveConnectionState("connected", "failed"), "failed");
+  assert.equal(voice.effectiveConnectionState("connected", "disconnected"), "disconnected");
+  assert.equal(voice.effectiveConnectionState("connecting", "failed"), "failed");
+});
+
+test("effectiveConnectionState: failed outranks disconnected; closed outranks everything", () => {
+  assert.equal(voice.effectiveConnectionState("disconnected", "failed"), "failed");
+  assert.equal(voice.effectiveConnectionState("failed", "disconnected"), "failed");
+  // closed is read from connectionState only (ICE "closed" is deprecated/unreliable)
+  assert.equal(voice.effectiveConnectionState("closed", "failed"), "closed");
+  assert.equal(voice.effectiveConnectionState("connected", "closed"), "connected");
+});
+
+test("effectiveConnectionState: healthy states pass through connectionState", () => {
+  assert.equal(voice.effectiveConnectionState("connected", "completed"), "connected");
+  assert.equal(voice.effectiveConnectionState("connected", "connected"), "connected");
+  assert.equal(voice.effectiveConnectionState("new", "checking"), "new");
+  assert.equal(voice.effectiveConnectionState("connecting", "checking"), "connecting");
+});
+
+test("withVideoBitrateCap: caps every encoding without mutating the input", () => {
+  const params = { transactionId: "t1", encodings: [{ active: true }, { maxBitrate: 250000 }] };
+  const out = voice.withVideoBitrateCap(params, 800000);
+  assert.deepEqual(out.encodings.map(e => e.maxBitrate), [800000, 800000]);
+  assert.equal(out.encodings[0].active, true);            // other fields preserved
+  assert.equal(out.transactionId, "t1");                  // top-level fields preserved
+  assert.equal(params.encodings[0].maxBitrate, undefined); // input untouched
+  assert.equal(params.encodings[1].maxBitrate, 250000);
+});
+
+test("withVideoBitrateCap: returns null when there is nothing to do", () => {
+  // pre-negotiation senders report no encodings — the spec forbids adding them
+  assert.equal(voice.withVideoBitrateCap({ encodings: [] }, 800000), null);
+  assert.equal(voice.withVideoBitrateCap({}, 800000), null);
+  assert.equal(voice.withVideoBitrateCap(null, 800000), null);
+  // already capped everywhere -> no-op signal (skip the setParameters round-trip)
+  assert.equal(voice.withVideoBitrateCap({ encodings: [{ maxBitrate: 800000 }] }, 800000), null);
+});

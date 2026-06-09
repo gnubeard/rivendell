@@ -5,6 +5,7 @@
 RIVENDELL_ADDR            ?= :8080
 RIVENDELL_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable
 TEST_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat_test?sslmode=disable
+E2E_DATABASE_URL     ?= postgres://chat:chat_dev_pw@localhost:5432/chat_e2e?sslmode=disable
 RIVENDELL_WEB_DIR         ?= ./web
 RIVENDELL_PUBLIC_URL      ?= http://localhost:8080
 IMAGE                ?= rivendell:latest
@@ -15,11 +16,11 @@ GOFLAGS_BUILD        := -trimpath -ldflags "-s -w"
 
 export GOFLAGS := -mod=mod
 
-.PHONY: help build run migrate create-admin podman-create-admin test test-go test-web vet fmt tidy \
+.PHONY: help build run migrate create-admin podman-create-admin test test-go test-web test-e2e vet fmt tidy \
         docker-build docker-run podman-build podman-test clean
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 build: ## Compile the server binary into ./bin
@@ -55,6 +56,11 @@ test-go: ## Run Go tests (integration tests use TEST_DATABASE_URL)
 
 test-web: ## Run frontend unit tests (Node built-in test runner)
 	cd web && node --test test/*.test.js
+
+test-e2e: build ## Playwright WebRTC e2e (needs a DISPOSABLE chat_e2e db + ~1.5 GB browser download on first run)
+	cd web && npm install
+	cd web && npx playwright install --with-deps chromium
+	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) npx playwright test
 
 vet: ## go vet
 	go vet ./...

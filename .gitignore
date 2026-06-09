@@ -9,10 +9,15 @@ rivendell
 # sensitive credentials
 .creds
 
-# Node (used only as the frontend test runner — no deps, no package manifest)
+# Node (frontend test runner + dev-only Playwright e2e tooling)
 node_modules/
-package.json
-package-lock.json
+web/package-lock.json
+
+# Playwright e2e artifacts (suite under web/e2e)
+web/test-results/
+web/playwright-report/
+web/e2e/.e2e-state.json
+web/e2e/server.log
 
 # OS / editor cruft
 .DS_Store
