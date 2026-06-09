@@ -846,6 +846,15 @@ async function onVoiceState(payload) {
   for (const userId of [...peerConns.keys()]) {
     if (!remoteIds.has(userId)) closePeer(userId);
   }
+
+  // An empty roster means the server wiped the channel (endDMVoiceCall /
+  // VoiceClear). Treat it as a server-side teardown: end locally without
+  // re-sending voice.leave (the server already removed us). This is the
+  // fallback for when voice.end was lost in transit (e.g. a WS drop between
+  // the targeted SendToUser and the client reconnecting).
+  if (participants.length === 0 && activeChannelId !== null) {
+    endCallLocally();
+  }
 }
 
 async function onOffer(payload) {

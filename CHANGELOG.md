@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.3.105] - 2026-06-09
+
+### Fixed
+- DM video call UI and camera now close promptly when the other party hangs up, instead of remaining open with a frozen frame until ICE times out (~30 s). The server now broadcasts an empty `voice.state` alongside `voice.end` as a fallback, the client treats an empty roster as a server-side teardown, and reconnect-resync verifies the call is still live on the server
+
 ## [1.3.104] - 2026-06-09
 
 ### Added

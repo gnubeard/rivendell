@@ -874,6 +874,16 @@ async function resync() {
     // A reconnect is a fresh connection (server defaults it to active); re-signal
     // idle over the new socket so the dot stays correct.
     if (isIdle) socket && socket.send({ type: "idle", idle: true });
+    // If we were in a call when the WS dropped, verify the server still has us
+    // listed. voice.end is a targeted send — it's lost if our WS was dead when
+    // it was sent. Checking here closes that gap: if the server ended the call
+    // while we were offline we clean up now rather than waiting for ICE to fail.
+    if (isInCall()) {
+      try {
+        const pts = await api.voiceParticipants(voiceChannelId());
+        if (!pts.some((p) => p.user_id === state.me.id)) endCallLocally();
+      } catch { /* non-fatal; if the check fails we'll eventually clean up via ICE */ }
+    }
   } catch (ex) {
     console.warn("rivendell: resync failed:", ex && ex.message);
   }

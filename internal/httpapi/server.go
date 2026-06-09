@@ -466,6 +466,12 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 // has already torn down locally, so they're skipped. wasActive is true when both
 // parties were connected (the call was fully established), which gates the "Call
 // ended" log entry so solo rings don't produce an orphaned "ended" line.
+//
+// Belt-and-suspenders: we also broadcast voice.state with an empty participants
+// list. If voice.end is lost in transit (e.g. the recipient's WS connection
+// drops between the targeted send and reconnect), the state broadcast gives the
+// surviving client a second chance to detect the call ended — onVoiceState
+// treats an empty roster as a server-side teardown and calls endCallLocally.
 func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool) {
 	ids := s.hub.VoiceClear(ch.ID)
 	endMsg, err := json.Marshal(event{Type: "voice.end", Payload: map[string]int64{"channel_id": ch.ID}})
@@ -478,6 +484,11 @@ func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool
 		}
 		s.hub.SendToUser(id, endMsg)
 	}
+	aud := s.audienceForChannel(context.Background(), ch)
+	s.broadcast("voice.state", map[string]any{
+		"channel_id":   ch.ID,
+		"participants": []ws.VoiceParticipant{},
+	}, aud)
 	if wasActive {
 		s.postSystemMessage(context.Background(), ch, "Call ended")
 	}
