@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.3.106] - 2026-06-09
+
+### Added
+- Mobile long-press menu now includes a "Copy" action to copy message text to the clipboard
+
 ## [1.3.105] - 2026-06-09
 
 ### Fixed

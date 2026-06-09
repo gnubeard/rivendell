@@ -3059,6 +3059,7 @@ function showMobileCtxActions(m) {
 
   if (!isDeleted) inner.append(closeBtn("↩  Reply", () => startReply(m)));
   if (!isDeleted) inner.append(closeBtn("↪  Forward", () => openForwardModal(m)));
+  if (!isDeleted) inner.append(closeBtn("📋  Copy", () => navigator.clipboard.writeText(m.content)));
   if (isOwn && !isDeleted) inner.append(closeBtn("✏  Edit", () => startEdit(m)));
   if (isMod && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
 
