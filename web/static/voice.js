@@ -24,6 +24,12 @@ let videoEls = new Map();     // remoteUserId -> <video> element
 let localVideoEl = null;      // local preview <video> (muted, created on first camera use)
 let cameraEnabled = false;    // camera state in current call
 let activeChannelId = null;
+// callGen is bumped on every join. Call teardown (leave/end) defers the mic +
+// meter release behind the farewell-tone wait; if a new call starts during that
+// window it bumps callGen, and the stale teardown skips releasing what now
+// belongs to the new call (it stops only the old stream it captured). Without
+// this, a quick hang-up-then-call reused/clobbered the new call's peer + mic.
+let callGen = 0;
 let participants = [];         // latest voice.state roster for the active channel
 let myUserId = null;
 let muted = false;
@@ -280,6 +286,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   addMeter(myUserId, localStream);
 
   activeChannelId = channelId;
+  callGen++; // supersede any still-pending teardown from a just-ended call
   participants = []; // reset; the server's voice.state will populate the roster
   if (dbg) { try { dbg.startCall(channelId, myUserId); } catch { /* no-op */ } }
   sendFn({ type: "voice.join", channel_id: channelId });
@@ -308,16 +315,32 @@ export async function leaveVoiceChannel() {
   sendFn({ type: "voice.leave", channel_id: chId });
   notifyState();
   if (dbg) { try { dbg.endCall(); } catch { /* no-op */ } }
-  // Farewell BEFORE teardown, while the capture is still live and the output
-  // device is in the same steady state where remote-peer tones play loud. Then
-  // wait for it to ring out before releasing the mic — stopping the track first
-  // (as we used to) dropped the tone into the capture-STOP device transition.
+  await finishTeardown();
+}
+
+// finishTeardown closes peer connections immediately, then plays the farewell
+// tone and releases the mic once it has rung out. Peers are torn down
+// synchronously (not behind the tone wait) so a call started right after this
+// one can never reuse a half-closed peer connection — that produced an m-line
+// order mismatch on the new call's first offer and killed it. The mic/meter
+// release stays deferred (the farewell must play while capture is still live
+// and the output device steady; stopping first clips the tone), guarded by
+// callGen so a call that started during the wait keeps its fresh stream.
+async function finishTeardown() {
+  closeAllPeers();
+  videoEls.clear();
+  const gen = callGen;
+  const myStream = localStream;
   if (onSelfLeaveTone) onSelfLeaveTone();
   await delay(SELF_TONE_FINISH_MS);
+  if (gen !== callGen) {
+    // A new call started during the tone wait and now owns the module-level
+    // localStream + meters. Stop only the stream we captured, leave the rest.
+    if (myStream) myStream.getTracks().forEach(t => { try { t.stop(); } catch { /* already stopped */ } });
+    return;
+  }
   stopAllMeters();
-  closeAllPeers();
   stopLocalStream();
-  videoEls.clear();
 }
 
 // endCallLocally tears down our side of a call without telling the server we
@@ -331,14 +354,7 @@ export async function endCallLocally() {
   participants = [];
   notifyState();
   if (dbg) { try { dbg.endCall(); } catch { /* no-op */ } }
-  // See leaveVoiceChannel: farewell BEFORE teardown so it plays in steady-state
-  // capture, then wait for it to finish before releasing the mic.
-  if (onSelfLeaveTone) onSelfLeaveTone();
-  await delay(SELF_TONE_FINISH_MS);
-  stopAllMeters();
-  closeAllPeers();
-  stopLocalStream();
-  videoEls.clear();
+  await finishTeardown();
 }
 
 export function setVoiceMuted(m) {
@@ -994,6 +1010,72 @@ async function onVoiceState(payload) {
   }
 }
 
+// sendOffer creates and sends an offer for a peer (the renegotiation path that
+// onnegotiationneeded and maybeRenegotiate both funnel through). It only offers
+// from "stable"; firing mid-negotiation instead records renegotiatePending so
+// maybeRenegotiate re-offers once stable. makingOffer brackets the whole
+// create-and-set window so a remote offer crossing it is detected as a
+// collision even before our offer reaches have-local-offer. NOT gated on
+// isOfferer: whoever adds a track must offer it (a fresh offer carries only the
+// offerer's m-lines), and simultaneous offers are resolved by Perfect
+// Negotiation in onOffer.
+// hasUnsentLocalTrack reports whether any transceiver carries a local track the
+// currently-negotiated direction does NOT send (recvonly/inactive). True means
+// we added a track (e.g. our camera) whose negotiation never completed — the
+// classic case being a glare rollback that discarded the offer carrying it. It
+// is deliberately false when a track is already sendrecv/sendonly (e.g. audio
+// negotiated by accepting the peer's sendrecv offer at join), so we don't fire
+// a redundant renegotiation that would churn ICE while it's still connecting.
+export function hasUnsentLocalTrack(pc) {
+  return pc.getTransceivers().some(t =>
+    t.sender && t.sender.track &&
+    t.currentDirection !== "sendrecv" && t.currentDirection !== "sendonly");
+}
+
+async function sendOffer(remoteUserId, pc) {
+  if (activeChannelId === null) return;
+  const meta = peerMeta.get(remoteUserId);
+  // The INITIAL offer is sent explicitly by the deterministic offerer (lower
+  // user_id) in onVoiceState. Until a remote description exists we suppress the
+  // negotiationneeded-driven offer — adding our tracks to a brand-new peer fires
+  // it, and on the higher-id peer that offer collides with the impolite peer's
+  // initial offer at EVERY call setup, a guaranteed glare whose rollback churn
+  // intermittently stalls ICE before it connects. Any local track the initial
+  // offer doesn't carry (e.g. camera-on-at-join) is picked up post-connect by
+  // hasUnsentLocalTrack + maybeRenegotiate, which serialises it after the base
+  // connection instead of racing it.
+  if (!pc.remoteDescription) return;
+  // Per spec negotiationneeded only fires in "stable", but a glare rollback can
+  // leave a track un-negotiated without re-firing it reliably — so when we're
+  // not stable we remember the debt instead of trusting the browser to re-fire.
+  if (pc.signalingState !== "stable") { if (meta) meta.renegotiatePending = true; return; }
+  try {
+    if (meta) { meta.makingOffer = true; meta.renegotiatePending = false; }
+    preferVideoCodec(pc); // VP8-first on the newly-added video track
+    await pc.setLocalDescription(); // no-arg: implicit createOffer
+    sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
+    dbgEvent(remoteUserId, "offer-sent", { reason: "reneg" });
+  } catch { /* setup failure; reconnect/ICE paths recover or close */ }
+  finally { if (meta) meta.makingOffer = false; }
+}
+
+// maybeRenegotiate fulfils a deferred renegotiation once the connection is back
+// in "stable". The crucial case: in a simultaneous-video glare the polite peer
+// rolls back its own offer to accept the impolite peer's — discarding the
+// negotiation of the track it had just added. Without re-offering, that
+// direction's media is lost for the whole call (the flaky e2e glare symptom:
+// one side never sees the other's video). We re-offer it ourselves rather than
+// trusting the browser to re-fire negotiationneeded after a rollback. Keyed on a
+// one-shot renegotiatePending flag, NOT on live transceiver state on every
+// settle — re-checking hasUnsentLocalTrack on each stable transition made both
+// peers re-offer in lockstep and oscillate, breaking BOTH directions.
+function maybeRenegotiate(remoteUserId, pc) {
+  const meta = peerMeta.get(remoteUserId);
+  if (!meta || !meta.renegotiatePending || meta.makingOffer) return;
+  if (pc.signalingState !== "stable") return;
+  sendOffer(remoteUserId, pc);
+}
+
 async function onOffer(payload) {
   if (activeChannelId === null) return;
   const fromId = payload.from_user_id;
@@ -1024,6 +1106,15 @@ async function onOffer(payload) {
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
   applyVideoBitrateCaps(pc); // encodings exist once the answer is local
   dbgEvent(fromId, "answer-sent", {});
+  // If accepting this offer left one of our own tracks un-sent — the polite-peer
+  // glare case where our offer carrying e.g. our camera was rolled back to take
+  // this one — flag a one-shot re-offer. Gated on hasUnsentLocalTrack so we DON'T
+  // churn a redundant renegotiation when the accepted offer already negotiated
+  // our send (e.g. audio at join), which can stall ICE while it's still
+  // connecting. One-shot (not re-evaluated each settle) so the two peers can't
+  // fall into a re-offer oscillation that breaks both directions.
+  if (meta && hasUnsentLocalTrack(pc)) meta.renegotiatePending = true;
+  maybeRenegotiate(fromId, pc);
 }
 
 async function onAnswer(payload) {
@@ -1034,6 +1125,7 @@ async function onAnswer(payload) {
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
   applyVideoBitrateCaps(pc); // offer/answer complete — sender encodings are live
   dbgEvent(fromId, "answer-recv", {});
+  maybeRenegotiate(fromId, pc); // flush any renegotiation deferred during the offer
 }
 
 async function onICE(payload) {
@@ -1061,8 +1153,10 @@ function createPC(remoteUserId) {
   // Per-peer bookkeeping: reconnect (restarts/timer) + Perfect Negotiation
   // (makingOffer marks the local-offer-in-flight window; ignoreOffer records
   // that we dropped the peer's colliding offer, so its trailing ICE candidates
-  // are expected to fail).
-  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false });
+  // are expected to fail; renegotiatePending records that we owe the peer an
+  // offer once we're back in "stable" — set when our own offer was rolled back
+  // to accept a colliding one, or when negotiationneeded fired mid-negotiation).
+  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false });
   if (dbg) { try { dbg.attachPeer(remoteUserId, pc); } catch { /* no-op */ } }
 
   if (localStream) {
@@ -1130,22 +1224,7 @@ function createPC(remoteUserId) {
   // rolls back implicitly and answers). makingOffer brackets the whole
   // create-and-set window so a remote offer crossing it is detected as a
   // collision even before our offer reaches have-local-offer.
-  pc.onnegotiationneeded = async () => {
-    if (activeChannelId === null) return;
-    // Per spec the event only fires in "stable"; the guard stays because older
-    // engines have misfired it (e.g. during a parallel ICE restart). Skipping
-    // is safe — the browser re-fires once back in stable if still needed.
-    if (pc.signalingState !== "stable") return;
-    const meta = peerMeta.get(remoteUserId);
-    try {
-      if (meta) meta.makingOffer = true;
-      preferVideoCodec(pc); // VP8-first on the newly-added video track
-      await pc.setLocalDescription(); // no-arg: implicit createOffer
-      sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
-      dbgEvent(remoteUserId, "offer-sent", { reason: "reneg" });
-    } catch {}
-    finally { if (meta) meta.makingOffer = false; }
-  };
+  pc.onnegotiationneeded = () => sendOffer(remoteUserId, pc);
 
   // BOTH state machines feed the reconnect plan via the worst-of
   // effectiveConnectionState. The ICE one matters because Firefox reports

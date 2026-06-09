@@ -15,26 +15,34 @@ import assert from "node:assert/strict";
 
 const timeline = [];
 
+// Every fake stream handed out by getUserMedia, in creation order — lets a test
+// assert which call's stream got stopped (each track flips `stopped` on stop()).
+const createdStreams = [];
+
 // A fake mic stream whose track.stop() records "mic-stop" on the timeline.
 function makeFakeStream({ includeVideo = false } = {}) {
   const audioTrack = {
     kind: "audio",
     enabled: true,
-    stop() { timeline.push("mic-stop"); },
+    stopped: false,
+    stop() { this.stopped = true; timeline.push("mic-stop"); },
   };
   const videoTrack = {
     kind: "video",
     enabled: true,
-    stop() { timeline.push("cam-stop"); },
+    stopped: false,
+    stop() { this.stopped = true; timeline.push("cam-stop"); },
   };
   const tracks = includeVideo ? [audioTrack, videoTrack] : [audioTrack];
-  return {
+  const stream = {
     getAudioTracks: () => tracks.filter((t) => t.kind === "audio"),
     getVideoTracks: () => tracks.filter((t) => t.kind === "video"),
     addTrack: (t) => { if (t && !tracks.includes(t)) tracks.push(t); },
     removeTrack: (t) => { const i = tracks.indexOf(t); if (i >= 0) tracks.splice(i, 1); },
     getTracks: () => tracks.slice(),
   };
+  createdStreams.push(stream);
+  return stream;
 }
 
 // Configurable getUserMedia: by default audio-only; tests that need camera can
@@ -93,6 +101,7 @@ function restoreGetUserMedia() {
 function setup() {
   timeline.length = 0;
   sent = [];
+  createdStreams.length = 0;
   lsStore.clear();
   getUserMediaVideo = false;
   getUserMediaRejectWith = null;
@@ -135,6 +144,37 @@ test("endCallLocally also farewells before tearing the mic down", async () => {
   timeline.length = 0;
   await voice.endCallLocally();
   assert.deepEqual(timeline, ["farewell", "mic-stop"]);
+});
+
+// Regression: a call started during the farewell-tone wait of the previous call
+// must keep its own mic. The leave defers the mic release behind the tone; if
+// that stale teardown stopped the module-level localStream, it would kill the
+// brand-new call's mic (and reuse its half-closed peer — the m-line mismatch
+// that flaked the e2e glare test). The generation guard (callGen) prevents it.
+test("rapid re-join during the farewell wait keeps the new call's mic live", async () => {
+  setup();
+  await voice.joinVoiceChannel(42);
+  await delay(400);
+  const firstStream = createdStreams[createdStreams.length - 1];
+
+  // End the call but DON'T await — leave() is now mid farewell-tone wait.
+  const leaving = voice.endCallLocally();
+  // Immediately start a new call (the quick hang-up-then-call window).
+  await voice.joinVoiceChannel(43);
+  const secondStream = createdStreams[createdStreams.length - 1];
+  // Let the first call's deferred teardown fire.
+  await leaving;
+  await delay(50);
+
+  assert.notEqual(firstStream, secondStream, "the new call should acquire a fresh stream");
+  assert.ok(
+    firstStream.getAudioTracks()[0].stopped,
+    "the ended call's mic must be stopped",
+  );
+  assert.ok(
+    !secondStream.getAudioTracks()[0].stopped,
+    "the new call's mic must stay live (stale teardown must not stop it)",
+  );
 });
 
 // --- speaking detection: computeRMS (pure) ----------------------------------
@@ -608,6 +648,23 @@ test("effectiveConnectionState: failed outranks disconnected; closed outranks ev
   // closed is read from connectionState only (ICE "closed" is deprecated/unreliable)
   assert.equal(voice.effectiveConnectionState("closed", "failed"), "closed");
   assert.equal(voice.effectiveConnectionState("connected", "closed"), "connected");
+});
+
+test("hasUnsentLocalTrack: true only for a local track the negotiation doesn't send", () => {
+  const pc = (transceivers) => ({ getTransceivers: () => transceivers });
+  const tx = (kind, hasTrack, currentDirection) => ({
+    kind, currentDirection, sender: { track: hasTrack ? { kind } : null },
+  });
+  // A local track stuck recvonly (the glare-rollback case) → needs a re-offer.
+  assert.equal(voice.hasUnsentLocalTrack(pc([tx("video", true, "recvonly")])), true);
+  assert.equal(voice.hasUnsentLocalTrack(pc([tx("video", true, "inactive")])), true);
+  // Already sending (sendrecv/sendonly) → nothing owed, must NOT re-offer.
+  assert.equal(voice.hasUnsentLocalTrack(pc([tx("audio", true, "sendrecv")])), false);
+  assert.equal(voice.hasUnsentLocalTrack(pc([tx("video", true, "sendonly")])), false);
+  // recvonly transceiver with NO local track (we're only receiving) → not ours.
+  assert.equal(voice.hasUnsentLocalTrack(pc([tx("video", false, "recvonly")])), false);
+  // Mixed: audio sending + our video stuck recvonly → true (the video is owed).
+  assert.equal(voice.hasUnsentLocalTrack(pc([tx("audio", true, "sendrecv"), tx("video", true, "recvonly")])), true);
 });
 
 test("effectiveConnectionState: healthy states pass through connectionState", () => {
