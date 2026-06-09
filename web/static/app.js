@@ -2035,6 +2035,17 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }
 
     const m = msgs[i];
+
+    if (m.is_system) {
+      wrap.append(el("div", { class: "msg msg-system", "data-msg-id": m.id },
+        el("span", { class: "msg-system-text" }, m.content),
+        el("span", { class: "msg-system-time" }, formatTime(m.created_at))));
+      lastUser = null;
+      lastTime = 0;
+      i++;
+      continue;
+    }
+
     const author = state.users[m.user_id];
     const t = new Date(m.created_at).getTime();
     // A reply always starts a fresh (non-grouped) block so its quote sits cleanly

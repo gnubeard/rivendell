@@ -1080,7 +1080,7 @@ func TestDMCallEndsForBothParties(t *testing.T) {
 	// One party hangs up — the whole DM call ends (B isn't left alone).
 	srv.Hub().VoiceJoin(dm.ID, a.ID)
 	srv.Hub().VoiceJoin(dm.ID, b.ID)
-	srv.endDMVoiceCall(ch, a.ID)
+	srv.endDMVoiceCall(ch, a.ID, true)
 	if p := srv.Hub().VoiceParticipants(dm.ID); len(p) != 0 {
 		t.Fatalf("DM call not ended when one party hung up: %v", p)
 	}

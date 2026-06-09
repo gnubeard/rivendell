@@ -167,7 +167,7 @@ type Emoji struct {
 type Message struct {
 	ID            int64      `json:"id"`
 	ChannelID     int64      `json:"channel_id"`
-	UserID        int64      `json:"user_id"`
+	UserID        *int64     `json:"user_id,omitempty"`
 	Content       string     `json:"content"`
 	ReplyToID     *int64     `json:"reply_to_id,omitempty"`
 	ReplyToUserID *int64     `json:"reply_to_user_id,omitempty"`
@@ -176,6 +176,7 @@ type Message struct {
 	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
 	PinnedAt      *time.Time `json:"pinned_at,omitempty"`
 	PinnedBy      *int64     `json:"pinned_by,omitempty"`
+	IsSystem      bool       `json:"is_system,omitempty"`
 	// Reactions is populated by the HTTP layer on list responses (not part of the
 	// messages row); omitted when empty so the message JSON stays lean.
 	Reactions []Reaction `json:"reactions,omitempty"`

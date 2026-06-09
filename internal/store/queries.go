@@ -738,18 +738,18 @@ func (s *Store) ListChannelMemberIDs(ctx context.Context, channelID int64) ([]in
 
 // messageCols is the canonical projection used by scanMessage; keep the scan
 // order in sync. Used for RETURNING clauses (subqueries are not allowed there).
-const messageCols = `id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at, pinned_at, pinned_by`
+const messageCols = `id, channel_id, user_id, content, reply_to_id, created_at, edited_at, deleted_at, pinned_at, pinned_by, is_system`
 
 // messageSelectCols extends messageCols with reply_to_user_id via a correlated
 // subquery. Use in SELECT … FROM messages queries, not RETURNING.
 const messageSelectCols = `id, channel_id, user_id, content, reply_to_id, ` +
 	`(SELECT user_id FROM messages AS r WHERE r.id = reply_to_id) AS reply_to_user_id, ` +
-	`created_at, edited_at, deleted_at, pinned_at, pinned_by`
+	`created_at, edited_at, deleted_at, pinned_at, pinned_by, is_system`
 
 func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID,
-		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy)
+		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy, &m.IsSystem)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -759,7 +759,7 @@ func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 func scanMessageFull(row interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Content, &m.ReplyToID, &m.ReplyToUserID,
-		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy)
+		&m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.PinnedAt, &m.PinnedBy, &m.IsSystem)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -772,6 +772,17 @@ func (s *Store) CreateMessage(ctx context.Context, channelID, userID int64, cont
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING `+messageCols,
 		channelID, userID, content, replyTo))
+}
+
+// CreateSystemMessage inserts a server-generated event line into a channel log
+// (e.g. "Call started", "Call ended"). System messages have no author and are
+// rendered differently by the client.
+func (s *Store) CreateSystemMessage(ctx context.Context, channelID int64, content string) (Message, error) {
+	return scanMessage(s.db.QueryRowContext(ctx,
+		`INSERT INTO messages (channel_id, user_id, content, is_system)
+		 VALUES ($1, NULL, $2, TRUE)
+		 RETURNING `+messageCols,
+		channelID, content))
 }
 
 // ListMessages returns up to limit messages in a channel with id < beforeID

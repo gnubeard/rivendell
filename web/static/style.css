@@ -351,6 +351,9 @@ body.ch-dragging, body.ch-dragging .channel { cursor: grabbing; }
 .msg.deleted-run { padding: 0.05rem 0; }
 .msg.deleted-run .msg-body.deleted { font-size: 0.8rem; }
 .msg-body .edited { color: var(--text-faint); font-size: 0.72rem; }
+.msg.msg-system { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.2rem 0; }
+.msg-system-text { color: var(--text-faint); font-size: 0.8rem; font-style: italic; }
+.msg-system-time { color: var(--text-faint); font-size: 0.72rem; opacity: 0.7; }
 .msg-body a { color: var(--accent); }
 /* The 360px cap lives on the shrink-to-fit wrappers, not the <img>: Firefox
    ignores a descendant's min(<length>, <percentage>) max-width while sizing a

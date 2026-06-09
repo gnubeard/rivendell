@@ -962,7 +962,10 @@ func (s *Server) accessibleChannelIDs(r *http.Request, u store.User) ([]int64, e
 // that also @-mentions the parent author counts once. Best-effort: lookup
 // failures are logged and yield no pings rather than failing the send.
 func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, msg store.Message) []int64 {
-	authorID := msg.UserID
+	var authorID int64
+	if msg.UserID != nil {
+		authorID = *msg.UserID
+	}
 	out := make([]int64, 0, 4)
 	seen := make(map[int64]bool)
 	add := func(id int64) {
@@ -1020,8 +1023,8 @@ func (s *Server) pingRecipients(ctx context.Context, ch store.Channel, msg store
 	if msg.ReplyToID != nil {
 		if parent, err := s.st.GetMessage(ctx, *msg.ReplyToID); err != nil {
 			log.Printf("pingRecipients: reply target: %v", err)
-		} else if pingable(parent.UserID) {
-			add(parent.UserID)
+		} else if parent.UserID != nil && pingable(*parent.UserID) {
+			add(*parent.UserID)
 		}
 	}
 
@@ -1055,8 +1058,11 @@ func (s *Server) sendPushNotifications(ch store.Channel, msg store.Message, reci
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	author, _ := s.st.GetUserByID(ctx, msg.UserID)
-	who := author.DisplayName
+	var who string
+	if msg.UserID != nil {
+		author, _ := s.st.GetUserByID(ctx, *msg.UserID)
+		who = author.DisplayName
+	}
 	if who == "" {
 		who = "Someone"
 	}
@@ -1289,7 +1295,7 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "reply target not found in this channel")
 			return
 		}
-		replyToUserID = &parent.UserID
+		replyToUserID = parent.UserID
 	}
 	msg, err := s.st.CreateMessage(r.Context(), ch.ID, u.ID, req.Content, req.ReplyTo)
 	if err != nil {

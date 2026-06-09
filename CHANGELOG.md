@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.3.104] - 2026-06-09
+
+### Added
+- DM voice calls now log "Call started" and "Call ended" system messages in the conversation, giving timestamps to track call duration
+
 ## [1.3.103] - 2026-06-09
 
 ### Fixed

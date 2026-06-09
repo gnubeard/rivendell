@@ -447,7 +447,8 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 			continue
 		}
 		if ch.IsDM && len(participants) > 0 {
-			s.endDMVoiceCall(ch, userID)
+			// At least one other participant remains, so the call was active.
+			s.endDMVoiceCall(ch, userID, true)
 			continue
 		}
 		aud := s.audienceForChannel(ctx, ch)
@@ -462,8 +463,10 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 // participant other than leaverID to tear down their side (voice.end). DM calls
 // are 2-party and phone-call style: either party hanging up — or dropping — ends
 // the call for both, so nobody is left alone in a one-person "call". The leaver
-// has already torn down locally, so they're skipped.
-func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64) {
+// has already torn down locally, so they're skipped. wasActive is true when both
+// parties were connected (the call was fully established), which gates the "Call
+// ended" log entry so solo rings don't produce an orphaned "ended" line.
+func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool) {
 	ids := s.hub.VoiceClear(ch.ID)
 	endMsg, err := json.Marshal(event{Type: "voice.end", Payload: map[string]int64{"channel_id": ch.ID}})
 	if err != nil {
@@ -475,6 +478,21 @@ func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64) {
 		}
 		s.hub.SendToUser(id, endMsg)
 	}
+	if wasActive {
+		s.postSystemMessage(context.Background(), ch, "Call ended")
+	}
+}
+
+// postSystemMessage creates a system message in a channel and broadcasts it to
+// the channel's audience. Used for server-generated log entries (e.g. call
+// started / call ended in DMs).
+func (s *Server) postSystemMessage(ctx context.Context, ch store.Channel, content string) {
+	msg, err := s.st.CreateSystemMessage(ctx, ch.ID, content)
+	if err != nil {
+		log.Printf("postSystemMessage: %v", err)
+		return
+	}
+	s.broadcast("message.new", msg, s.audienceForChannel(ctx, ch))
 }
 
 // onWSMessage is called by the hub for each inbound client frame. Handles
@@ -611,6 +629,9 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		participants := s.hub.VoiceJoin(channelID, userID)
 		aud := s.audienceForChannel(ctx, ch)
 		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+		if ch.IsDM && len(participants) == 2 {
+			s.postSystemMessage(ctx, ch, "Call started")
+		}
 
 	case "voice.leave":
 		if channelID == 0 {
@@ -622,7 +643,10 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		}
 		if ch.IsDM {
 			// Phone-call semantics: hanging up ends the DM call for both parties.
-			s.endDMVoiceCall(ch, userID)
+			// wasActive is true when the leaver is still in the hub (not yet cleared),
+			// meaning both parties were connected.
+			wasActive := len(s.hub.VoiceParticipants(channelID)) >= 2
+			s.endDMVoiceCall(ch, userID, wasActive)
 			return
 		}
 		participants := s.hub.VoiceLeave(channelID, userID)
