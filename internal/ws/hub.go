@@ -2,6 +2,7 @@ package ws
 
 import (
 	"log"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -239,6 +240,9 @@ func (c *Client) readPump() {
 		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Printf("ws: read-deadline timeout user=%d", c.userID)
+			}
 			return
 		}
 		if c.hub.onMessage != nil && len(data) > 0 {
