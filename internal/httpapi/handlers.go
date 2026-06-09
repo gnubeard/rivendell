@@ -371,6 +371,10 @@ func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {
 		// spending the upload bandwidth (the server still enforces these).
 		"max_image_bytes":  s.cfg.MaxImageBytes,
 		"max_avatar_bytes": s.cfg.MaxAvatarBytes,
+		// When true, the client auto-enables WebRTC debug telemetry capture for
+		// every call (no per-client ?rtcdebug flag needed) — lets the operator flip
+		// on instrumentation for all participants during a debugging window.
+		"debug_telemetry": s.cfg.DebugTelemetry,
 	})
 }
 

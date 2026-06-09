@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,6 +46,7 @@ type Server struct {
 	hub          *ws.Hub
 	blobStore    *blobs.FSStore
 	pusher       *push.Sender // nil if Web Push couldn't be initialised (push disabled)
+	telemetryLog *slog.Logger // dedicated logfmt logger for WebRTC debug telemetry
 	typingMu     sync.Mutex
 	typingTimers map[typingKey]*time.Timer
 	ringMu       sync.Mutex
@@ -57,6 +59,9 @@ func New(cfg config.Config, st *store.Store) *Server {
 		st:           st,
 		typingTimers: make(map[typingKey]*time.Timer),
 		rings:        make(map[int64]*activeRing),
+		// Telemetry goes to stdout as logfmt — greppable by eye and machine-parseable.
+		// A test can swap this for a buffer-backed logger to capture emitted records.
+		telemetryLog: slog.New(slog.NewTextHandler(os.Stdout, nil)),
 	}
 	s.hub = ws.NewHub(s.onPresenceChange, s.onWSMessage)
 	if cfg.BlobsDir != "" {
@@ -212,6 +217,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/voice/state", s.auth(s.handleGetVoiceState))
 	mux.HandleFunc("GET /api/channels/{id}/voice", s.auth(s.handleGetVoiceParticipants))
 	mux.HandleFunc("GET /api/rtc/credentials", s.auth(s.handleGetRTCCredentials))
+
+	// WebRTC debug telemetry (gated by RIVENDELL_DEBUG_TELEMETRY; 404 when off).
+	mux.HandleFunc("POST /api/debug/telemetry", s.auth(s.handleDebugTelemetry))
 
 	// Realtime.
 	mux.HandleFunc("GET /api/ws", s.handleWS)

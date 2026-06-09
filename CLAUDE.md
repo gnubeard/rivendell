@@ -181,6 +181,8 @@ Voice/WebRTC: `RIVENDELL_STUN_URL` (default: `stun:stun.l.google.com:19302`),
 Web Push: `RIVENDELL_VAPID_SUBJECT` (the VAPID `sub` claim — a mailto: or https
 URL; defaults to `RIVENDELL_PUBLIC_URL`). The VAPID keypair itself is generated
 on first boot and persisted in `push_vapid`, so there is no key to configure.
+Diagnostics: `RIVENDELL_DEBUG_TELEMETRY` (bool, default false) enables the WebRTC
+debug-telemetry endpoint + advertises capture to clients (see Feature notes).
 See `.env.example`. On an empty install the server creates a first admin
 (`RIVENDELL_BOOTSTRAP_ADMIN`, default `admin`) and logs a one-time set-password link;
 this fires only when there are zero admins.
@@ -306,6 +308,39 @@ invariants — don't break these:
   `skipWaiting()`/`clients.claim()` so updates take effect immediately, renders
   `push` events, and on `notificationclick` focuses an existing tab (posting it the
   permalink to `jumpToMessage`) or `openWindow`s the deep link.
+
+**WebRTC debug telemetry** (Phase 1 of the video-reliability arc). The diagnostic
+path for video calls: instead of an on-screen HUD read off a phone (the removed
+`?rtcdebug=1` approach), the client ships a structured debug package to the server,
+logged so you debug by reading stdout. Gated by `RIVENDELL_DEBUG_TELEMETRY` (default
+off → `POST /api/debug/telemetry` returns **404**, masking its existence). Key
+invariants — don't break these:
+- **Activation is opt-in OR operator-forced.** `rtcDebugEnabled(serverFlag)`
+  (`rtcdebug.js`) is true when `?rtcdebug=1` / `localStorage["rivendell.rtcDebug"]`
+  is set (per-client) OR the server advertises `debug_telemetry:true` in
+  `GET /api/instance` (forces capture on for *everyone* during a debugging window).
+- **`self_user_id` is never sent — the server stamps `self=` from the session**
+  (like `from_user_id` injection in voice signaling). The wire schema has no field
+  for it, so `DisallowUnknownFields` rejects a forged one. Legs are stitched by
+  `(channel_id, user-pair)`; each client generates its own per-call `call_id`.
+- **No candidate IP ever reaches a log.** `buildSnapshot` reads only candidate
+  *type* (host/srflx/relay) + RTT from the selected pair; `pairStats` (Go) has no
+  address field. `TestTelemetryRecordsFormat` and the JS `never leaks a candidate
+  IP` test guard this.
+- **Telemetry never perturbs a call.** Capture runs off the media path on a 3s
+  timer; every entry point is try/wrapped; disabled ⇒ zero work. `voice.js` calls
+  the hook only via the guarded `dbg`/`dbgEvent` indirection (null in prod/tests),
+  so it stays dependency-free and the existing voice tests are unaffected — never
+  make `voice.js` import `rtcdebug.js`.
+- **Server logs via a dedicated `slog` `TextHandler` (logfmt), not `log.Printf`.**
+  Lines are `msg=rtc-telem.snap`/`rtc-telem.evt` + key=value attrs — greppable by
+  eye and machine-parseable. Cumulative counters render `cur(+delta)` (the pure
+  `deltaStr`/`telemetryRecords` in `telemetry.go`) so a frozen counter (the silent
+  drop / FF-Android encoder freeze) jumps out. `slog` is the only structured-logging
+  use so far; the rest of the app stays on `log.Printf`.
+- **Pure helpers unit-tested:** JS `deltaOf`, `buildSnapshot`, `capPayload`,
+  `rtcDebugEnabled` (`rtcdebug.test.js`); Go `telemetryRecords`/`deltaStr` +
+  endpoint behavior (`telemetry_test.go`).
 
 When in doubt on UI, favor clarity over polish — aesthetics are secondary to "it works." Keep changes small and tested. Commit a baseline before large changes so diffs and rollbacks are clean.
 

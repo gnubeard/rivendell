@@ -67,7 +67,9 @@ import {
   pttShouldFire,
   pttKeyLabel,
   micErrorMessage,
+  registerDebug,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
+import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -75,6 +77,7 @@ let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
 let isIdle = false;    // tracks client-side idle state for re-signaling on reconnect
 let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
 let appVersion = ""; // server-reported semantic version, shown in the About dialog
+let debugTelemetryFlag = false; // server-side switch (GET /api/instance) to force WebRTC telemetry on for all clients
 // Server-reported upload size ceilings (bytes), used to reject oversized files
 // client-side before uploading. 0 = unknown (instance fetch failed) → skip the
 // pre-check and let the server enforce its own limit.
@@ -394,6 +397,7 @@ async function applyInstanceName() {
     }
     if (inst.max_image_bytes) maxImageBytes = inst.max_image_bytes;
     if (inst.max_avatar_bytes) maxAvatarBytes = inst.max_avatar_bytes;
+    debugTelemetryFlag = !!inst.debug_telemetry;
   } catch {
     /* keep the default branding */
   }
@@ -597,6 +601,12 @@ async function enterApp() {
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
   initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
+  // WebRTC debug telemetry: opt-in per client (?rtcdebug=1 / localStorage) or
+  // forced on for everyone by the server flag. When enabled, capture batches
+  // getStats() + lifecycle events to POST /api/debug/telemetry (logged server-side).
+  if (rtcDebugEnabled(debugTelemetryFlag)) {
+    registerDebug(createTelemetry({ getVideoEl }));
+  }
   setSpeakingCallback(onSpeaking);
   setCameraErrorCallback((err) => alert(cameraErrorMessage(err)));
   fetchIceServers(); // best-effort; falls back to public STUN on error

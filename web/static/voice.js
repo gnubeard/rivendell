@@ -28,6 +28,16 @@ let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMute
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedia failure to the UI
 
+// dbg is the optional WebRTC telemetry hook (see rtcdebug.js). null unless the
+// operator/client enabled debug telemetry, so production and the unit tests run
+// with it absent and every dbg call below is a guarded no-op. Instrumentation
+// only — it must never change call behavior.
+let dbg = null;
+export function registerDebug(hook) { dbg = hook; }
+function dbgEvent(remoteUserId, kind, data) {
+  if (dbg) { try { dbg.event(remoteUserId, kind, data); } catch { /* telemetry never throws into a call */ } }
+}
+
 // pendingIceCandidates buffers remote ICE candidates that arrive before
 // setRemoteDescription has been called on a peer connection. This is a real
 // race: onOffer/onAnswer are async (each await yields to the event loop), and
@@ -226,6 +236,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
 
   activeChannelId = channelId;
   participants = []; // reset; the server's voice.state will populate the roster
+  if (dbg) { try { dbg.startCall(channelId, myUserId); } catch { /* no-op */ } }
   sendFn({ type: "voice.join", channel_id: channelId });
   // Announce our real mute/camera state immediately. A fresh participant is
   // video-muted by default server-side (so peers never flash a video placeholder
@@ -249,6 +260,7 @@ export async function leaveVoiceChannel() {
   participants = [];
   sendFn({ type: "voice.leave", channel_id: chId });
   notifyState();
+  if (dbg) { try { dbg.endCall(); } catch { /* no-op */ } }
   // Farewell BEFORE teardown, while the capture is still live and the output
   // device is in the same steady state where remote-peer tones play loud. Then
   // wait for it to ring out before releasing the mic — stopping the track first
@@ -270,6 +282,7 @@ export async function endCallLocally() {
   activeChannelId = null;
   participants = [];
   notifyState();
+  if (dbg) { try { dbg.endCall(); } catch { /* no-op */ } }
   // See leaveVoiceChannel: farewell BEFORE teardown so it plays in steady-state
   // capture, then wait for it to finish before releasing the mic.
   if (onSelfLeaveTone) onSelfLeaveTone();
@@ -401,6 +414,7 @@ export async function setCameraEnabled(on) {
           addMeter(myUserId, localStream);
         }
       } catch { /* couldn't restore the mic either; report the camera error regardless */ }
+      dbgEvent(0, "getusermedia-error", { name: err && err.name, where: "camera" });
       if (onCameraError) onCameraError(err);
       notifyState();
       return;
@@ -441,6 +455,7 @@ export async function setCameraEnabled(on) {
   }
 
   sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
+  dbgEvent(0, "camera-toggle", { on: cameraEnabled });
   notifyState();
 }
 
@@ -708,6 +723,7 @@ async function doIceRestart(remoteUserId) {
   if (outcome === "recovered") { meta.restarts = 0; return; }
   if (outcome === "gone") { closePeer(remoteUserId); return; }
   if (outcome === "give-up") {
+    dbgEvent(remoteUserId, "ice-restart-giveup", { restarts: meta.restarts });
     closePeer(remoteUserId);
     // Re-announce our presence so the server broadcasts a fresh voice.state.
     // Both sides are still in the channel; onVoiceState will re-create the peer
@@ -718,6 +734,7 @@ async function doIceRestart(remoteUserId) {
   // outcome === "restart": only the offerer re-offers (answerer waits for it).
   meta.restarts++;
   if (isOfferer(remoteUserId)) {
+    dbgEvent(remoteUserId, "ice-restart-attempt", { attempt: meta.restarts, conn: pc.connectionState });
     try {
       const offer = await pc.createOffer({ iceRestart: true });
       await pc.setLocalDescription(offer);
@@ -820,6 +837,7 @@ async function onVoiceState(payload) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         sendFn({ type: "voice.offer", to_user_id: p.user_id, channel_id: activeChannelId, sdp: offer.sdp });
+        dbgEvent(p.user_id, "offer-sent", { reason: "join" });
       }
     }
   }
@@ -835,11 +853,13 @@ async function onOffer(payload) {
   const fromId = payload.from_user_id;
   let pc = peerConns.get(fromId);
   if (!pc) pc = createPC(fromId);
+  dbgEvent(fromId, "offer-recv", {});
   // If we already have a local offer (glare), the lower ID wins: if we're the
   // lower ID we're the offerer — ignore their offer. Otherwise rollback.
   if (pc.signalingState === "have-local-offer") {
-    if (myUserId < fromId) return; // we're the offerer, ignore
+    if (myUserId < fromId) { dbgEvent(fromId, "glare-ignore", {}); return; } // we're the offerer, ignore
     // We're the answerer; rollback our incorrect offer
+    dbgEvent(fromId, "glare-rollback", {});
     try { await pc.setLocalDescription({ type: "rollback" }); } catch {}
   }
   await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
@@ -848,6 +868,7 @@ async function onOffer(payload) {
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: answer.sdp });
+  dbgEvent(fromId, "answer-sent", {});
 }
 
 async function onAnswer(payload) {
@@ -856,6 +877,7 @@ async function onAnswer(payload) {
   if (!pc || pc.signalingState !== "have-local-offer") return;
   await pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
+  dbgEvent(fromId, "answer-recv", {});
 }
 
 async function onICE(payload) {
@@ -878,6 +900,7 @@ function createPC(remoteUserId) {
   const pc = new RTCPeerConnection({ iceServers });
   peerConns.set(remoteUserId, pc);
   peerMeta.set(remoteUserId, { restarts: 0, timer: null });
+  if (dbg) { try { dbg.attachPeer(remoteUserId, pc); } catch { /* no-op */ } }
 
   if (localStream) {
     for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
@@ -954,12 +977,21 @@ function createPC(remoteUserId) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: offer.sdp });
+      dbgEvent(remoteUserId, "offer-sent", { reason: "reneg" });
     } catch {}
+  };
+
+  // ICE connection state is logged for diagnostics only (no behavior change yet —
+  // Phase 2 will feed it into the reconnect plan). A consent-freshness / NAT
+  // timeout often surfaces here as disconnected→failed before connectionState moves.
+  pc.oniceconnectionstatechange = () => {
+    dbgEvent(remoteUserId, "iceconnectionstatechange", { ice: pc.iceConnectionState });
   };
 
   // Reconnect rather than tear down on trouble: an ICE restart re-negotiates
   // transport on this same connection. See the reconnection section above.
   pc.onconnectionstatechange = () => {
+    dbgEvent(remoteUserId, "connectionstatechange", { conn: pc.connectionState });
     applyReconnectPlan(remoteUserId, pc);
   };
 
@@ -967,6 +999,7 @@ function createPC(remoteUserId) {
 }
 
 function closePeer(userId) {
+  if (dbg) { try { dbg.detachPeer(userId); } catch { /* no-op */ } }
   pendingIceCandidates.delete(userId);
   removeMeter(userId);
   const meta = peerMeta.get(userId);

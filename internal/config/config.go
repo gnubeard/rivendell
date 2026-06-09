@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.3.101"
+const Version = "1.3.102"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -32,6 +32,7 @@ type Config struct {
 	TurnURL         string        // TURN relay URL(s), comma-separated (empty = STUN only)
 	TurnSecret      string        // shared HMAC secret for time-limited TURN credentials
 	VapidSubject    string        // VAPID `sub` claim for Web Push (mailto: or https URL)
+	DebugTelemetry  bool          // enable POST /api/debug/telemetry + advertise capture to clients
 }
 
 func Load() (Config, error) {
@@ -53,6 +54,7 @@ func Load() (Config, error) {
 		TurnURL:         env("RIVENDELL_TURN_URL", ""),
 		TurnSecret:      env("RIVENDELL_TURN_SECRET", ""),
 		VapidSubject:    env("RIVENDELL_VAPID_SUBJECT", ""),
+		DebugTelemetry:  envBool("RIVENDELL_DEBUG_TELEMETRY", false),
 	}
 	// Default the VAPID subject to the public URL (a valid `sub` per RFC 8292) so
 	// push works out of the box; operators can override with a mailto:.
