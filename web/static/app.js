@@ -590,9 +590,7 @@ async function enterApp() {
     state = S.setActiveChannel(state, firstChannel);
   }
   renderMe();
-  renderChannels();
-  renderDMs();
-  renderMembers();
+  rerenderSidebar();
   renderAdminVisibility();
   renderNotificationTotal();
   // Check for a permalink hash (#c<channelId>/m<messageId>) before loading
@@ -890,9 +888,7 @@ async function resync() {
       state = S.setActiveChannel(state, next);
     }
     renderMe();
-    renderChannels();
-    renderDMs();
-    renderMembers();
+    rerenderSidebar();
     renderNotificationTotal();
     if (state.activeChannelId) {
       await loadChannel(state.activeChannelId);
@@ -1133,6 +1129,17 @@ function renderMembers() {
       )
     );
   }
+}
+
+// rerenderSidebar repaints all three sidebar lists at once. Use it for a full
+// refresh (initial render, post-reload) where the whole roster is in flux.
+// Targeted event handlers deliberately call only the lists they affect (e.g. a
+// presence change touches members + DMs but not channels) — don't widen those
+// to this; the surgical scoping is intentional.
+function rerenderSidebar() {
+  renderChannels();
+  renderDMs();
+  renderMembers();
 }
 
 // volumeSlider builds the per-user playout-volume control shown under an on-call

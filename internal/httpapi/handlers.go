@@ -311,8 +311,7 @@ func (s *Server) handleUploadAvatar(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not save avatar")
 		return
 	}
-	updated, _ := s.st.GetUserByID(r.Context(), u.ID)
-	s.broadcast("user.update", updated, nil)
+	s.broadcastUserUpdate(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, map[string]bool{"has_avatar": true})
 }
 
@@ -448,9 +447,8 @@ func (s *Server) handleGetRTCCredentials(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	mime, data, err := s.st.GetAvatar(r.Context(), id)
@@ -641,9 +639,8 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
 	ch, err := s.st.GetChannel(r.Context(), id)
@@ -680,9 +677,8 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArchiveChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
 	ch, err := s.st.GetChannel(r.Context(), id)
@@ -748,9 +744,8 @@ func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
 // next message. Only a participant may close their own DM.
 func (s *Server) handleCloseDM(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
 	ch, err := s.st.GetChannel(r.Context(), id)
@@ -802,9 +797,8 @@ func (s *Server) handleListChannelMembers(w http.ResponseWriter, r *http.Request
 // participants and public channels have no membership.
 func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
 	ch, err := s.st.GetChannel(r.Context(), id)
@@ -856,14 +850,12 @@ func (s *Server) handleAddChannelMember(w http.ResponseWriter, r *http.Request) 
 // both are refused.
 func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
-	target, err := pathInt(r, "userId")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	target, ok := requirePathInt(w, r, "userId", "invalid user id")
+	if !ok {
 		return
 	}
 	ch, err := s.st.GetChannel(r.Context(), id)
@@ -924,9 +916,8 @@ func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.Use
 // and checks the caller's access. On failure it writes the appropriate HTTP error
 // and returns false; the caller should return immediately when ok is false.
 func (s *Server) requireChannelAccess(w http.ResponseWriter, r *http.Request, u store.User) (store.Channel, bool) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return store.Channel{}, false
 	}
 	ch, err := s.st.GetChannel(r.Context(), id)
@@ -1335,9 +1326,8 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 // previews when a same-origin permalink URL appears in a message body.
 func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid message id")
+	id, ok := requirePathInt(w, r, "id", "invalid message id")
+	if !ok {
 		return
 	}
 	msg, err := s.st.GetMessage(r.Context(), id)
@@ -1365,9 +1355,8 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid message id")
+	id, ok := requirePathInt(w, r, "id", "invalid message id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -1406,9 +1395,8 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid message id")
+	id, ok := requirePathInt(w, r, "id", "invalid message id")
+	if !ok {
 		return
 	}
 	modOverride := roleRank(u.Role) >= roleRank(store.RoleModerator)
@@ -1459,9 +1447,8 @@ func (s *Server) handleListPinnedMessages(w http.ResponseWriter, r *http.Request
 // a message.update so clients fold the pinned_at change into their state.
 func (s *Server) setMessagePinned(w http.ResponseWriter, r *http.Request, pinned bool) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid message id")
+	id, ok := requirePathInt(w, r, "id", "invalid message id")
+	if !ok {
 		return
 	}
 	msg, err := s.st.GetMessage(r.Context(), id)
@@ -1586,9 +1573,8 @@ func validUnicodeEmoji(v string) bool {
 // reaction.update to the channel audience, mirroring the pin flow.
 func (s *Server) setReaction(w http.ResponseWriter, r *http.Request, add bool) {
 	u := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid message id")
+	id, ok := requirePathInt(w, r, "id", "invalid message id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -1884,9 +1870,8 @@ func (s *Server) handleListInvitations(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteInvitation revokes/deletes an invitation by id. Admin-only.
 func (s *Server) handleDeleteInvitation(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid invitation id")
+	id, ok := requirePathInt(w, r, "id", "invalid invitation id")
+	if !ok {
 		return
 	}
 	if err := s.st.DeleteInvitation(r.Context(), id); err != nil {
@@ -1898,9 +1883,8 @@ func (s *Server) handleDeleteInvitation(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleCreateMagicLink(w http.ResponseWriter, r *http.Request) {
 	admin := userFrom(r.Context())
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	target, err := s.st.GetUserByID(r.Context(), id)
@@ -1933,9 +1917,8 @@ func (s *Server) handleCreateMagicLink(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -1970,15 +1953,13 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not set role")
 		return
 	}
-	updated, _ := s.st.GetUserByID(r.Context(), id)
-	s.broadcast("user.update", updated, nil)
+	updated := s.broadcastUserUpdate(r.Context(), id)
 	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -2008,15 +1989,13 @@ func (s *Server) handleSetActive(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not update user")
 		return
 	}
-	updated, _ := s.st.GetUserByID(r.Context(), id)
-	s.broadcast("user.update", updated, nil)
+	updated := s.broadcastUserUpdate(r.Context(), id)
 	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) handleSetBot(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -2033,16 +2012,14 @@ func (s *Server) handleSetBot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not update user")
 		return
 	}
-	updated, _ := s.st.GetUserByID(r.Context(), id)
-	s.broadcast("user.update", updated, nil)
+	updated := s.broadcastUserUpdate(r.Context(), id)
 	writeJSON(w, http.StatusOK, updated)
 }
 
 // handleAdminSetAvatar lets an admin set the avatar for any user.
 func (s *Server) handleAdminSetAvatar(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	if _, err := s.st.GetUserByID(r.Context(), id); err != nil {
@@ -2068,16 +2045,14 @@ func (s *Server) handleAdminSetAvatar(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not save avatar")
 		return
 	}
-	updated, _ := s.st.GetUserByID(r.Context(), id)
-	s.broadcast("user.update", updated, nil)
+	s.broadcastUserUpdate(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]bool{"has_avatar": true})
 }
 
 // handleAdminClearAvatar removes the avatar for any user.
 func (s *Server) handleAdminClearAvatar(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid user id")
+	id, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
 		return
 	}
 	if _, err := s.st.GetUserByID(r.Context(), id); err != nil {
@@ -2088,8 +2063,7 @@ func (s *Server) handleAdminClearAvatar(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "could not clear avatar")
 		return
 	}
-	updated, _ := s.st.GetUserByID(r.Context(), id)
-	s.broadcast("user.update", updated, nil)
+	s.broadcastUserUpdate(r.Context(), id)
 	writeJSON(w, http.StatusOK, map[string]bool{"has_avatar": false})
 }
 
@@ -2119,9 +2093,8 @@ func (s *Server) handleListArchivedChannels(w http.ResponseWriter, r *http.Reque
 
 // handleRestoreChannel un-archives a channel and re-announces it to its audience.
 func (s *Server) handleRestoreChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
 	ch, err := s.st.RestoreChannel(r.Context(), id)
@@ -2140,9 +2113,8 @@ func (s *Server) handleRestoreChannel(w http.ResponseWriter, r *http.Request) {
 // handlePurgeChannel permanently deletes an archived channel (and, by cascade,
 // its messages and memberships). Refuses live channels.
 func (s *Server) handlePurgeChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid channel id")
+	id, ok := requirePathInt(w, r, "id", "invalid channel id")
+	if !ok {
 		return
 	}
 	if err := s.st.PurgeChannel(r.Context(), id); err != nil {
@@ -2212,9 +2184,8 @@ func (s *Server) handleCreateBotToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteBotToken(w http.ResponseWriter, r *http.Request) {
-	id, err := pathInt(r, "id")
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid token id")
+	id, ok := requirePathInt(w, r, "id", "invalid token id")
+	if !ok {
 		return
 	}
 	if err := s.st.DeleteBotToken(r.Context(), id); err != nil {

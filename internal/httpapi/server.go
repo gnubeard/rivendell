@@ -376,6 +376,18 @@ func (s *Server) broadcast(typ string, payload any, audience map[int64]bool) {
 	s.hub.Broadcast(data, audience)
 }
 
+// broadcastUserUpdate reloads user id and fans out a user.update frame so all
+// clients refresh their cached copy. The reload error is intentionally
+// swallowed: callers invoke this right after writing the row in the same
+// request, so a failure here is vanishingly unlikely and not worth failing an
+// already-succeeded mutation over. Returns the (possibly zero) reloaded user
+// for handlers that echo it in their response body.
+func (s *Server) broadcastUserUpdate(ctx context.Context, id int64) store.User {
+	updated, _ := s.st.GetUserByID(ctx, id)
+	s.broadcast("user.update", updated, nil)
+	return updated
+}
+
 // audienceForChannel returns nil (everyone) for public channels, or the set of
 // users who may receive a private channel's realtime events. That set mirrors
 // canAccessChannel exactly: the members, plus — for a non-DM private channel —
@@ -985,4 +997,16 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func pathInt(r *http.Request, name string) (int64, error) {
 	return strconv.ParseInt(r.PathValue(name), 10, 64)
+}
+
+// requirePathInt parses an integer path value, writing a 400 with msg and
+// returning ok=false if it is missing or malformed. Mirrors decodeBody's
+// "guard at the top of the handler" shape: `if !ok { return }`.
+func requirePathInt(w http.ResponseWriter, r *http.Request, name, msg string) (int64, bool) {
+	id, err := pathInt(r, name)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, msg)
+		return 0, false
+	}
+	return id, true
 }
