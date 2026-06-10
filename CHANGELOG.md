@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-06-10
+
+### Changed
+- Group/voice video now adapts its bitrate to the network: when the link shows packet loss or RTT spikes (common on a phone's uplink), the sender backs off and recovers as conditions clear. This reduces the self-inflicted congestion that was dropping group calls on marginal connections.
+
 ## [1.4.0] - 2026-06-10
 
 ### Added

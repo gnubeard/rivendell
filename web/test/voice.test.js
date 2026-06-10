@@ -715,3 +715,35 @@ test("bitrateCapFor: non-video kinds return the plain ceiling, not the budget", 
   assert.equal(voice.bitrateCapFor(6, "audio"), 800000);
   assert.equal(voice.bitrateCapFor(6, "screen"), 800000);
 });
+
+test("uplinkLossFraction: delta loss over delta sent, guarding resets", () => {
+  // 10 of 100 newly-sent packets lost = 0.10.
+  assert.equal(voice.uplinkLossFraction(1100, 60, 1000, 50), 0.1);
+  assert.equal(voice.uplinkLossFraction(1000, 0, 900, 0), 0);   // no loss
+  assert.equal(voice.uplinkLossFraction(1000, 5, undefined, undefined), null); // no baseline
+  assert.equal(voice.uplinkLossFraction(1000, 5, 1000, 5), null); // no traffic this interval
+  assert.equal(voice.uplinkLossFraction(50, 1, 1000, 40), null);  // counters reset (sent went down)
+  assert.equal(voice.uplinkLossFraction(1100, 2, 1000, 40), null); // lost went down (reset)
+});
+
+test("congestionTarget: backs off on loss or RTT stress, floored", () => {
+  const ceiling = 800000;
+  // 10% loss → ×0.75.
+  assert.equal(voice.congestionTarget(800000, ceiling, { lossFrac: 0.10, rttMs: 100, limited: false }), 600000);
+  // High RTT alone triggers back-off too.
+  assert.equal(voice.congestionTarget(800000, ceiling, { lossFrac: 0, rttMs: 700, limited: false }), 600000);
+  // Repeated stress floors at MIN, never below.
+  assert.equal(voice.congestionTarget(160000, ceiling, { lossFrac: 0.2, rttMs: 100, limited: false }), 150000);
+});
+
+test("congestionTarget: climbs back when healthy, holds when bandwidth-limited", () => {
+  const ceiling = 800000;
+  // Healthy → +75k step.
+  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: 0.01, rttMs: 120, limited: false }), 475000);
+  // Climb is clamped at the ceiling.
+  assert.equal(voice.congestionTarget(780000, ceiling, { lossFrac: 0, rttMs: 100, limited: false }), 800000);
+  // Encoder already bandwidth-limited → hold (don't push past what it can use).
+  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: 0.01, rttMs: 120, limited: true }), 400000);
+  // Missing signals (null) are treated as non-stress: a fresh sender climbs.
+  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: null, rttMs: null, limited: false }), 475000);
+});

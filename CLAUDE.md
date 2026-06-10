@@ -69,7 +69,7 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - TURN credentials are **HMAC-SHA1**, not SHA256. `TestRTCCredentials` asserts 20-byte digest.
 - Both `onconnectionstatechange` AND `oniceconnectionstatechange` feed `effectiveConnectionState`. Don't key on either alone.
 - DM calls end for both parties (`endDMVoiceCall`/`cleanupVoiceForUser` removes both). `TestDMCallEndsForBothParties` guards.
-- Video bitrate cap (800 kbps) is the per-sender CEILING; `bitrateCapFor(numPeers,"video")` shrinks it across senders as the roster grows (re-applied on every roster change). Stability cap, NOT a freeze fix — don't remove it.
+- Video bitrate cap (800 kbps) is the per-sender CEILING; `bitrateCapFor(numPeers,"video")` shrinks it across senders as the roster grows. Per-peer AIMD congestion control (`monitorCongestion`/`congestionTarget`, every 2.5s) lowers the live cap below that ceiling on remote-reported loss/RTT spikes and climbs back when healthy — `applyVideoBitrateCaps(uid,pc)` applies `effectiveVideoCap`. Stability cap, NOT a freeze fix — don't remove it.
 - Group caps are server-enforced (`MaxVoiceAudio`/`MaxVoiceVideo`): over-cap join ⇒ `voice.join_denied{reason:"full"}` (abort); over the video sub-cap ⇒ forced video-muted + `reason:"video_full"` (audio-only). DMs are exempt. `TestVoiceJoinDeniedWhenFull`/`TestVoiceVideoSubCap` guard.
 - Per-user volume uses `audio.volume`, not Web Audio GainNode (Chromium no-output bug with WebRTC+WebAudio).
 - Teardown is synchronous (`finishTeardown` → `closeAllPeers` before farewell-tone await). `callGen` guards rapid re-join.

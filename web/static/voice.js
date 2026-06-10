@@ -39,6 +39,7 @@ let onStateChange = null;     // ({inCall, channelId, muted, deafened, videoMute
 let onSpeaking = null;        // (userId, speaking: bool) -> void — see setSpeakingCallback
 let onCameraError = null;     // (err) -> void — surfaces a camera getUserMedia failure to the UI
 let callHeartbeatTimer = null;
+let congestionTimer = null;   // AIMD video-bitrate monitor (see monitorCongestion)
 
 // dbg is the optional WebRTC telemetry hook (see rtcdebug.js). null unless the
 // operator/client enabled debug telemetry, so production and the unit tests run
@@ -312,6 +313,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   // mic-muted caller (mute persists across calls) likewise announces it.
   sendFn({ type: "voice.mute", channel_id: channelId, muted, video_muted: !cameraEnabled });
   startCallHeartbeat();
+  startCongestionMonitor();
   notifyState();
 
   // Greet AFTER the mic is live and the AEC has settled — this lands the tone in
@@ -324,6 +326,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
 export async function leaveVoiceChannel() {
   if (activeChannelId === null) return;
   stopCallHeartbeat();
+  stopCongestionMonitor();
   const chId = activeChannelId;
   activeChannelId = null;
   participants = [];
@@ -365,6 +368,7 @@ async function finishTeardown() {
 export async function endCallLocally() {
   if (activeChannelId === null) return;
   stopCallHeartbeat();
+  stopCongestionMonitor();
   activeChannelId = null;
   participants = [];
   notifyState();
@@ -973,17 +977,133 @@ export function bitrateCapFor(numPeers, kind) {
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(VIDEO_MAX_BITRATE_BPS, per));
 }
 
+// --- congestion-adaptive video bitrate -------------------------------------
+// The roster budget (bitrateCapFor) is a static CEILING. On a marginal uplink
+// (a phone on a flaky link) sending video at that ceiling self-inflicts the
+// congestion that drops the call: the uplink saturates → packets are lost → ICE
+// consent checks time out → disconnect/restart storm. So we run an AIMD loop per
+// uplink sender — multiplicative DECREASE when the remote reports loss or RTT
+// spikes, gradual additive INCREASE back toward the ceiling when the path is
+// healthy — and apply the result as the live maxBitrate. The browser's own
+// congestion control still operates below this; this just stops us from offering
+// more than a stressed link can carry. Per-peer state lives in peerMeta
+// (videoTarget = current adaptive bps; lossPrev = last sent/lost counters).
+const RTT_STRESS_MS = 600;            // RTT at/above this = stressed
+const LOSS_STRESS = 0.08;             // ≥8% uplink loss over an interval = stressed
+const LOSS_OK = 0.02;                 // ≤2% loss = healthy enough to climb
+const CONGESTION_DECREASE = 0.75;     // multiplicative back-off factor
+const CONGESTION_INCREASE_BPS = 75000; // additive recovery step
+const CONGESTION_INTERVAL_MS = 2500;  // monitor cadence
+
+// uplinkLossFraction is the fraction of our sent video packets the remote lost
+// over one interval, from cumulative sent (outbound-rtp) and lost (remote-
+// inbound-rtp) counters. null when there's no baseline, no traffic, or a counter
+// reset (a reconnect zeroes them). Pure; exported for unit testing.
+export function uplinkLossFraction(sentNow, lostNow, sentPrev, lostPrev) {
+  if (typeof sentPrev !== "number" || typeof lostPrev !== "number") return null;
+  const dSent = sentNow - sentPrev, dLost = lostNow - lostPrev;
+  if (dSent <= 0 || dLost < 0) return null;
+  return Math.min(1, dLost / dSent);
+}
+
+// congestionTarget runs one AIMD step: given the previous target, the roster
+// ceiling, and the observed signals, return the new per-sender bitrate. Decrease
+// on loss/RTT stress; otherwise climb by a step (unless the encoder is already
+// bandwidth-limited, in which case hold). Always clamped to
+// [MIN_VIDEO_BITRATE_BPS, ceiling]. Pure; exported for unit testing.
+export function congestionTarget(prev, ceiling, sig) {
+  let target = typeof prev === "number" && prev > 0 ? prev : ceiling;
+  const stressed = (sig.lossFrac != null && sig.lossFrac >= LOSS_STRESS) ||
+                   (sig.rttMs != null && sig.rttMs >= RTT_STRESS_MS);
+  if (stressed) {
+    target = Math.floor(target * CONGESTION_DECREASE);
+  } else {
+    const lossOk = sig.lossFrac == null || sig.lossFrac <= LOSS_OK;
+    const rttOk = sig.rttMs == null || sig.rttMs < RTT_STRESS_MS;
+    if (lossOk && rttOk && !sig.limited) target += CONGESTION_INCREASE_BPS;
+  }
+  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, target));
+}
+
+// readUplinkSignals extracts the congestion signals for our outbound video from
+// a getStats() report: the remote-reported loss fraction (vs the prev counters),
+// the round-trip time, and whether the encoder is bandwidth-limited. null when
+// we aren't sending video. `prev` is {sent, lost} from the last interval.
+function readUplinkSignals(report, prev) {
+  let out = null;
+  const remoteIns = [];
+  report.forEach((s) => {
+    if (s.type === "outbound-rtp" && s.kind === "video") out = s;
+    else if (s.type === "remote-inbound-rtp") remoteIns.push(s);
+  });
+  if (!out) return null;
+  // Link the remote-inbound report for OUR video stream. Prefer the matching
+  // ssrc (most reliable); fall back to a kind/mediaType tag (Firefox doesn't
+  // always set kind on remote-inbound-rtp). null is fine — we just lose the
+  // loss/RTT signal and behave as before (no back-off).
+  const remoteIn = remoteIns.find(r => r.ssrc === out.ssrc) ||
+                   remoteIns.find(r => r.kind === "video" || r.mediaType === "video") || null;
+  const sent = typeof out.packetsSent === "number" ? out.packetsSent : 0;
+  const lost = remoteIn && typeof remoteIn.packetsLost === "number" ? remoteIn.packetsLost : undefined;
+  const rttMs = remoteIn && typeof remoteIn.roundTripTime === "number"
+    ? Math.round(remoteIn.roundTripTime * 1000) : null;
+  const lossFrac = (lost !== undefined && prev)
+    ? uplinkLossFraction(sent, lost, prev.sent, prev.lost) : null;
+  return { sent, lost: lost ?? 0, rttMs, lossFrac, limited: out.qualityLimitationReason === "bandwidth" };
+}
+
+// effectiveVideoCap is the live per-sender bitrate for a peer: the roster
+// ceiling, lowered to the peer's current congestion target when one is set.
+function effectiveVideoCap(remoteUserId) {
+  const ceiling = bitrateCapFor(participants.length, "video");
+  const meta = peerMeta.get(remoteUserId);
+  if (!meta || typeof meta.videoTarget !== "number") return ceiling;
+  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, meta.videoTarget));
+}
+
+// monitorCongestion samples each peer's uplink and steps its adaptive target.
+// Runs on a timer for the whole call; getStats failures and absent senders are
+// skipped silently so it never disturbs a call.
+async function monitorCongestion() {
+  if (activeChannelId === null) return;
+  const ceiling = bitrateCapFor(participants.length, "video");
+  for (const [uid, pc] of peerConns) {
+    const meta = peerMeta.get(uid);
+    if (!meta) continue;
+    let report;
+    try { report = await pc.getStats(); } catch { continue; }
+    const sig = readUplinkSignals(report, meta.lossPrev);
+    if (!sig) continue;
+    meta.lossPrev = { sent: sig.sent, lost: sig.lost };
+    const prevTarget = typeof meta.videoTarget === "number" ? meta.videoTarget : ceiling;
+    const next = congestionTarget(prevTarget, ceiling, sig);
+    if (next !== meta.videoTarget) {
+      meta.videoTarget = next;
+      applyVideoBitrateCaps(uid, pc);
+      dbgEvent(uid, "bitrate-adapt", { target: next, lossFrac: sig.lossFrac, rttMs: sig.rttMs });
+    }
+  }
+}
+
+function startCongestionMonitor() {
+  stopCongestionMonitor();
+  congestionTimer = setInterval(monitorCongestion, CONGESTION_INTERVAL_MS);
+}
+function stopCongestionMonitor() {
+  if (congestionTimer !== null) { clearInterval(congestionTimer); congestionTimer = null; }
+}
+
 // applyVideoBitrateCaps caps every video sender on a peer connection at the
-// roster-aware per-sender budget (see bitrateCapFor / TOTAL_VIDEO_UPLINK_BPS).
-// Idempotent and best-effort: pre-negotiation senders report empty encodings and
-// are skipped (withVideoBitrateCap returns null), so this is called wherever
-// encodings may have just materialized — after each completed offer/answer
-// exchange, on the connection reaching "connected", AND whenever the roster size
-// changes (onVoiceState), since a new participant shrinks every sender's slice
-// without itself triggering renegotiation. A setParameters failure never touches
-// the call.
-function applyVideoBitrateCaps(pc) {
-  const cap = bitrateCapFor(participants.length, "video");
+// effective per-sender bitrate (roster budget, lowered by congestion control;
+// see effectiveVideoCap / bitrateCapFor). Idempotent and best-effort:
+// pre-negotiation senders report empty encodings and are skipped
+// (withVideoBitrateCap returns null), so this is called wherever encodings may
+// have just materialized — after each completed offer/answer exchange, on the
+// connection reaching "connected", on a roster-size change (onVoiceState), and
+// from the congestion monitor when a peer's target moves. A setParameters
+// failure never touches the call.
+function applyVideoBitrateCaps(remoteUserId, pc) {
+  const cap = effectiveVideoCap(remoteUserId);
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     let params;
@@ -1035,7 +1155,7 @@ async function onVoiceState(payload) {
   // Re-budget every video sender for the new roster size: a join shrinks each
   // sender's slice, a leave grows it back, neither of which renegotiates on its
   // own. Best-effort and idempotent (no-op when the cap is unchanged).
-  for (const pc of peerConns.values()) applyVideoBitrateCaps(pc);
+  for (const [uid, pc] of peerConns) applyVideoBitrateCaps(uid, pc);
 
   // Telemetry: a membership change (someone joined or left) is the group-call
   // event worth correlating with the per-tick aggregate. Mute/camera flips that
@@ -1148,7 +1268,7 @@ async function onOffer(payload) {
   preferVideoCodec(pc); // VP8-first on transceivers materialized by the remote offer
   await pc.setLocalDescription(); // no-arg: implicit createAnswer
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
-  applyVideoBitrateCaps(pc); // encodings exist once the answer is local
+  applyVideoBitrateCaps(fromId, pc); // encodings exist once the answer is local
   dbgEvent(fromId, "answer-sent", {});
   // If accepting this offer left one of our own tracks un-sent — the polite-peer
   // glare case where our offer carrying e.g. our camera was rolled back to take
@@ -1167,7 +1287,7 @@ async function onAnswer(payload) {
   if (!pc || pc.signalingState !== "have-local-offer") return;
   await pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
-  applyVideoBitrateCaps(pc); // offer/answer complete — sender encodings are live
+  applyVideoBitrateCaps(fromId, pc); // offer/answer complete — sender encodings are live
   dbgEvent(fromId, "answer-recv", {});
   maybeRenegotiate(fromId, pc); // flush any renegotiation deferred during the offer
 }
@@ -1200,7 +1320,7 @@ function createPC(remoteUserId) {
   // are expected to fail; renegotiatePending records that we owe the peer an
   // offer once we're back in "stable" — set when our own offer was rolled back
   // to accept a colliding one, or when negotiationneeded fired mid-negotiation).
-  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false });
+  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false, videoTarget: undefined, lossPrev: null });
   if (dbg) { try { dbg.attachPeer(remoteUserId, pc); } catch { /* no-op */ } }
 
   if (localStream) {
@@ -1283,7 +1403,7 @@ function createPC(remoteUserId) {
   // transport on this same connection. See the reconnection section above.
   pc.onconnectionstatechange = () => {
     dbgEvent(remoteUserId, "connectionstatechange", { conn: pc.connectionState });
-    if (pc.connectionState === "connected") applyVideoBitrateCaps(pc); // encodings are definitely live now
+    if (pc.connectionState === "connected") applyVideoBitrateCaps(remoteUserId, pc); // encodings are definitely live now
     applyReconnectPlan(remoteUserId, pc);
   };
 
