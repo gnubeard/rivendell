@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.7] - 2026-06-10
+
+### Changed
+- Per-message hover actions on desktop (react, reply, forward, edit, pin, delete) are now emoji icon buttons instead of text links, reducing clutter when all six controls are visible.
+
 ## [1.4.6] - 2026-06-10
 
 ### Fixed

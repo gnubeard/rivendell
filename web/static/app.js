@@ -2105,13 +2105,13 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     // Anyone who can see a message can react to it, so "react" is always present;
     // edit/pin/delete stay conditional.
     const actions = el("div", { class: "msg-actions" },
-      el("button", { class: "link", title: "Add reaction",
-        onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "react"),
-      el("button", { class: "link", title: "Reply to this message", onclick: () => startReply(m) }, "reply"),
-      !m.deleted_at ? el("button", { class: "link", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "forward") : null,
-      isOwn ? el("button", { class: "link", onclick: () => startEdit(m) }, "edit") : null,
-      canPin ? el("button", { class: "link", onclick: () => togglePin(m) }, m.pinned_at ? "unpin" : "pin") : null,
-      canDelete ? el("button", { class: "link", onclick: () => deleteMessage(m) }, "delete") : null);
+      el("button", { class: "msg-act", title: "Add reaction",
+        onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "😄"),
+      el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
+      !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
+      isOwn ? el("button", { class: "msg-act", title: "Edit", onclick: () => startEdit(m) }, "✏") : null,
+      canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", onclick: () => togglePin(m) }, "📌") : null,
+      canDelete ? el("button", { class: "msg-act danger", title: "Delete", onclick: () => deleteMessage(m) }, "🗑") : null);
     const reactions = editing ? null : reactionsRow(m);
     const rowActions = editing ? null : actions;
     const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
