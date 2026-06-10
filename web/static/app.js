@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -2268,9 +2268,14 @@ function wireComposer() {
 
   function filterEmojis(partial) {
     const q = partial.toLowerCase();
-    return Object.keys(state.emojis)
+    const builtins = Object.entries(BUILTIN_EMOJI)
+      .filter(([code]) => code.startsWith(q))
+      .map(([code, glyph]) => ({ code, glyph }));
+    const custom = Object.keys(state.emojis)
       .filter((code) => code.startsWith(q))
-      .sort()
+      .map((code) => ({ code }));
+    return [...builtins, ...custom]
+      .sort((a, b) => a.code.localeCompare(b.code))
       .slice(0, 8);
   }
 
@@ -2305,8 +2310,10 @@ function wireComposer() {
           class: "mention-item" + active,
           onpointerdown: (e) => { e.preventDefault(); pick(item); },
         },
-          el("img", { class: "emoji", src: api.emojiURL(item), alt: `:${item}:` }),
-          el("span", { class: "mention-item-name" }, `:${item}:`),
+          item.glyph
+            ? el("span", { class: "emoji-uni" }, item.glyph)
+            : el("img", { class: "emoji", src: api.emojiURL(item.code), alt: `:${item.code}:` }),
+          el("span", { class: "mention-item-name" }, `:${item.code}:`),
         ));
       }
     });
@@ -2327,10 +2334,10 @@ function wireComposer() {
 
   // Insert the chosen completion, replacing from the trigger char to the caret:
   // "@username " for a mention (item is a user), ":shortcode: " for an emoji
-  // (item is a shortcode string).
+  // (item is a { code, glyph? } object).
   function pick(item) {
     if (!completion) return;
-    const text = completion.kind === "mention" ? "@" + item.username + " " : `:${item}: `;
+    const text = completion.kind === "mention" ? "@" + item.username + " " : `:${item.code}: `;
     const before = input.value.slice(0, completion.query.start);
     const after = input.value.slice(input.selectionStart);
     input.value = before + text + after;

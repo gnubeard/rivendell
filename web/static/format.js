@@ -61,12 +61,23 @@ export function replySnippet(content, max = 80) {
   return s;
 }
 
+// applyEmoticons substitutes classic text emoticons with their Unicode glyphs.
+// Runs on already-escaped text: <3 arrives as &lt;3. Negative lookbehind/ahead
+// prevent firing mid-word (:Database) or inside URLs (http://x.com:D/y).
+function applyEmoticons(s) {
+  s = s.replace(/(?<![:\w]):D(?!\w)/g, "😁");
+  s = s.replace(/(?<![:\w]):\)(?!\w)/g, "🙂");
+  s = s.replace(/(?<![:\w]):\((?!\w)/g, "🙁");
+  s = s.replace(/&lt;3(?!\d)/g, "❤️");
+  return s;
+}
+
 // Apply text-only inline rules (bold/italic/strike/mentions) to an already-escaped
 // run. This deliberately does NOT touch links — link extraction happens one layer
 // up in inline(), so a URL is never fed through these regexes (that is what keeps
 // underscores in a URL from being chewed into <em>).
 function inlineMarkup(escaped, meLower) {
-  let out = escaped;
+  let out = applyEmoticons(escaped);
   // Bold then italic (order matters so ** isn't eaten by *).
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
@@ -154,9 +165,11 @@ export function atQuery(text, pos) {
 // URLs, times, and ratios: the `:` must not be preceded by a word char, `/`, or
 // another `:` — so `http://`, `3:30`, `16:9`, and `Foo::Bar` never trigger, while
 // a `:` at a boundary (start of line or after whitespace) opens the picker.
+// The scan accepts only lowercase chars — uppercase stops it — so typing `:D`,
+// `:Fire`, etc. never opens the picker (no shortcode starts with a capital letter).
 export function colonQuery(text, pos) {
   let i = pos - 1;
-  while (i >= 0 && /[A-Za-z0-9_]/.test(text[i])) i--;
+  while (i >= 0 && /[a-z0-9_]/.test(text[i])) i--;
   if (i < 0 || text[i] !== ":") return null;
   if (i > 0 && /[A-Za-z0-9_/:]/.test(text[i - 1])) return null;
   return { start: i, partial: text.slice(i + 1, pos) };
@@ -238,10 +251,33 @@ export function extractHideURL(text, origin) {
   return null;
 }
 
-// EMOJI_RE matches a :shortcode: token. Shortcodes are [a-z0-9_]{2,32} (same
-// charset as usernames), so a matched name can never carry an HTML metacharacter
-// — the <img> we build from it is safe by construction.
-const EMOJI_RE = /:([a-z0-9_]{2,32}):/g;
+// EMOJI_RE matches a :shortcode: token. Shortcodes are [+a-z0-9_]{2,32}; the
+// leading + covers :+1:. All matched chars are HTML-safe by construction.
+const EMOJI_RE = /:([+a-z0-9_]{2,32}):/g;
+
+// BUILTIN_EMOJI maps conventional shortcode names to their Unicode glyphs.
+// These render as native Unicode spans (not server-side image URLs), so they
+// work without any custom emoji registry and survive an empty instance.
+export const BUILTIN_EMOJI = {
+  "+1": "👍",
+  thumbsdown: "👎",
+  symbolic_heart: "❤️",
+  joy: "😂",
+  wink: "😉",
+  heart_eyes: "😍",
+  thinking: "🤔",
+  tada: "🎉",
+  raised_hands: "🙌",
+  open_mouth: "😮",
+  cry: "😢",
+  angry: "😡",
+  pray: "🙏",
+  fire: "🔥",
+  white_check: "✅",
+  eyes: "👀",
+  "100": "💯",
+  wave: "👋",
+};
 
 // hasEmoji checks the caller-supplied registry, accepting either a Set of
 // shortcodes or a plain object keyed by shortcode (truthy value = known).
@@ -253,6 +289,10 @@ function hasEmoji(emojis, name) {
 
 function emojiImg(name) {
   return `<img class="emoji" src="/api/emojis/${name}/image" alt=":${name}:" title=":${name}:" loading="lazy">`;
+}
+
+function emojiGlyph(glyph, name) {
+  return `<span class="emoji-uni" title=":${name}:">${glyph}</span>`;
 }
 
 // --- Markdown tables (GFM-style) ------------------------------------------
@@ -452,15 +492,18 @@ function inlineWithCode(escapedLine, meLower, emojis, embedImages, hideUrl) {
 // underscores that the italic rule keys on. Unknown shortcodes are left in place
 // as literal text for inlineWithBlobImages() to handle. Blob images are processed
 // next so that !(…) syntax is consumed before LINK_RE sees it.
+// Builtin emoji (BUILTIN_EMOJI) always render as Unicode glyphs; custom emoji
+// from the server registry render as <img> tags.
 function inlineWithEmoji(seg, meLower, emojis, embedImages, hideUrl) {
-  if (!emojis) return inlineWithBlobImages(seg, meLower, embedImages, hideUrl);
   let out = "";
   let last = 0;
   let m;
   EMOJI_RE.lastIndex = 0;
   while ((m = EMOJI_RE.exec(seg)) !== null) {
-    if (!hasEmoji(emojis, m[1])) continue;
-    out += inlineWithBlobImages(seg.slice(last, m.index), meLower, embedImages, hideUrl) + emojiImg(m[1]);
+    const builtin = BUILTIN_EMOJI[m[1]];
+    if (!builtin && !hasEmoji(emojis, m[1])) continue;
+    const rendered = builtin ? emojiGlyph(builtin, m[1]) : emojiImg(m[1]);
+    out += inlineWithBlobImages(seg.slice(last, m.index), meLower, embedImages, hideUrl) + rendered;
     last = m.index + m[0].length;
   }
   return out + inlineWithBlobImages(seg.slice(last), meLower, embedImages, hideUrl);

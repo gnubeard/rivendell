@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, replySnippet } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 test("escapes HTML to prevent XSS", () => {
@@ -358,6 +358,77 @@ test("custom emoji: markdown around an emoji still applies to the text", () => {
   const out = formatMessage("**bold** :party:", "me", emojis);
   assert.ok(out.includes("<strong>bold</strong>"));
   assert.ok(out.includes('src="/api/emojis/party/image"'));
+});
+
+test("builtin emoji: known shortcodes render as Unicode glyphs", () => {
+  const out = formatMessage(":joy: :pray: :fire:", "me", null);
+  assert.ok(out.includes("😂"), ":joy: renders glyph");
+  assert.ok(out.includes("🙏"), ":pray: renders glyph");
+  assert.ok(out.includes("🔥"), ":fire: renders glyph");
+  assert.ok(out.includes('title=":joy:"'), "title attribute set");
+});
+
+test("builtin emoji: :+1: with plus sign renders correctly", () => {
+  const out = formatMessage(":+1:", "me", null);
+  assert.ok(out.includes("👍"), ":+1: renders thumbs-up glyph");
+});
+
+test("builtin emoji: :100: all-digit shortcode renders", () => {
+  const out = formatMessage(":100:", "me", null);
+  assert.ok(out.includes("💯"));
+});
+
+test("builtin emoji: :symbolic_heart: renders heart", () => {
+  const out = formatMessage(":symbolic_heart:", "me", null);
+  assert.ok(out.includes("❤️"));
+});
+
+test("builtin emoji: renders even with no custom emoji registry", () => {
+  assert.ok(formatMessage(":wave:", "me", null).includes("👋"));
+  assert.ok(formatMessage(":wave:", "me", undefined).includes("👋"));
+});
+
+test("builtin emoji: unknown shortcode still passes through", () => {
+  assert.ok(formatMessage(":unknown_xyz:", "me", null).includes(":unknown_xyz:"));
+});
+
+test("builtin emoji: not rendered inside code spans", () => {
+  assert.ok(formatMessage("`:fire:`", "me", null).includes(":fire:"));
+});
+
+test("builtin emoji: BUILTIN_EMOJI export has expected entries", () => {
+  assert.equal(BUILTIN_EMOJI["+1"], "👍");
+  assert.equal(BUILTIN_EMOJI.joy, "😂");
+  assert.equal(BUILTIN_EMOJI.symbolic_heart, "❤️");
+  assert.equal(BUILTIN_EMOJI.white_check, "✅");
+  assert.equal(BUILTIN_EMOJI["100"], "💯");
+});
+
+test("emoticons: :D :) :( render as glyphs", () => {
+  assert.ok(formatMessage("hello :D world").includes("😁"), ":D");
+  assert.ok(formatMessage("hello :) world").includes("🙂"), ":)");
+  assert.ok(formatMessage("hello :( world").includes("🙁"), ":(");
+});
+
+test("emoticons: <3 renders as heart", () => {
+  assert.ok(formatMessage("I <3 this").includes("❤️"), "<3 → ❤️");
+});
+
+test("emoticons: do not fire mid-word or after colon", () => {
+  assert.ok(!formatMessage(":Database").includes("😁"), ":Database not a smiley");
+  assert.ok(!formatMessage("::D").includes("😁"), "::D not a smiley");
+  assert.ok(!formatMessage("http://x.com:D/y").includes("😁"), "URL colon-D not a smiley");
+});
+
+test("colonQuery: uppercase after colon does not open picker", () => {
+  assert.equal(colonQuery(":D", 2), null, ":D should not trigger");
+  assert.equal(colonQuery(":Fire", 5), null, ":Fire should not trigger");
+  assert.equal(colonQuery("hello :B", 8), null, ":B should not trigger");
+});
+
+test("colonQuery: lowercase still triggers normally", () => {
+  assert.deepEqual(colonQuery(":fire", 5), { start: 0, partial: "fire" });
+  assert.deepEqual(colonQuery("hello :joy", 10), { start: 6, partial: "joy" });
 });
 
 test("permalinkHash builds the canonical no-slash hash", () => {

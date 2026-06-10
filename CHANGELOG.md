@@ -9,13 +9,18 @@ Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment 
 
 ## [Unreleased]
 
+## [1.3.127] - 2026-06-10
+
+### Added
+- Built-in shortcodes for the common Unicode emoji palette: `:joy:`, `:pray:`, `:fire:`, `:wave:`, `:eyes:`, `:100:`, `:+1:`, `:thumbsdown:`, `:symbolic_heart:`, `:wink:`, `:heart_eyes:`, `:thinking:`, `:tada:`, `:raised_hands:`, `:open_mouth:`, `:cry:`, `:angry:`, `:white_check:` — render as inline glyphs in messages without a custom emoji registry; appear in the colon-autocomplete picker
+- Emoticon rendering: `:D` → 😁, `:)` → 🙂, `:(`→ 🙁, `<3` → ❤️ (in message text; not in the picker)
+- End-to-end WebRTC test suite (`make test-e2e`, Playwright, dev-only): two real browsers exercise the DM call happy path, mid-call camera renegotiation, simultaneous-camera glare, and both-parties hang-up against a real server
+
 ### Changed
 - Call signaling now uses the standard WebRTC Perfect Negotiation pattern (lower user_id = impolite, higher = polite), making simultaneous renegotiations — both parties toggling cameras at once, a camera toggle crossing an ICE restart — converge reliably instead of depending on lucky timing
 - Call reconnection now reacts to ICE-level connection trouble as well, which Firefox reports earlier (and sometimes exclusively) — dropped connections are detected and repaired sooner; the grace period before acting on a transient "disconnected" was raised from 2 s to 5 s so brief blips (Wi-Fi roam, radio handover) self-heal instead of triggering restart churn
 - Outgoing call video is now capped at 800 kbps per recipient, so a burst of motion can't saturate a phone's uplink and degrade the call's audio or stability
-
-### Added
-- End-to-end WebRTC test suite (`make test-e2e`, Playwright, dev-only): two real browsers exercise the DM call happy path, mid-call camera renegotiation, simultaneous-camera glare, and both-parties hang-up against a real server
+- The emoji autocomplete picker no longer opens when typing a colon followed by a capital letter (`:D`, `:Fire`, etc.)
 
 ## [1.3.108] - 2026-06-09
 
