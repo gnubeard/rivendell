@@ -416,6 +416,8 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg-body h3 { font-size: 1.15em; }
 .msg-body h4 { font-size: 1.05em; }
 .msg-body h5 { font-size: 0.95em; }
+.msg-body ul { margin: 0.2rem 0; padding-left: 1.4rem; list-style: disc; }
+.msg-body ul li { margin: 0.1rem 0; }
 /* Inline message embed card (same-origin permalink dropped as a bare URL). */
 .msg-embed { margin: 0.35rem 0 0.1rem; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-left: 3px solid var(--accent-dim); border-radius: var(--radius); background: var(--bg-2); cursor: pointer; max-width: 460px; }
 .msg-embed:hover { background: var(--bg-3); }

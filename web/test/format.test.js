@@ -231,6 +231,29 @@ test("header-only table (no body rows) renders just a head", () => {
   assert.ok(!out.includes("<tbody>"));
 });
 
+test("unordered list with * and - bullets", () => {
+  assert.equal(formatMessage("* one\n* two"), "<ul><li>one</li><li>two</li></ul>");
+  assert.equal(formatMessage("- a\n- b"), "<ul><li>a</li><li>b</li></ul>");
+});
+
+test("list items run the inline pipeline", () => {
+  const out = formatMessage("* **bold** item\n* `code` item");
+  assert.ok(out.includes("<li><strong>bold</strong> item</li>"));
+  assert.ok(out.includes("<li><code>code</code> item</li>"));
+});
+
+test("list adjacent to text has no extra <br> separators", () => {
+  const out = formatMessage("before\n* item\nafter");
+  assert.ok(!out.includes("<br><ul>"), "no <br> before list");
+  assert.ok(!out.includes("</ul><br>"), "no <br> after list");
+  assert.ok(out.includes("before<ul><li>item</li></ul>after"));
+});
+
+test("*foo* italicizes but * foo lists (no collision)", () => {
+  assert.equal(formatMessage("*foo*"), "<em>foo</em>");
+  assert.equal(formatMessage("* foo"), "<ul><li>foo</li></ul>");
+});
+
 test("a link inside escaped text keeps entities intact", () => {
   const out = formatMessage("https://x.com/?a=1&b=2");
   // & was escaped to &amp; before linking; the href should contain it.

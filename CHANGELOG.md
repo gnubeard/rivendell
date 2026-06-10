@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.21] - 2026-06-10
+
+### Added
+- Markdown bullet lists: consecutive lines starting with `* ` or `- ` now render as an unordered list.
+
 ## [1.4.20] - 2026-06-10
 
 ### Fixed

@@ -414,10 +414,23 @@ export function formatMessage(text, me, emojis, opts) {
           rendered.push(`<${tag}>${inlineWithCode(hm[2], meLower, emojis, embedImages, hideUrl)}</${tag}>`);
           continue;
         }
+        // Unordered list: consecutive lines starting with "* " or "- ". The required
+        // trailing space means "*italic*" (no space after *) is left to inlineMarkup.
+        if (/^[*-]\s+/.test(line)) {
+          let j = li;
+          const lis = [];
+          for (; j < lines.length && /^[*-]\s+/.test(lines[j]); j++) {
+            const item = lines[j].replace(/^[*-]\s+/, "");
+            lis.push(`<li>${inlineWithCode(item, meLower, emojis, embedImages, hideUrl)}</li>`);
+          }
+          rendered.push(`<ul>${lis.join("")}</ul>`);
+          li = j - 1;
+          continue;
+        }
         rendered.push(inlineWithCode(line, meLower, emojis, embedImages, hideUrl));
       }
       // Block elements don't need <br> separators — their block formatting provides the newline.
-      const isBlock = (s) => /^<(?:blockquote|h[1-6]|table)/.test(s);
+      const isBlock = (s) => /^<(?:blockquote|h[1-6]|table|ul)/.test(s);
       html += rendered.reduce((acc, item, idx) => {
         if (idx === 0) return item;
         return acc + (isBlock(rendered[idx - 1]) || isBlock(item) ? "" : "<br>") + item;
