@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-06-10
+
+### Fixed
+- Arrow-key navigation in the `@`-mention and `:emoji` autocomplete popups now scrolls the highlighted row into view, so on desktop the selection no longer disappears off the bottom when the list is longer than the visible area.
+
 ## [1.4.4] - 2026-06-10
 
 ### Added

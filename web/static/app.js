@@ -2322,6 +2322,7 @@ function attachAutocomplete(input, popup) {
   function renderPopup() {
     popup.innerHTML = "";
     if (!completion) { popup.hidden = true; return; }
+    let activeEl = null; // the highlighted <li>, scrolled into view after layout
     completion.items.forEach((item, i) => {
       const active = i === completion.index ? " active" : "";
       // Mouse: pointerdown prevents textarea blur so the item stays visible for
@@ -2332,8 +2333,9 @@ function attachAutocomplete(input, popup) {
         onpointerdown: (e) => { if (e.pointerType !== "mouse") return; e.preventDefault(); pick(item); },
         ontouchend: (e) => { if (!popupTouchMoved) { e.preventDefault(); pick(item); } },
       };
+      let li;
       if (completion.kind === "mention") {
-        popup.append(el("li", {
+        li = el("li", {
           class: "mention-item" + active,
           ...itemHandlers,
         },
@@ -2341,9 +2343,9 @@ function attachAutocomplete(input, popup) {
           item.display_name && item.display_name !== item.username
             ? el("span", { class: "mention-item-display" }, item.display_name)
             : null,
-        ));
+        );
       } else {
-        popup.append(el("li", {
+        li = el("li", {
           class: "mention-item" + active,
           ...itemHandlers,
         },
@@ -2351,10 +2353,15 @@ function attachAutocomplete(input, popup) {
             ? el("span", { class: "emoji-uni" }, item.glyph)
             : el("img", { class: "emoji", src: api.emojiURL(item.code), alt: `:${item.code}:` }),
           el("span", { class: "mention-item-name" }, `:${item.code}:`),
-        ));
+        );
       }
+      popup.append(li);
+      if (active) activeEl = li;
     });
     popup.hidden = completion.items.length === 0;
+    // Keep the highlighted row visible: when the list overflows its max-height,
+    // arrowing past the visible window must scroll it back into view.
+    if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
   }
 
   function updatePopup() {
