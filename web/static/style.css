@@ -236,6 +236,8 @@ button.primary:hover { filter: brightness(1.08); }
    before the connection dot. Relies on [hidden]{display:none!important}. */
 .notif-total { margin-left: auto; background: var(--danger); color: #fff; font-size: 0.66rem; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
 .sidebar-head .conn { margin-left: 0.5rem; }
+.signout-btn { background: none; border: none; color: var(--text-faint); font-size: 1.1rem; cursor: pointer; padding: 0; margin-left: 0.5rem; line-height: 1; }
+.signout-btn:hover { color: var(--danger); }
 .hint { color: var(--text-faint); font-size: 0.8rem; margin: 0.1rem 0 0.6rem; min-height: 1.1em; }
 
 /* "A new version is available" — a small, non-blocking bar pinned bottom-centre,
@@ -631,9 +633,6 @@ body.dm-active #members-toggle { display: none; }
 .modal-form .optional { color: var(--text-faint); }
 .modal-form .checkbox-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0 0.9rem; cursor: pointer; color: var(--text); }
 .modal-form .checkbox-row input { width: auto; margin: 0; }
-/* Sign-out lives in the profile drawer now, set off below the form. */
-.profile-foot { margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
-.profile-foot .link { font-size: 0.85rem; }
 
 .invite-list { list-style: none; margin: 0.6rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
 .invite-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }

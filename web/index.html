@@ -90,6 +90,7 @@
       <header class="sidebar-head">
         <span id="about-btn" class="brand small" title="About">rivendell</span>
         <span id="notif-total" class="notif-total" title="Missed notifications" hidden></span>
+        <button id="logout-btn" class="signout-btn" title="Sign out">⏻</button>
         <span id="conn-status" class="conn offline" title="Reconnecting…"></span>
       </header>
 
@@ -281,7 +282,7 @@
 
   <!-- PROFILE MODAL -->
   <div id="profile-modal" class="modal" hidden>
-    <div class="modal-card narrow">
+    <div class="modal-card">
       <header class="modal-head">
         <h2>Edit profile</h2>
         <button id="profile-close" class="icon-btn">×</button>
@@ -327,9 +328,6 @@
         <button type="submit" class="primary">Save</button>
         <p id="profile-error" class="error" role="alert"></p>
       </form>
-      <div class="profile-foot">
-        <button type="button" id="logout-btn" class="link danger">Sign out</button>
-      </div>
     </div>
   </div>
 

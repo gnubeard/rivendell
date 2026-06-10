@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.14] - 2026-06-10
+
+### Changed
+- Moved sign-out to a ⏻ button in the sidebar header (highlights red on hover); widened the profile modal.
+
 ## [1.4.13] - 2026-06-10
 
 ### Added
