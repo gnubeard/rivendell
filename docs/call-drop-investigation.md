@@ -45,8 +45,9 @@ will end abruptly:
 
 ## Evidence from telemetry
 
-The file `docs/rivendell-chat.log` has a complete recording of a call that dropped
-at ~91 seconds. Key extracted timeline (UTC, ch=4, self=3=desktop-FF,
+The raw telemetry log of a call that dropped at ~91 seconds has been removed now
+that the investigation is closed; the key extracted timeline is preserved below
+(UTC, ch=4, self=3=desktop-FF,
 self=1=Android-FF):
 
 ```
