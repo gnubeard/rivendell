@@ -2858,11 +2858,17 @@ function resizeComposerInput() {
 
 // autoGrowEdit sizes the inline-edit textarea to its content (capped by CSS).
 function autoGrowEdit(ta) {
+  // Save and restore the message-list scroll position: setting height="auto"
+  // shrinks the textarea momentarily, causing the browser to auto-scroll the
+  // focused element into view and jump the message list unexpectedly.
+  const list = ta.closest(".message-list");
+  const savedTop = list ? list.scrollTop : null;
   ta.style.height = "auto";
   // Add the vertical border back: scrollHeight is content+padding only, and the
   // box is border-box, so height = scrollHeight would under-size by the border
   // and the cursor would scroll into the slack (see autoGrow in wireComposer).
   ta.style.height = ta.scrollHeight + (ta.offsetHeight - ta.clientHeight) + "px";
+  if (list && savedTop !== null) list.scrollTop = savedTop;
 }
 
 // editorFor builds the inline editor that replaces a message's body while editing.

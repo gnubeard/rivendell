@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-06-10
+
+### Fixed
+- Typing in the inline message editor no longer causes the message list to scroll — the scroll position is preserved while the edit textarea grows.
+
 ## [1.4.5] - 2026-06-10
 
 ### Fixed
