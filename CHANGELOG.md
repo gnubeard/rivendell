@@ -3,10 +3,6 @@
 All user-visible changes to Rivendell are documented here.
 Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
-## [1.3.126] - 2026-06-10
-
-Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment (v1.3.113–v1.3.125) that never converged. No user-visible change from v1.3.112.
-
 ## [Unreleased]
 
 ## [1.3.129] - 2026-06-10
@@ -31,6 +27,10 @@ Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment 
 - Call reconnection now reacts to ICE-level connection trouble as well, which Firefox reports earlier (and sometimes exclusively) — dropped connections are detected and repaired sooner; the grace period before acting on a transient "disconnected" was raised from 2 s to 5 s so brief blips (Wi-Fi roam, radio handover) self-heal instead of triggering restart churn
 - Outgoing call video is now capped at 800 kbps per recipient, so a burst of motion can't saturate a phone's uplink and degrade the call's audio or stability
 - The emoji autocomplete picker no longer opens when typing a colon followed by a capital letter (`:D`, `:Fire`, etc.)
+
+## [1.3.126] - 2026-06-10
+
+Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment (v1.3.113–v1.3.125) that never converged. No user-visible change from v1.3.112.
 
 ## [1.3.108] - 2026-06-09
 
