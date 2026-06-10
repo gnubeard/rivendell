@@ -1783,6 +1783,7 @@ async function loadChannel(id) {
     channelUnreadFrom[id] = (state.unread[id] || state.mentions[id]) ? (state.lastRead[id] || 0) : 0;
   }
   const ch = state.channels[id];
+  renderChannelHeader(ch);
   renderSecretBanner();
   // Invite + leave affordances only make sense for a real private channel
   // (not DMs/public). Inviting is moderator+ only.

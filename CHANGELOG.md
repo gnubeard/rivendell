@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.20] - 2026-06-10
+
+### Fixed
+- Channel title in the header now updates again when switching channels (regressed in 1.4.9, which dropped the header repaint from the channel-load path).
+
 ## [1.4.19] - 2026-06-10
 
 ### Changed
