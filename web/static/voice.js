@@ -944,21 +944,25 @@ function preferVideoCodec(pc) {
   }
 }
 
-// withVideoBitrateCap returns a copy of an RTCRtpSendParameters with maxBitrate
-// set on every encoding, or null when there is nothing to do — params missing,
-// encodings absent/empty (the array is only populated once negotiation has
-// materialized the sender, and the spec forbids *adding* encodings via
-// setParameters), or every encoding already carries the cap. Returning null
-// lets the caller skip a pointless setParameters round-trip; the cap is then
-// re-attempted at the next call site (post-negotiation / on connected). Never
-// mutates its input. Pure; exported for unit testing.
-export function withVideoBitrateCap(params, maxBitrate) {
+// withVideoEncodingCaps returns a copy of an RTCRtpSendParameters with the given
+// encoding shape (maxBitrate, scaleResolutionDownBy, maxFramerate) set on every
+// encoding, or null when there is nothing to do — params missing, encodings
+// absent/empty (the array is only populated once negotiation has materialized the
+// sender, and the spec forbids *adding* encodings via setParameters), or every
+// encoding already carries this exact shape. Returning null lets the caller skip a
+// pointless setParameters round-trip; the shape is then re-attempted at the next
+// call site (post-negotiation / on connected). Never mutates its input. Pure;
+// exported for unit testing.
+export function withVideoEncodingCaps(params, caps) {
   if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return null;
+  const { maxBitrate, scaleResolutionDownBy, maxFramerate } = caps;
   let changed = false;
   const encodings = params.encodings.map(e => {
-    if (e && e.maxBitrate === maxBitrate) return e;
+    if (e && e.maxBitrate === maxBitrate &&
+        e.scaleResolutionDownBy === scaleResolutionDownBy &&
+        e.maxFramerate === maxFramerate) return e;
     changed = true;
-    return { ...e, maxBitrate };
+    return { ...e, maxBitrate, scaleResolutionDownBy, maxFramerate };
   });
   if (!changed) return null;
   return { ...params, encodings };
@@ -982,17 +986,32 @@ export function bitrateCapFor(numPeers, kind) {
 // (a phone on a flaky link) sending video at that ceiling self-inflicts the
 // congestion that drops the call: the uplink saturates → packets are lost → ICE
 // consent checks time out → disconnect/restart storm. So we run an AIMD loop per
-// uplink sender — multiplicative DECREASE when the remote reports loss or RTT
-// spikes, gradual additive INCREASE back toward the ceiling when the path is
-// healthy — and apply the result as the live maxBitrate. The browser's own
-// congestion control still operates below this; this just stops us from offering
-// more than a stressed link can carry. Per-peer state lives in peerMeta
-// (videoTarget = current adaptive bps; lossPrev = last sent/lost counters).
+// uplink sender — multiplicative DECREASE when the remote reports loss/RTT spikes
+// or the local encoder is CPU-pinned, gradual additive INCREASE back toward the
+// ceiling when the path is healthy — and apply the result as the live encoding
+// shape: maxBitrate AND, below thresholds, a coarser scaleResolutionDownBy /
+// maxFramerate (see videoScaleForTarget). Bitrate alone is not enough: a phone
+// whose encoder can't keep up at full resolution (encT climbs, fps collapses)
+// pays the same per-frame CPU no matter how low maxBitrate goes — only dropping
+// resolution/framerate relieves it. The browser's own congestion control still
+// operates below this; this just stops us from offering more than a stressed
+// link or encoder can carry. Per-peer state lives in peerMeta (videoTarget =
+// current adaptive bps; lossPrev = last sent/lost counters; healthyStreak =
+// consecutive non-stressed intervals, gating the climb so one clean sample
+// doesn't bounce us back up).
 const RTT_STRESS_MS = 600;            // RTT at/above this = stressed
 const LOSS_STRESS = 0.08;             // ≥8% uplink loss over an interval = stressed
 const LOSS_OK = 0.02;                 // ≤2% loss = healthy enough to climb
 const CONGESTION_DECREASE = 0.75;     // multiplicative back-off factor
 const CONGESTION_INCREASE_BPS = 75000; // additive recovery step
+const CLIMB_AFTER_HEALTHY = 2;        // need this many consecutive healthy intervals before climbing
+// Resolution/framerate stepping by adaptive target. Keyed on ABSOLUTE bps (encoder
+// CPU cost tracks pixels/sec, not the ratio to a roster ceiling), so a big roster —
+// whose per-sender slice is already small — also renders at a coarser scale, which
+// is fine since tiles are tiny. 1× = native capture; 2× halves each dimension
+// (¼ pixels); 4× quarters them.
+const VIDEO_SCALE_FULL_BPS = 500000;  // ≥ this → native resolution
+const VIDEO_SCALE_HALF_BPS = 300000;  // ≥ this → ½-scale; below → ¼-scale
 const CONGESTION_INTERVAL_MS = 2500;  // monitor cadence
 
 // uplinkLossFraction is the fraction of our sent video packets the remote lost
@@ -1006,23 +1025,49 @@ export function uplinkLossFraction(sentNow, lostNow, sentPrev, lostPrev) {
   return Math.min(1, dLost / dSent);
 }
 
+// uplinkStressed classifies one interval's signals as stressed: remote-reported
+// loss at/above LOSS_STRESS, RTT at/above RTT_STRESS_MS, or the LOCAL encoder
+// reporting it's CPU-limited (cpuLimited). CPU pressure belongs here because the
+// only relief is a smaller frame, which the back-off → lower target → coarser
+// scale path delivers. Pure; exported so the monitor can keep the streak in sync.
+export function uplinkStressed(sig) {
+  return (sig.lossFrac != null && sig.lossFrac >= LOSS_STRESS) ||
+         (sig.rttMs != null && sig.rttMs >= RTT_STRESS_MS) ||
+         !!sig.cpuLimited;
+}
+
 // congestionTarget runs one AIMD step: given the previous target, the roster
 // ceiling, and the observed signals, return the new per-sender bitrate. Decrease
-// on loss/RTT stress; otherwise climb by a step (unless the encoder is already
-// bandwidth-limited, in which case hold). Always clamped to
-// [MIN_VIDEO_BITRATE_BPS, ceiling]. Pure; exported for unit testing.
+// on stress (loss/RTT/CPU; see uplinkStressed); otherwise climb by a step — but
+// only once the link has been healthy for CLIMB_AFTER_HEALTHY consecutive
+// intervals (sig.healthyStreak, maintained by the caller) and the encoder isn't
+// already bandwidth-limited. The streak gate is the oscillation fix: without it a
+// single clean sample bounced the target back up while RTT was still elevated.
+// Always clamped to [MIN_VIDEO_BITRATE_BPS, ceiling]. Pure; exported for testing.
 export function congestionTarget(prev, ceiling, sig) {
   let target = typeof prev === "number" && prev > 0 ? prev : ceiling;
-  const stressed = (sig.lossFrac != null && sig.lossFrac >= LOSS_STRESS) ||
-                   (sig.rttMs != null && sig.rttMs >= RTT_STRESS_MS);
-  if (stressed) {
+  if (uplinkStressed(sig)) {
     target = Math.floor(target * CONGESTION_DECREASE);
   } else {
     const lossOk = sig.lossFrac == null || sig.lossFrac <= LOSS_OK;
     const rttOk = sig.rttMs == null || sig.rttMs < RTT_STRESS_MS;
-    if (lossOk && rttOk && !sig.limited) target += CONGESTION_INCREASE_BPS;
+    const settled = (sig.healthyStreak || 0) >= CLIMB_AFTER_HEALTHY;
+    if (lossOk && rttOk && settled && !sig.limited) target += CONGESTION_INCREASE_BPS;
   }
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, target));
+}
+
+// videoScaleForTarget maps an adaptive bitrate target to an encoding shape:
+// scaleResolutionDownBy and maxFramerate. At/above VIDEO_SCALE_FULL_BPS the link
+// can carry native capture; as the target falls we shed resolution (2×, then 4×)
+// and trim framerate, which is what actually unloads a CPU-pinned phone encoder.
+// Pure; exported for unit testing.
+export function videoScaleForTarget(target) {
+  if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) {
+    return { scaleResolutionDownBy: 1, maxFramerate: 24 };
+  }
+  if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 2, maxFramerate: 20 };
+  return { scaleResolutionDownBy: 4, maxFramerate: 15 };
 }
 
 // readUplinkSignals extracts the congestion signals for our outbound video from
@@ -1049,7 +1094,11 @@ function readUplinkSignals(report, prev) {
     ? Math.round(remoteIn.roundTripTime * 1000) : null;
   const lossFrac = (lost !== undefined && prev)
     ? uplinkLossFraction(sent, lost, prev.sent, prev.lost) : null;
-  return { sent, lost: lost ?? 0, rttMs, lossFrac, limited: out.qualityLimitationReason === "bandwidth" };
+  return {
+    sent, lost: lost ?? 0, rttMs, lossFrac,
+    limited: out.qualityLimitationReason === "bandwidth", // hold the climb (encoder maxed for the link)
+    cpuLimited: out.qualityLimitationReason === "cpu",    // back off (shed resolution/framerate)
+  };
 }
 
 // effectiveVideoCap is the live per-sender bitrate for a peer: the roster
@@ -1075,12 +1124,19 @@ async function monitorCongestion() {
     const sig = readUplinkSignals(report, meta.lossPrev);
     if (!sig) continue;
     meta.lossPrev = { sent: sig.sent, lost: sig.lost };
+    // Maintain the consecutive-healthy streak that gates the climb (congestionTarget
+    // reads it via sig.healthyStreak): reset on any stressed interval, else extend.
+    meta.healthyStreak = uplinkStressed(sig) ? 0 : (meta.healthyStreak || 0) + 1;
+    sig.healthyStreak = meta.healthyStreak;
     const prevTarget = typeof meta.videoTarget === "number" ? meta.videoTarget : ceiling;
     const next = congestionTarget(prevTarget, ceiling, sig);
     if (next !== meta.videoTarget) {
       meta.videoTarget = next;
       applyVideoBitrateCaps(uid, pc);
-      dbgEvent(uid, "bitrate-adapt", { target: next, lossFrac: sig.lossFrac, rttMs: sig.rttMs });
+      dbgEvent(uid, "bitrate-adapt", {
+        target: next, lossFrac: sig.lossFrac, rttMs: sig.rttMs,
+        scale: videoScaleForTarget(next).scaleResolutionDownBy, cpu: sig.cpuLimited,
+      });
     }
   }
 }
@@ -1093,22 +1149,24 @@ function stopCongestionMonitor() {
   if (congestionTimer !== null) { clearInterval(congestionTimer); congestionTimer = null; }
 }
 
-// applyVideoBitrateCaps caps every video sender on a peer connection at the
-// effective per-sender bitrate (roster budget, lowered by congestion control;
-// see effectiveVideoCap / bitrateCapFor). Idempotent and best-effort:
+// applyVideoBitrateCaps shapes every video sender on a peer connection to the
+// effective per-sender target (roster budget, lowered by congestion control; see
+// effectiveVideoCap / bitrateCapFor) — maxBitrate plus the matching resolution/
+// framerate step (videoScaleForTarget). Idempotent and best-effort:
 // pre-negotiation senders report empty encodings and are skipped
-// (withVideoBitrateCap returns null), so this is called wherever encodings may
+// (withVideoEncodingCaps returns null), so this is called wherever encodings may
 // have just materialized — after each completed offer/answer exchange, on the
 // connection reaching "connected", on a roster-size change (onVoiceState), and
 // from the congestion monitor when a peer's target moves. A setParameters
 // failure never touches the call.
 function applyVideoBitrateCaps(remoteUserId, pc) {
   const cap = effectiveVideoCap(remoteUserId);
+  const shape = { maxBitrate: cap, ...videoScaleForTarget(cap) };
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     let params;
     try { params = sender.getParameters(); } catch { continue; }
-    const capped = withVideoBitrateCap(params, cap);
+    const capped = withVideoEncodingCaps(params, shape);
     if (!capped) continue;
     try { Promise.resolve(sender.setParameters(capped)).catch(() => {}); } catch { /* best-effort */ }
   }
@@ -1320,7 +1378,7 @@ function createPC(remoteUserId) {
   // are expected to fail; renegotiatePending records that we owe the peer an
   // offer once we're back in "stable" — set when our own offer was rolled back
   // to accept a colliding one, or when negotiationneeded fired mid-negotiation).
-  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false, videoTarget: undefined, lossPrev: null });
+  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false, videoTarget: undefined, lossPrev: null, healthyStreak: 0 });
   if (dbg) { try { dbg.attachPeer(remoteUserId, pc); } catch { /* no-op */ } }
 
   if (localStream) {

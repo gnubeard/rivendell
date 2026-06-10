@@ -674,23 +674,52 @@ test("effectiveConnectionState: healthy states pass through connectionState", ()
   assert.equal(voice.effectiveConnectionState("connecting", "checking"), "connecting");
 });
 
-test("withVideoBitrateCap: caps every encoding without mutating the input", () => {
+const FULL_SHAPE = { maxBitrate: 800000, scaleResolutionDownBy: 1, maxFramerate: 24 };
+
+test("withVideoEncodingCaps: shapes every encoding without mutating the input", () => {
   const params = { transactionId: "t1", encodings: [{ active: true }, { maxBitrate: 250000 }] };
-  const out = voice.withVideoBitrateCap(params, 800000);
+  const out = voice.withVideoEncodingCaps(params, FULL_SHAPE);
   assert.deepEqual(out.encodings.map(e => e.maxBitrate), [800000, 800000]);
+  assert.deepEqual(out.encodings.map(e => e.scaleResolutionDownBy), [1, 1]);
+  assert.deepEqual(out.encodings.map(e => e.maxFramerate), [24, 24]);
   assert.equal(out.encodings[0].active, true);            // other fields preserved
   assert.equal(out.transactionId, "t1");                  // top-level fields preserved
   assert.equal(params.encodings[0].maxBitrate, undefined); // input untouched
   assert.equal(params.encodings[1].maxBitrate, 250000);
+  assert.equal(params.encodings[0].scaleResolutionDownBy, undefined);
 });
 
-test("withVideoBitrateCap: returns null when there is nothing to do", () => {
+test("withVideoEncodingCaps: returns null when there is nothing to do", () => {
   // pre-negotiation senders report no encodings — the spec forbids adding them
-  assert.equal(voice.withVideoBitrateCap({ encodings: [] }, 800000), null);
-  assert.equal(voice.withVideoBitrateCap({}, 800000), null);
-  assert.equal(voice.withVideoBitrateCap(null, 800000), null);
-  // already capped everywhere -> no-op signal (skip the setParameters round-trip)
-  assert.equal(voice.withVideoBitrateCap({ encodings: [{ maxBitrate: 800000 }] }, 800000), null);
+  assert.equal(voice.withVideoEncodingCaps({ encodings: [] }, FULL_SHAPE), null);
+  assert.equal(voice.withVideoEncodingCaps({}, FULL_SHAPE), null);
+  assert.equal(voice.withVideoEncodingCaps(null, FULL_SHAPE), null);
+  // already shaped everywhere -> no-op signal (skip the setParameters round-trip)
+  const shaped = { encodings: [{ maxBitrate: 800000, scaleResolutionDownBy: 1, maxFramerate: 24 }] };
+  assert.equal(voice.withVideoEncodingCaps(shaped, FULL_SHAPE), null);
+  // a changed resolution alone is enough to re-emit
+  assert.notEqual(voice.withVideoEncodingCaps(shaped, { ...FULL_SHAPE, scaleResolutionDownBy: 2 }), null);
+});
+
+test("videoScaleForTarget: sheds resolution/framerate as the target falls", () => {
+  // At/above the full-res threshold: native capture, full framerate.
+  assert.deepEqual(voice.videoScaleForTarget(800000), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  assert.deepEqual(voice.videoScaleForTarget(500000), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  // Mid band: half-scale.
+  assert.deepEqual(voice.videoScaleForTarget(400000), { scaleResolutionDownBy: 2, maxFramerate: 20 });
+  assert.deepEqual(voice.videoScaleForTarget(300000), { scaleResolutionDownBy: 2, maxFramerate: 20 });
+  // Floor band: quarter-scale, trimmed framerate.
+  assert.deepEqual(voice.videoScaleForTarget(150000), { scaleResolutionDownBy: 4, maxFramerate: 15 });
+  // A missing target falls back to native (fresh sender, no congestion data yet).
+  assert.deepEqual(voice.videoScaleForTarget(undefined), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+});
+
+test("uplinkStressed: loss, RTT, or local CPU limitation each trip stress", () => {
+  assert.equal(voice.uplinkStressed({ lossFrac: 0.10, rttMs: 100 }), true);  // loss
+  assert.equal(voice.uplinkStressed({ lossFrac: 0, rttMs: 700 }), true);     // RTT
+  assert.equal(voice.uplinkStressed({ lossFrac: 0, rttMs: 100, cpuLimited: true }), true); // encoder pinned
+  assert.equal(voice.uplinkStressed({ lossFrac: 0.01, rttMs: 100 }), false); // healthy
+  assert.equal(voice.uplinkStressed({ lossFrac: null, rttMs: null }), false); // no signal
 });
 
 test("bitrateCapFor: 1:1 and 2-party calls get the full per-sender ceiling", () => {
@@ -726,24 +755,29 @@ test("uplinkLossFraction: delta loss over delta sent, guarding resets", () => {
   assert.equal(voice.uplinkLossFraction(1100, 2, 1000, 40), null); // lost went down (reset)
 });
 
-test("congestionTarget: backs off on loss or RTT stress, floored", () => {
+test("congestionTarget: backs off on loss, RTT, or CPU stress, floored", () => {
   const ceiling = 800000;
   // 10% loss → ×0.75.
   assert.equal(voice.congestionTarget(800000, ceiling, { lossFrac: 0.10, rttMs: 100, limited: false }), 600000);
   // High RTT alone triggers back-off too.
   assert.equal(voice.congestionTarget(800000, ceiling, { lossFrac: 0, rttMs: 700, limited: false }), 600000);
+  // A CPU-pinned encoder backs off even with a clean link — the relief is a smaller frame.
+  assert.equal(voice.congestionTarget(800000, ceiling, { lossFrac: 0, rttMs: 100, cpuLimited: true }), 600000);
   // Repeated stress floors at MIN, never below.
   assert.equal(voice.congestionTarget(160000, ceiling, { lossFrac: 0.2, rttMs: 100, limited: false }), 150000);
 });
 
-test("congestionTarget: climbs back when healthy, holds when bandwidth-limited", () => {
+test("congestionTarget: climbs only after a healthy streak; holds when bandwidth-limited", () => {
   const ceiling = 800000;
-  // Healthy → +75k step.
-  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: 0.01, rttMs: 120, limited: false }), 475000);
+  const healthy = { lossFrac: 0.01, rttMs: 120, limited: false };
+  // One clean sample is NOT enough — the streak gate holds (oscillation fix).
+  assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, healthyStreak: 1 }), 400000);
+  // Two consecutive healthy intervals → +75k step.
+  assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, healthyStreak: 2 }), 475000);
   // Climb is clamped at the ceiling.
-  assert.equal(voice.congestionTarget(780000, ceiling, { lossFrac: 0, rttMs: 100, limited: false }), 800000);
+  assert.equal(voice.congestionTarget(780000, ceiling, { lossFrac: 0, rttMs: 100, limited: false, healthyStreak: 3 }), 800000);
   // Encoder already bandwidth-limited → hold (don't push past what it can use).
-  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: 0.01, rttMs: 120, limited: true }), 400000);
-  // Missing signals (null) are treated as non-stress: a fresh sender climbs.
-  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: null, rttMs: null, limited: false }), 475000);
+  assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, limited: true, healthyStreak: 5 }), 400000);
+  // Missing signals (null) are treated as non-stress: a settled sender climbs.
+  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: null, rttMs: null, limited: false, healthyStreak: 2 }), 475000);
 });

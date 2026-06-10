@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-06-10
+
+### Changed
+- Congestion back-off now also lowers video resolution and frame rate, not just bitrate, so a phone whose encoder can't keep up at full resolution (latency climbing, frame rate collapsing) gets real relief instead of a smeary full-size picture. The sender also reacts to its own encoder being CPU-pinned, and waits for the link to stay healthy before climbing back up — so quality stops oscillating on a marginal connection.
+
 ## [1.4.1] - 2026-06-10
 
 ### Changed
