@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.11] - 2026-06-10
+
+### Fixed
+- "Mark unread" / "Mark read" action is now available in the mobile long-press context menu.
+
 ## [1.4.10] - 2026-06-10
 
 ### Fixed

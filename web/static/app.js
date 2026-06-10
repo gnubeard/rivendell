@@ -3306,6 +3306,8 @@ function showMobileCtxActions(m) {
   if (!isDeleted) inner.append(closeBtn("📋  Copy", () => navigator.clipboard.writeText(m.content)));
   if (isOwn && !isDeleted) inner.append(closeBtn("✏  Edit", () => startEdit(m)));
   if (isMod && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
+  const isRead = m.id <= (state.lastRead[m.channel_id] || 0);
+  inner.append(closeBtn(isRead ? "👁  Mark unread" : "👁  Mark read", () => toggleMessageRead(m)));
 
   if (canDelete && !isDeleted) {
     inner.append(el("div", { class: "mobile-ctx-sep" }));
