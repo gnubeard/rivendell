@@ -2247,6 +2247,18 @@ function wireComposer() {
   // shortcode strings); both share this one popup and the keyboard navigation
   // below. null when no completion is active.
   let completion = null; // { kind, query: { start, partial }, items, index }
+
+  // Touch-scroll guard: distinguish a tap (no movement) from a drag-to-scroll.
+  // Tracked at the container level so it survives popup re-renders mid-scroll.
+  let popupTouchMoved = false;
+  let popupTouchOriginY = 0;
+  popup.addEventListener("touchstart", (e) => {
+    popupTouchMoved = false;
+    popupTouchOriginY = e.touches[0].clientY;
+  }, { passive: true });
+  popup.addEventListener("touchmove", (e) => {
+    if (Math.abs(e.touches[0].clientY - popupTouchOriginY) > 8) popupTouchMoved = true;
+  }, { passive: true });
   const TYPING_INTERVAL_MS = 1500;
   let lastTypingSent = 0;
 
@@ -2295,10 +2307,18 @@ function wireComposer() {
     if (!completion) { popup.hidden = true; return; }
     completion.items.forEach((item, i) => {
       const active = i === completion.index ? " active" : "";
+      // Mouse: pointerdown prevents textarea blur so the item stays visible for
+      // the click. Touch: touchend fires pick only when the finger didn't drag
+      // (popupTouchMoved guards scroll intent); preventDefault stops the
+      // synthetic click that would otherwise double-pick.
+      const itemHandlers = {
+        onpointerdown: (e) => { if (e.pointerType !== "mouse") return; e.preventDefault(); pick(item); },
+        ontouchend: (e) => { if (!popupTouchMoved) { e.preventDefault(); pick(item); } },
+      };
       if (completion.kind === "mention") {
         popup.append(el("li", {
           class: "mention-item" + active,
-          onpointerdown: (e) => { e.preventDefault(); pick(item); },
+          ...itemHandlers,
         },
           el("span", { class: "mention-item-name" }, "@" + item.username),
           item.display_name && item.display_name !== item.username
@@ -2308,7 +2328,7 @@ function wireComposer() {
       } else {
         popup.append(el("li", {
           class: "mention-item" + active,
-          onpointerdown: (e) => { e.preventDefault(); pick(item); },
+          ...itemHandlers,
         },
           item.glyph
             ? el("span", { class: "emoji-uni" }, item.glyph)

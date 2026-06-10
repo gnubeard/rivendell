@@ -9,6 +9,11 @@ Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment 
 
 ## [Unreleased]
 
+## [1.3.129] - 2026-06-10
+
+### Fixed
+- Emoji picker and mention/emoji autocomplete popup are now scrollable by touch-drag on mobile; tapping still selects as before
+
 ## [1.3.128] - 2026-06-10
 
 ### Fixed
