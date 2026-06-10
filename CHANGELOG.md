@@ -5,6 +5,14 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-06-10
+
+### Added
+- The inline message editor now supports `@`-mention and `:emoji` autocomplete, plus a 😀 button to insert custom or Unicode emoji — the same completions the composer offers.
+
+### Fixed
+- Long-pressing inside an edit box no longer pops the message context menu, so you can select and copy/paste text while editing on touch devices.
+
 ## [1.4.3] - 2026-06-10
 
 ### Changed

@@ -430,10 +430,14 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg:hover .msg-actions { visibility: visible; animation: msg-actions-activate 0s 300ms forwards; }
 @keyframes msg-actions-activate { to { pointer-events: auto; } }
 /* Inline message editor (replaces the body while editing your own message). */
-.msg-edit { margin-top: 0.15rem; }
+.msg-edit { margin-top: 0.15rem; position: relative; }
 .msg-edit-input { width: 100%; resize: none; max-height: 200px; line-height: 1.4; padding: 0.5rem 0.6rem; background: var(--bg-3); border: 1px solid var(--accent-dim); border-radius: var(--radius); color: var(--text); font: inherit; }
 .msg-edit-input:focus { outline: none; border-color: var(--accent); }
+/* The autocomplete popup anchors to the edit box itself, not the composer. */
+.msg-edit .mention-popup { left: 0; right: 0; }
 .msg-edit-controls { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
+.msg-edit-emoji { background: none; border: none; padding: 0; cursor: pointer; font-size: 1rem; line-height: 1; opacity: 0.7; }
+.msg-edit-emoji:hover { opacity: 1; }
 .msg-edit-hint { color: var(--text-faint); font-size: 0.72rem; }
 .msg.pinned { background: rgba(110, 168, 254, 0.06); border-radius: 6px; }
 .msg.pinned .msg-actions { background: linear-gradient(to right, transparent, #1e2430 30%); }

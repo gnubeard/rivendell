@@ -2258,13 +2258,16 @@ function cancelReply() {
 
 // --- composer + message actions -----------------------------------------
 
-function wireComposer() {
-  const input = $("#composer-input");
-  const popup = $("#mention-popup");
-  // Unified autocomplete state for the composer popup. `kind` is "mention"
-  // (@-trigger, items are user objects) or "emoji" (:-trigger, items are
-  // shortcode strings); both share this one popup and the keyboard navigation
-  // below. null when no completion is active.
+// attachAutocomplete wires @-mention / :emoji inline completion onto a textarea
+// and its own popup <ul>. The composer and every inline edit box share this
+// logic, each with its own popup element. Returns { handleKeydown }: the host's
+// keydown handler must defer to handleKeydown first — it returns true when an
+// open completion consumed the key (arrows navigate, Tab/Enter pick, Esc
+// dismiss), so Enter only "sends"/"saves" when no completion is showing.
+function attachAutocomplete(input, popup) {
+  // Unified autocomplete state. `kind` is "mention" (@-trigger, items are user
+  // objects) or "emoji" (:-trigger, items are { code, glyph? }); both share this
+  // one popup and the keyboard navigation. null when no completion is active.
   let completion = null; // { kind, query: { start, partial }, items, index }
 
   // Touch-scroll guard: distinguish a tap (no movement) from a drag-to-scroll.
@@ -2278,11 +2281,6 @@ function wireComposer() {
   popup.addEventListener("touchmove", (e) => {
     if (Math.abs(e.touches[0].clientY - popupTouchOriginY) > 8) popupTouchMoved = true;
   }, { passive: true });
-  const TYPING_INTERVAL_MS = 1500;
-  let lastTypingSent = 0;
-
-  const autoGrow = () => resizeComposerInput();
-  autoGrow(); // size the input correctly for any value the browser may have restored
 
   function filterMentions(partial) {
     const q = partial.toLowerCase();
@@ -2373,7 +2371,9 @@ function wireComposer() {
 
   // Insert the chosen completion, replacing from the trigger char to the caret:
   // "@username " for a mention (item is a user), ":shortcode: " for an emoji
-  // (item is a { code, glyph? } object).
+  // (item is a { code, glyph? } object). The synthetic input event re-runs the
+  // host's autosize (and re-checks for a follow-on trigger — there is none, the
+  // caret lands past a trailing space).
   function pick(item) {
     if (!completion) return;
     const text = completion.kind === "mention" ? "@" + item.username + " " : `:${item.code}: `;
@@ -2384,13 +2384,62 @@ function wireComposer() {
     input.setSelectionRange(newPos, newPos);
     completion = null;
     popup.hidden = true;
-    autoGrow();
     input.focus();
+    input.dispatchEvent(new Event("input"));
   }
+
+  input.addEventListener("input", updatePopup);
+
+  input.addEventListener("blur", () => {
+    // Small delay so a pointerdown on a popup item fires before we close it.
+    setTimeout(() => { popup.hidden = true; completion = null; }, 200);
+  });
+
+  return {
+    // Call from the host keydown before its own logic; true == key consumed.
+    handleKeydown(e) {
+      if (popup.hidden || !completion) return false;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        completion.index = Math.min(completion.index + 1, completion.items.length - 1);
+        renderPopup();
+        return true;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        completion.index = Math.max(completion.index - 1, 0);
+        renderPopup();
+        return true;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        if (completion.items[completion.index]) pick(completion.items[completion.index]);
+        return true;
+      }
+      if (e.key === "Escape") {
+        popup.hidden = true;
+        completion = null;
+        return true;
+      }
+      return false;
+    },
+  };
+}
+
+function wireComposer() {
+  const input = $("#composer-input");
+  const popup = $("#mention-popup");
+  // @-mention / :emoji inline completion, shared with the inline edit boxes.
+  // The composer's keydown defers to ac.handleKeydown before its own send logic.
+  const ac = attachAutocomplete(input, popup);
+  const TYPING_INTERVAL_MS = 1500;
+  let lastTypingSent = 0;
+
+  const autoGrow = () => resizeComposerInput();
+  autoGrow(); // size the input correctly for any value the browser may have restored
 
   input.addEventListener("input", () => {
     autoGrow();
-    updatePopup();
     if (state.activeChannelId && input.value.trim()) {
       const now = Date.now();
       if (now - lastTypingSent >= TYPING_INTERVAL_MS) {
@@ -2398,11 +2447,6 @@ function wireComposer() {
         socket && socket.send({ type: "typing", channel_id: state.activeChannelId });
       }
     }
-  });
-
-  input.addEventListener("blur", () => {
-    // Small delay so a pointerdown on a popup item fires before we close it.
-    setTimeout(() => { popup.hidden = true; completion = null; }, 200);
   });
 
   // --- pending image attachments ----------------------------------------
@@ -2548,30 +2592,7 @@ function wireComposer() {
   });
 
   input.onkeydown = async (e) => {
-    if (!popup.hidden && completion) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        completion.index = Math.min(completion.index + 1, completion.items.length - 1);
-        renderPopup();
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        completion.index = Math.max(completion.index - 1, 0);
-        renderPopup();
-        return;
-      }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-        e.preventDefault();
-        if (completion.items[completion.index]) pick(completion.items[completion.index]);
-        return;
-      }
-      if (e.key === "Escape") {
-        popup.hidden = true;
-        completion = null;
-        return;
-      }
-    }
+    if (ac.handleKeydown(e)) return;
     // Esc on the composer cancels a pending reply (when no autocomplete is open).
     if (e.key === "Escape" && replyingToId != null && popup.hidden) {
       e.preventDefault();
@@ -2673,7 +2694,7 @@ function wireComposer() {
 
 // The shared emoji popup serves two targets: the composer (insert a token) and a
 // message reaction. pickerTarget tracks which, set when the popup is opened.
-let pickerTarget = { mode: "composer" };
+let pickerTarget = { mode: "insert" };
 
 // A small set of common Unicode emoji offered alongside the instance's custom
 // emoji, so reactions aren't custom-only. These are literal graphemes (no image).
@@ -2723,13 +2744,28 @@ function chooseEmoji(value, isCustom) {
     toggleReaction(pickerTarget.messageId, value);
     return;
   }
-  insertIntoComposer(isCustom ? `:${value}:` : value);
+  // mode "insert": the composer (no explicit input) or an inline edit box.
+  insertIntoInput(pickerTarget.input || $("#composer-input"), isCustom ? `:${value}:` : value);
 }
 
-// openReactionPicker opens the shared popup in reaction mode, floated next to the
-// message control that was clicked (it otherwise lives anchored by the composer).
-function openReactionPicker(messageId, anchorEl) {
-  pickerTarget = { mode: "react", messageId };
+// floatPickerAt fixes the shared #emoji-picker as a popup above (flipping below
+// if cramped) the control that opened it — used by the reaction button and the
+// inline-edit 😀 button, which live outside the composer's CSS anchor. The picker
+// must be rendered (sized) before this is called so getBoundingClientRect reads
+// real dimensions.
+function floatPickerAt(picker, anchorEl) {
+  const a = anchorEl.getBoundingClientRect();
+  const pr = picker.getBoundingClientRect();
+  let left = Math.max(8, Math.min(a.left, window.innerWidth - pr.width - 8));
+  let top = a.top - pr.height - 6;
+  if (top < 8) top = a.bottom + 6;
+  picker.style.left = left + "px";
+  picker.style.top = top + "px";
+}
+
+// floatPicker readies the shared picker as an off-screen fixed popup, renders it,
+// then places it next to anchorEl. Shared setup for the reaction + edit pickers.
+function floatPicker(anchorEl) {
   const picker = $("#emoji-picker");
   // Render off-screen first so we can measure it, then place it relative to the
   // control (flipping below if there's no room above).
@@ -2740,19 +2776,33 @@ function openReactionPicker(messageId, anchorEl) {
   picker.style.bottom = "auto";
   picker.hidden = false;
   renderEmojiPicker();
-  const a = anchorEl.getBoundingClientRect();
-  const pr = picker.getBoundingClientRect();
-  let left = Math.max(8, Math.min(a.left, window.innerWidth - pr.width - 8));
-  let top = a.top - pr.height - 6;
-  if (top < 8) top = a.bottom + 6;
-  picker.style.left = left + "px";
-  picker.style.top = top + "px";
+  floatPickerAt(picker, anchorEl);
+}
+
+// openReactionPicker opens the shared popup in reaction mode, floated next to the
+// message control that was clicked (it otherwise lives anchored by the composer).
+function openReactionPicker(messageId, anchorEl) {
+  pickerTarget = { mode: "react", messageId };
+  floatPicker(anchorEl);
+}
+
+// openEditEmojiPicker floats the shared picker next to an inline edit box's 😀
+// button and routes picks into that textarea. Clicking the button again while it
+// is already open for the same box toggles it closed.
+function openEditEmojiPicker(input, anchorEl) {
+  const picker = $("#emoji-picker");
+  if (!picker.hidden && pickerTarget.input === input) {
+    picker.hidden = true;
+    return;
+  }
+  pickerTarget = { mode: "insert", input };
+  floatPicker(anchorEl);
 }
 
 function toggleEmojiPicker() {
   const picker = $("#emoji-picker");
   if (picker.hidden) {
-    pickerTarget = { mode: "composer" };
+    pickerTarget = { mode: "insert" }; // no .input ⇒ targets the composer
     // Clear any fixed-position overrides left by a reaction pick so the popup
     // returns to its CSS anchor above the composer.
     picker.style.position = picker.style.left = picker.style.top = picker.style.right = picker.style.bottom = "";
@@ -2763,11 +2813,11 @@ function toggleEmojiPicker() {
   }
 }
 
-// insertIntoComposer drops a token at the caret, padded with spaces so it reads as a
-// standalone token, then fires a synthetic input event so the composer's
-// autosize/typing logic runs exactly as if it were typed.
-function insertIntoComposer(token) {
-  const input = $("#composer-input");
+// insertIntoInput drops a token at the caret of a textarea, padded with spaces so
+// it reads as a standalone token, then fires a synthetic input event so the
+// target's autosize (and the composer's typing) logic runs as if it were typed.
+function insertIntoInput(input, token) {
+  if (!input) return;
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   const before = input.value.slice(0, start);
@@ -2814,14 +2864,27 @@ function autoGrowEdit(ta) {
 function editorFor(m) {
   const ta = el("textarea", { class: "msg-edit-input", rows: "1", "aria-label": "Edit message" });
   ta.value = editDraft;
+  // Own popup element (anchored to this edit box, not the composer) so @-mention
+  // and :emoji completion work while editing. keydown defers to the popup first.
+  const popup = el("ul", { class: "mention-popup", hidden: true });
+  const ac = attachAutocomplete(ta, popup);
   ta.addEventListener("input", () => { editDraft = ta.value; autoGrowEdit(ta); });
   ta.addEventListener("keydown", (e) => {
+    if (ac.handleKeydown(e)) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEdit(m); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelEdit(); }
   });
+  // stopPropagation keeps the document-level click handler from re-closing the
+  // picker on the same event that opens it (mirrors the composer's 😀 button).
+  const emojiBtn = el("button", {
+    type: "button", class: "msg-edit-emoji", title: "Insert emoji", "aria-label": "Insert emoji",
+    onclick: (e) => { e.stopPropagation(); openEditEmojiPicker(ta, emojiBtn); },
+  }, "😀");
   return el("div", { class: "msg-edit" },
+    popup,
     ta,
     el("div", { class: "msg-edit-controls" },
+      emojiBtn,
       el("button", { class: "link", onclick: () => commitEdit(m) }, "save"),
       el("button", { class: "link", onclick: cancelEdit }, "cancel"),
       el("span", { class: "msg-edit-hint" }, "Enter to save · Esc to cancel")));
@@ -3526,6 +3589,9 @@ function wireControls() {
     const ml = $("#message-list");
 
     ml.addEventListener("touchstart", (e) => {
+      // Skip the inline edit box: a long-press there is the user reaching for the
+      // native text-selection handles, not the message context menu.
+      if (e.target.closest && e.target.closest(".msg-edit")) return;
       const row = e.target.closest && e.target.closest("[data-msg-id]");
       if (!row) return;
       lpFired = false;
@@ -3558,6 +3624,8 @@ function wireControls() {
     }, { passive: false });
 
     ml.addEventListener("contextmenu", (e) => {
+      // Leave the edit box's native menu alone (copy/paste/select while editing).
+      if (e.target.closest(".msg-edit")) return;
       if (e.target.closest("[data-msg-id]")) e.preventDefault();
     });
   }
