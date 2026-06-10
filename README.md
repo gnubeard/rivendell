@@ -107,6 +107,8 @@ All configuration is via environment variables. All are optional except
 | `RIVENDELL_STUN_URL` | `stun:stun.l.google.com:19302` | STUN server for WebRTC voice. |
 | `RIVENDELL_TURN_URL` | _(none)_ | Comma-separated TURN endpoints (e.g. `turn:turn.example.com:3478`). Omit for STUN-only. |
 | `RIVENDELL_TURN_SECRET` | _(none)_ | Shared HMAC secret for time-limited coturn (TURN) credentials. |
+| `RIVENDELL_MAX_VOICE_AUDIO` | `10` | Max participants in one group voice channel. A join past this is refused (`voice.join_denied`). |
+| `RIVENDELL_MAX_VOICE_VIDEO` | `6` | Max simultaneous cameras-on in one call. Turning a camera on past this keeps you audio-only. |
 
 ---
 

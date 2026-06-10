@@ -27,9 +27,25 @@ import (
 // here (including a stray self_user_id), so the wire schema stays in lockstep with
 // the client emitter in web/static/rtcdebug.js.
 type telemetryBatch struct {
-	UA        string           `json:"ua"`
-	Snapshots []telemetrySnap  `json:"snapshots"`
-	Events    []telemetryEvent `json:"events"`
+	UA         string           `json:"ua"`
+	Snapshots  []telemetrySnap  `json:"snapshots"`
+	Events     []telemetryEvent `json:"events"`
+	Aggregates []telemetryAgg   `json:"aggregates"`
+}
+
+// telemetryAgg is one node-level summary for a tick (group-call lens): how many
+// peers, total outbound/inbound bitrate (kbps), and the worst RTT across peers.
+// It complements the per-peer snapshots so uplink saturation as N grows is
+// visible without summing every leg by hand.
+type telemetryAgg struct {
+	CallID     string   `json:"call_id"`
+	ChannelID  int64    `json:"channel_id"`
+	T          float64  `json:"t"`
+	TS         float64  `json:"ts"`
+	Peers      int64    `json:"peers"`
+	UpKbps     *int64   `json:"up_kbps"`
+	DownKbps   *int64   `json:"down_kbps"`
+	WorstRTTMs *float64 `json:"worst_rtt_ms"`
 }
 
 // telemetrySnap is one peer's getStats() sample at one tick.
@@ -170,7 +186,22 @@ func telemetryRecords(self int64, b *telemetryBatch) []telemetryRecord {
 	for i := range b.Events {
 		out = append(out, eventRecord(self, &b.Events[i]))
 	}
+	for i := range b.Aggregates {
+		out = append(out, aggRecord(self, &b.Aggregates[i]))
+	}
 	return out
+}
+
+func aggRecord(self int64, g *telemetryAgg) telemetryRecord {
+	a := attrBuf{}
+	a.str("call", g.CallID)
+	a.i64("ch", g.ChannelID)
+	a.i64("self", self)
+	a.i64("peers", g.Peers)
+	a.i64p("up.kbps", g.UpKbps)
+	a.i64p("down.kbps", g.DownKbps)
+	a.f64("worst.rtt", g.WorstRTTMs)
+	return telemetryRecord{msg: "rtc-telem.agg", attrs: a.attrs}
 }
 
 func snapRecord(self int64, ua string, s *telemetrySnap) telemetryRecord {

@@ -162,6 +162,28 @@ function outboundRtp(byId, s, raw, key, prevRaw) {
   return o;
 }
 
+// buildAggregate folds a tick's per-peer snapshot `data` objects into one
+// node-level summary: how many peers, total outbound/inbound bitrate (summed
+// byte deltas over intervalMs, rendered as kbps), and the worst (highest) RTT
+// across all peers. This is the group-call lens — as N grows it makes uplink
+// saturation visible at a glance without reading every per-peer line. Returns
+// null when there's nothing to summarize. Pure; unit-tested.
+export function buildAggregate(datas, intervalMs) {
+  if (!datas || datas.length === 0) return null;
+  let upBytes = 0, downBytes = 0, worstRtt;
+  for (const d of datas) {
+    if (!d) continue;
+    if (d.out) upBytes += (d.out.v && d.out.v.bytes_d || 0) + (d.out.a && d.out.a.bytes_d || 0);
+    if (d.in) downBytes += (d.in.v && d.in.v.bytes_d || 0) + (d.in.a && d.in.a.bytes_d || 0);
+    const rtt = d.pair && d.pair.rttMs;
+    if (typeof rtt === "number" && (worstRtt === undefined || rtt > worstRtt)) worstRtt = rtt;
+  }
+  const kbps = (bytes) => (intervalMs > 0 ? Math.round((bytes * 8) / intervalMs) : 0); // bytes*8b / ms = kb/s
+  const agg = { peers: datas.length, up_kbps: kbps(upBytes), down_kbps: kbps(downBytes) };
+  if (worstRtt !== undefined) agg.worst_rtt_ms = worstRtt;
+  return agg;
+}
+
 // capPayload trims a batch so its serialized size fits maxBytes, dropping the
 // OLDEST snapshots first and never touching events (rarer, higher-value). Returns
 // the same batch object (mutated). Pure; unit-tested.
@@ -185,7 +207,7 @@ export function createTelemetry({
   let callId = null, channelId = null;
   const peers = new Map();   // remoteUserId -> RTCPeerConnection
   const prevRaw = new Map(); // remoteUserId -> raw cumulative map
-  let snapQ = [], evtQ = [];
+  let snapQ = [], evtQ = [], aggQ = [];
   let snapTimer = null, flushTimer = null, unloadWired = false;
 
   const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
@@ -198,7 +220,7 @@ export function createTelemetry({
   function startCall(ch, _myId) {
     callId = genId();
     channelId = ch;
-    snapQ = []; evtQ = [];
+    snapQ = []; evtQ = []; aggQ = [];
     if (!snapTimer) snapTimer = setInterval(tick, intervalMs);
     if (!flushTimer) flushTimer = setInterval(() => flush(false), FLUSH_INTERVAL_MS);
     wireUnload();
@@ -245,11 +267,13 @@ export function createTelemetry({
 
   async function tick() {
     if (callId === null) return;
+    const datas = [];
     for (const [id, pc] of peers) {
       try {
         const report = await pc.getStats();
         const { data, raw } = buildSnapshot(report, prevRaw.get(id), readVideoEl(id));
         prevRaw.set(id, raw);
+        datas.push(data);
         snapQ.push({
           call_id: callId, channel_id: channelId, remote_user_id: id,
           t: now(), ts: wall(),
@@ -258,13 +282,17 @@ export function createTelemetry({
         });
       } catch { /* never let a stats hiccup affect the call */ }
     }
+    // One node-level aggregate per tick: total up/down bitrate, peer count, worst
+    // RTT — the group-call uplink-saturation lens as N grows.
+    const agg = buildAggregate(datas, intervalMs);
+    if (agg) aggQ.push({ call_id: callId, channel_id: channelId, t: now(), ts: wall(), ...agg });
     if (snapQ.length >= MAX_QUEUED_SNAPSHOTS) flush(false);
   }
 
   function flush(useBeacon) {
-    if (snapQ.length === 0 && evtQ.length === 0) return;
-    const batch = { ua, snapshots: snapQ, events: evtQ };
-    snapQ = []; evtQ = [];
+    if (snapQ.length === 0 && evtQ.length === 0 && aggQ.length === 0) return;
+    const batch = { ua, snapshots: snapQ, events: evtQ, aggregates: aggQ };
+    snapQ = []; evtQ = []; aggQ = [];
     try {
       if (useBeacon) {
         capPayload(batch, MAX_BEACON_BYTES);

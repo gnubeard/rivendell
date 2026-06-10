@@ -616,6 +616,17 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
 	}
 
+	// denyJoin tells the joiner the channel (or its video slots) is full. The
+	// client aborts the join, or — for "video_full" — falls back to audio-only.
+	denyJoin := func(reason string, limit int) {
+		out, err := json.Marshal(event{Type: "voice.join_denied", Payload: map[string]any{
+			"channel_id": channelID, "reason": reason, "limit": limit,
+		}})
+		if err == nil {
+			s.hub.SendToUser(userID, out)
+		}
+	}
+
 	switch msgType {
 	case "voice.join":
 		if channelID == 0 {
@@ -624,6 +635,16 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		ch, err := s.st.GetChannel(ctx, channelID)
 		if err != nil || !canAccess(ch, userID) {
 			return
+		}
+		// Group cap: a non-DM voice channel holds at most MaxVoiceAudio users.
+		// DMs are exempt (strictly two parties, gated by the ring flow). Exclude
+		// the joiner so an idempotent re-join of a channel they're already in
+		// isn't denied at the boundary.
+		if !ch.IsDM && s.cfg.MaxVoiceAudio > 0 {
+			if total, _ := s.hub.VoiceCounts(channelID, userID); total >= s.cfg.MaxVoiceAudio {
+				denyJoin("full", s.cfg.MaxVoiceAudio)
+				return
+			}
 		}
 		// Auto-leave any other voice channels first.
 		for chID, pts := range s.hub.VoiceLeaveAll(userID) {
@@ -681,6 +702,17 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		ch, err := s.st.GetChannel(ctx, channelID)
 		if err != nil || !canAccess(ch, userID) {
 			return
+		}
+		// Video sub-cap: in a group channel only MaxVoiceVideo cameras may be on
+		// at once. If turning a camera on would exceed it, force this user back to
+		// video-muted and tell them (the client reverts the toggle, audio-only).
+		// DMs are exempt. videoOn excludes the requester so re-asserting an
+		// already-on camera is never denied.
+		if !ch.IsDM && !videoMuted && s.cfg.MaxVoiceVideo > 0 {
+			if _, videoOn := s.hub.VoiceCounts(channelID, userID); videoOn >= s.cfg.MaxVoiceVideo {
+				videoMuted = true
+				denyJoin("video_full", s.cfg.MaxVoiceVideo)
+			}
 		}
 		participants := s.hub.VoiceSetMute(channelID, userID, muted, videoMuted)
 		aud := s.audienceForChannel(ctx, ch)

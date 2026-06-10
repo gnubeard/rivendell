@@ -706,6 +706,21 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   font-size: 1.4rem; font-weight: 700; color: var(--text-dim);
 }
 .video-avatar-name { font-size: 0.875rem; color: rgba(255,255,255,0.75); }
+/* ---- group video gallery (1.4.0) ---------------------------------------- */
+/* N-tile responsive grid: auto-fit columns size themselves to the container so
+   the tile count drives the column count (2 people → 2 wide, a crowd → wraps).
+   A taller frame than the DM strip since several tiles share it. */
+.video-grid.group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-rows: 1fr;
+  gap: 2px;
+  height: 360px;
+}
+.video-grid.group-grid .video-tile { border-radius: 4px; }
+/* Active-speaker promotion: a glowing ring on the speaker's tile (toggled live
+   by onSpeaking, mirroring the member-roster speaking ring). */
+.video-tile.speaking { outline: 3px solid var(--accent, #5b8cff); outline-offset: -3px; }
 .video-fullscreen-btn {
   position: absolute; top: 0.4rem; right: 0.4rem; z-index: 3;
   background: rgba(0,0,0,0.45); border: none; border-radius: var(--radius);

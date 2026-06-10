@@ -207,6 +207,10 @@ let callParticipantIds = new Set();
 // speakingIds is the set of user ids currently detected as speaking (voice.js
 // AnalyserNode metering, via onSpeaking). Used to pulse a ring on roster rows.
 let speakingIds = new Set();
+// voiceTelemetry is the rtcdebug capture hook when enabled (else null). Held so
+// app-side voice events (e.g. a server join denial) can be recorded alongside
+// voice.js's own lifecycle events.
+let voiceTelemetry = null;
 // DM partner volume: the header 🔊 toggles a compact slider for the other DM
 // participant (reusing voice.js per-user playout gain). dmVolumeChannelId/Open
 // track which DM the slider is bound to and whether it's expanded, so a re-render
@@ -606,7 +610,8 @@ async function enterApp() {
   // forced on for everyone by the server flag. When enabled, capture batches
   // getStats() + lifecycle events to POST /api/debug/telemetry (logged server-side).
   if (rtcDebugEnabled(debugTelemetryFlag)) {
-    registerDebug(createTelemetry({ getVideoEl }));
+    voiceTelemetry = createTelemetry({ getVideoEl });
+    registerDebug(voiceTelemetry);
   }
   setSpeakingCallback(onSpeaking);
   setCameraErrorCallback((err) => alert(cameraErrorMessage(err)));
@@ -1596,6 +1601,16 @@ function renderChannelHeader(ch) {
     if (isInCall() && voiceCallState.channelId === ch.id) {
       callBtn.textContent = "🔴";
       callBtn.title = "Leave voice";
+      // Same mobile-only 💬/📺 chat↔video toggle as DM calls, but for a group
+      // video call: shown once any participant (us or a peer) has a camera on.
+      const headerCamBtn = $("#header-camera-btn");
+      const groupHasVideo = !voiceCallState.videoMuted ||
+        voiceCallState.participants.some(p => p.user_id !== (state.me && state.me.id) && !p.video_muted);
+      if (groupHasVideo || videoViewHidden) {
+        headerCamBtn.textContent = videoViewHidden ? "📺" : "💬";
+        headerCamBtn.title = videoViewHidden ? "Show video" : "Show chat";
+        headerCamBtn.hidden = false;
+      }
     } else {
       callBtn.textContent = "🔊";
       callBtn.title = "Join voice";
@@ -4764,6 +4779,22 @@ async function onVoiceEvent(evt) {
     return;
   }
 
+  if (evt.type === "voice.join_denied") {
+    // The server refused our join (group caps). "full": the channel is at its
+    // participant limit — abort the optimistic local join. "video_full": only
+    // the camera slots are exhausted, so stay in the call but drop back to
+    // audio-only (the server already forced us video-muted).
+    if (voiceTelemetry) { try { voiceTelemetry.event(0, "join-denied", { reason: p.reason, limit: p.limit }); } catch { /* telemetry never throws */ } }
+    if (p.reason === "video_full") {
+      await setCameraEnabled(false);
+      alert(`This call already has the maximum ${p.limit} cameras on — staying audio-only.`);
+    } else {
+      if (isInCall() && voiceChannelId() === p.channel_id) await endCallLocally();
+      alert(`That call is full (max ${p.limit}).`);
+    }
+    return;
+  }
+
   // voice.state — update sidebar rosters for any channel, then pass to voice.js.
   if (evt.type === "voice.state") {
     voiceRosters[evt.payload.channel_id] = evt.payload.participants || [];
@@ -5076,6 +5107,10 @@ function onSpeaking(userId, speaking) {
   else speakingIds.delete(userId);
   const li = document.querySelector(`#member-list li[data-user-id="${userId}"]`);
   if (li) li.classList.toggle("speaking", speaking);
+  // In a group video gallery, promote the active speaker by highlighting their
+  // tile — without repainting the grid (the flip fires far too often for that).
+  const tile = document.querySelector(`#video-grid .video-tile[data-user-id="${userId}"]`);
+  if (tile) tile.classList.toggle("speaking", speaking);
 }
 
 // setVideoActive toggles body.video-active (which hides the composer/message list
@@ -5088,22 +5123,59 @@ function setVideoActive(on) {
   if (was && !on) resizeComposerInput();
 }
 
-// renderVideoGrid builds the 2-tile DM video layout (remote tile + optional local
-// PiP) inside #video-grid. Only shown when we're in a DM call AND viewing that DM.
-// Remote tile: video when camera is on, dark avatar tile when camera is off.
-// Local tile: only when our camera is on (decision: no preview when camera is off).
+// appendFullscreenButton adds the corner ⛶ control that toggles fullscreen on
+// the grid (covers the mobile "replace chat with video" case too).
+function appendFullscreenButton(grid) {
+  const fsBtn = el("button", { class: "video-fullscreen-btn", title: "Fullscreen" }, "⛶");
+  fsBtn.onclick = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      grid.requestFullscreen().catch(() => {});
+    }
+  };
+  grid.appendChild(fsBtn);
+}
+
+// videoAvatarTile builds the dark camera-off placeholder for one participant:
+// their avatar (or initials) plus their name. Used by both the DM and group
+// layouts wherever a participant has no live video.
+function videoAvatarTile(userId, user) {
+  const avatarDiv = el("div", { class: "video-avatar" });
+  if (user && user.has_avatar) {
+    avatarDiv.appendChild(el("img", { class: "video-avatar-img", src: avatarSrc(userId), alt: "" }));
+  } else {
+    avatarDiv.appendChild(el("div", { class: "video-avatar-initials" }, initials((user || {}).display_name)));
+  }
+  avatarDiv.appendChild(el("span", { class: "video-avatar-name" }, (user || {}).display_name || ""));
+  return avatarDiv;
+}
+
+// renderVideoGrid paints #video-grid for the active call when we're viewing its
+// channel. DMs use the 2-tile phone layout (remote tile + local PiP); group
+// voice channels use an N-tile gallery (one tile per participant). Hidden when
+// not in a call, viewing a different channel, or nobody has a camera on.
 function renderVideoGrid() {
   const grid = $("#video-grid");
   const ch = voiceCallState.inCall && voiceCallState.channelId !== null
     ? state.channels[voiceCallState.channelId]
     : null;
 
-  if (!ch || !ch.is_dm || voiceCallState.channelId !== state.activeChannelId) {
+  if (!ch || voiceCallState.channelId !== state.activeChannelId) {
+    grid.classList.remove("group-grid");
     grid.hidden = true;
     setVideoActive(false);
     return;
   }
+  if (ch.is_dm) renderDMVideoGrid(grid, ch);
+  else renderGroupVideoGrid(grid, ch);
+}
 
+// renderDMVideoGrid is the original 2-tile DM layout: remote tile (video when
+// the camera is on, dark avatar tile when off) plus a local PiP when our camera
+// is on (decision: no self-preview when our camera is off).
+function renderDMVideoGrid(grid, ch) {
+  grid.classList.remove("group-grid");
   const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
   const otherP = voiceCallState.participants.find(p => p.user_id === otherId);
   const remoteVideoMuted = !otherP || otherP.video_muted;
@@ -5132,15 +5204,7 @@ function renderVideoGrid() {
     remoteTile.appendChild(remoteVideo);
     remoteVideo.play().catch(() => {});
   } else {
-    const other = otherId != null ? state.users[otherId] : null;
-    const avatarDiv = el("div", { class: "video-avatar" });
-    if (other && other.has_avatar) {
-      avatarDiv.appendChild(el("img", { class: "video-avatar-img", src: avatarSrc(otherId), alt: "" }));
-    } else {
-      avatarDiv.appendChild(el("div", { class: "video-avatar-initials" }, initials((other || {}).display_name)));
-    }
-    avatarDiv.appendChild(el("span", { class: "video-avatar-name" }, (other || {}).display_name || ""));
-    remoteTile.appendChild(avatarDiv);
+    remoteTile.appendChild(videoAvatarTile(otherId, otherId != null ? state.users[otherId] : null));
   }
   grid.appendChild(remoteTile);
 
@@ -5154,17 +5218,58 @@ function renderVideoGrid() {
     }
   }
 
-  // Fullscreen button (covers mobile "replace" case too)
-  const fsBtn = el("button", { class: "video-fullscreen-btn", title: "Fullscreen" }, "⛶");
-  fsBtn.onclick = () => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      grid.requestFullscreen().catch(() => {});
-    }
-  };
-  grid.appendChild(fsBtn);
+  appendFullscreenButton(grid);
+  grid.hidden = false;
+  setVideoActive(true);
+}
 
+// renderGroupVideoGrid is the 1.4.0 N-tile gallery: one tile per call
+// participant (self included), in join order. A participant with their camera
+// on shows live video; otherwise a dark avatar tile. The grid only appears once
+// at least one participant has a camera on — a camera-off voice call is
+// represented by the members roster, not a wall of avatar tiles. The active
+// speaker is highlighted live by onSpeaking toggling each tile's `.speaking`.
+function renderGroupVideoGrid(grid, ch) {
+  const meId = state.me && state.me.id;
+  const anyVideo = !voiceCallState.videoMuted ||
+    voiceCallState.participants.some(p => p.user_id !== meId && !p.video_muted);
+
+  if (!anyVideo) {
+    videoViewHidden = false;
+    grid.classList.remove("group-grid");
+    grid.hidden = true;
+    setVideoActive(false);
+    return;
+  }
+  if (videoViewHidden) {
+    grid.classList.remove("group-grid");
+    grid.hidden = true;
+    setVideoActive(false);
+    return;
+  }
+
+  grid.innerHTML = "";
+  grid.classList.add("group-grid");
+
+  for (const p of voiceCallState.participants) {
+    const isSelf = p.user_id === meId;
+    const videoOn = isSelf ? !voiceCallState.videoMuted : !p.video_muted;
+    const videoEl = videoOn ? (isSelf ? getLocalVideoEl() : getVideoEl(p.user_id)) : null;
+
+    const tile = el("div", { class: "video-tile", "data-user-id": String(p.user_id) });
+    if (speakingIds.has(p.user_id)) tile.classList.add("speaking");
+    if (videoEl) {
+      videoEl.className = ""; // shed any PiP styling from a prior DM render
+      tile.appendChild(videoEl);
+      videoEl.play().catch(() => {});
+    } else {
+      const user = isSelf ? (state.users[meId] || state.me) : state.users[p.user_id];
+      tile.appendChild(videoAvatarTile(p.user_id, user));
+    }
+    grid.appendChild(tile);
+  }
+
+  appendFullscreenButton(grid);
   grid.hidden = false;
   setVideoActive(true);
 }
@@ -5199,9 +5304,10 @@ function renderCallStrip() {
   deafBtn.textContent = voiceCallState.deafened ? "🔈" : "🔊";
   deafBtn.title = voiceCallState.deafened ? "Undeafen" : "Deafen";
   deafBtn.classList.toggle("active", voiceCallState.deafened);
-  // Camera button: only visible in DM calls
+  // Camera button: available in any call — DMs and group voice channels alike
+  // (group video is the 1.4.0 feature). Hidden only when there's no active call.
   const camBtn = $("#call-camera-btn");
-  if (ch && ch.is_dm) {
+  if (ch) {
     camBtn.hidden = false;
     camBtn.textContent = voiceCallState.videoMuted ? "📷" : "🎥";
     camBtn.title = voiceCallState.videoMuted ? "Turn camera on" : "Turn camera off";

@@ -145,8 +145,23 @@ const VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } };
 // and removed when it (correctly) didn't help — that freeze is an upstream
 // encoder bug (see docs/video.md). This cap is not a freeze cure and must not
 // be re-litigated as one; it's bandwidth hygiene for the mesh.
-// 800 kbps comfortably carries the ~360p-class video the mesh is sized for.
+// 800 kbps comfortably carries the ~360p-class video the mesh is sized for, and
+// is the per-sender CEILING — a 1:1 call (one video sender) gets exactly this.
 const VIDEO_MAX_BITRATE_BPS = 800000;
+
+// Group-call uplink budgeting. In a full mesh each peer connection has its own
+// encoder, so a node sending camera to (N-1) peers spends (N-1)× its per-sender
+// bitrate on the uplink. To keep total outbound video within a phone's modest
+// uplink we divide a fixed TOTAL budget across the active video senders and floor
+// each so a crowded call still shows *something*. The per-sender result never
+// exceeds VIDEO_MAX_BITRATE_BPS, so the 1:1 / 2-party case is unchanged (full
+// 800 kbps); it only shrinks as the roster grows:
+//   N=2 → 800k   N=3 → 800k   N=4 → 533k   N=5 → 400k   N=6 → 320k
+// (TOTAL ÷ (N-1) senders, ceilinged at 800k, floored at 150k — total uplink
+// stays ≤ TOTAL once there are ≥2 senders). Re-applied whenever the roster
+// changes in onVoiceState, not only after (re)negotiation.
+const TOTAL_VIDEO_UPLINK_BPS = 1600000;
+const MIN_VIDEO_BITRATE_BPS = 150000;
 
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
@@ -945,19 +960,35 @@ export function withVideoBitrateCap(params, maxBitrate) {
   return { ...params, encodings };
 }
 
-// applyVideoBitrateCaps caps every video sender on a peer connection at
-// VIDEO_MAX_BITRATE_BPS (see that constant for the rationale). Idempotent and
-// best-effort: pre-negotiation senders report empty encodings and are skipped
-// (withVideoBitrateCap returns null), so this is called wherever encodings may
-// have just materialized — after each completed offer/answer exchange and on
-// the connection reaching "connected". A setParameters failure never touches
+// bitrateCapFor returns the per-sender maxBitrate for a node in an N-participant
+// call: the total uplink budget split across the (N-1) video senders, ceilinged
+// at the per-sender stability cap and floored so a crowded call still shows
+// something. numPeers is the total participant count (including self). Only
+// "video" is budgeted today; other kinds return the plain ceiling. Pure;
+// exported for unit testing.
+export function bitrateCapFor(numPeers, kind) {
+  if (kind !== "video") return VIDEO_MAX_BITRATE_BPS;
+  const senders = Math.max(1, (numPeers || 0) - 1);
+  const per = Math.floor(TOTAL_VIDEO_UPLINK_BPS / senders);
+  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(VIDEO_MAX_BITRATE_BPS, per));
+}
+
+// applyVideoBitrateCaps caps every video sender on a peer connection at the
+// roster-aware per-sender budget (see bitrateCapFor / TOTAL_VIDEO_UPLINK_BPS).
+// Idempotent and best-effort: pre-negotiation senders report empty encodings and
+// are skipped (withVideoBitrateCap returns null), so this is called wherever
+// encodings may have just materialized — after each completed offer/answer
+// exchange, on the connection reaching "connected", AND whenever the roster size
+// changes (onVoiceState), since a new participant shrinks every sender's slice
+// without itself triggering renegotiation. A setParameters failure never touches
 // the call.
 function applyVideoBitrateCaps(pc) {
+  const cap = bitrateCapFor(participants.length, "video");
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     let params;
     try { params = sender.getParameters(); } catch { continue; }
-    const capped = withVideoBitrateCap(params, VIDEO_MAX_BITRATE_BPS);
+    const capped = withVideoBitrateCap(params, cap);
     if (!capped) continue;
     try { Promise.resolve(sender.setParameters(capped)).catch(() => {}); } catch { /* best-effort */ }
   }
@@ -967,6 +998,7 @@ async function onVoiceState(payload) {
   if (payload.channel_id !== activeChannelId) return;
   participants = payload.participants || [];
   const remoteIds = new Set(participants.filter(p => p.user_id !== myUserId).map(p => p.user_id));
+  const prevPeerCount = peerConns.size;
 
   // Surface the updated roster so app.js can paint who's connected and chime on
   // join/leave. Done before the (async) peer setup so the UI reacts promptly.
@@ -998,6 +1030,18 @@ async function onVoiceState(payload) {
   // Close connections for participants who left.
   for (const userId of [...peerConns.keys()]) {
     if (!remoteIds.has(userId)) closePeer(userId);
+  }
+
+  // Re-budget every video sender for the new roster size: a join shrinks each
+  // sender's slice, a leave grows it back, neither of which renegotiates on its
+  // own. Best-effort and idempotent (no-op when the cap is unchanged).
+  for (const pc of peerConns.values()) applyVideoBitrateCaps(pc);
+
+  // Telemetry: a membership change (someone joined or left) is the group-call
+  // event worth correlating with the per-tick aggregate. Mute/camera flips that
+  // leave the peer set unchanged don't emit one.
+  if (peerConns.size !== prevPeerCount) {
+    dbgEvent(0, "roster-change", { n: participants.length, peers: peerConns.size });
   }
 
   // An empty roster means the server wiped the channel (endDMVoiceCall /

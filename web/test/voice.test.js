@@ -692,3 +692,26 @@ test("withVideoBitrateCap: returns null when there is nothing to do", () => {
   // already capped everywhere -> no-op signal (skip the setParameters round-trip)
   assert.equal(voice.withVideoBitrateCap({ encodings: [{ maxBitrate: 800000 }] }, 800000), null);
 });
+
+test("bitrateCapFor: 1:1 and 2-party calls get the full per-sender ceiling", () => {
+  // One video sender (the lone remote peer) — total budget, ceilinged at 800k.
+  assert.equal(voice.bitrateCapFor(2, "video"), 800000);
+  // A degenerate 0/1-participant count never divides by zero or exceeds the cap.
+  assert.equal(voice.bitrateCapFor(1, "video"), 800000);
+  assert.equal(voice.bitrateCapFor(0, "video"), 800000);
+});
+
+test("bitrateCapFor: per-sender slice shrinks as the roster grows, floored", () => {
+  // TOTAL 1.6 Mbps ÷ (N-1) senders, ceilinged 800k, floored 150k.
+  assert.equal(voice.bitrateCapFor(3, "video"), 800000);  // 1.6M/2 = 800k (== ceiling)
+  assert.equal(voice.bitrateCapFor(4, "video"), 533333);  // 1.6M/3
+  assert.equal(voice.bitrateCapFor(5, "video"), 400000);  // 1.6M/4
+  assert.equal(voice.bitrateCapFor(6, "video"), 320000);  // 1.6M/5
+  // A pathologically large roster still floors instead of collapsing to ~0.
+  assert.equal(voice.bitrateCapFor(50, "video"), 150000);
+});
+
+test("bitrateCapFor: non-video kinds return the plain ceiling, not the budget", () => {
+  assert.equal(voice.bitrateCapFor(6, "audio"), 800000);
+  assert.equal(voice.bitrateCapFor(6, "screen"), 800000);
+});

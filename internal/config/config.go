@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.3.130"
+const Version = "1.4.0"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -33,6 +33,8 @@ type Config struct {
 	TurnSecret      string        // shared HMAC secret for time-limited TURN credentials
 	VapidSubject    string        // VAPID `sub` claim for Web Push (mailto: or https URL)
 	DebugTelemetry  bool          // enable POST /api/debug/telemetry + advertise capture to clients
+	MaxVoiceAudio   int           // hard cap on participants in one voice channel (group calls)
+	MaxVoiceVideo   int           // sub-cap on simultaneous cameras-on; over it ⇒ audio-only
 }
 
 func Load() (Config, error) {
@@ -55,6 +57,8 @@ func Load() (Config, error) {
 		TurnSecret:      env("RIVENDELL_TURN_SECRET", ""),
 		VapidSubject:    env("RIVENDELL_VAPID_SUBJECT", ""),
 		DebugTelemetry:  envBool("RIVENDELL_DEBUG_TELEMETRY", false),
+		MaxVoiceAudio:   envInt("RIVENDELL_MAX_VOICE_AUDIO", 10),
+		MaxVoiceVideo:   envInt("RIVENDELL_MAX_VOICE_VIDEO", 6),
 	}
 	// Default the VAPID subject to the public URL (a valid `sub` per RFC 8292) so
 	// push works out of the box; operators can override with a mailto:.

@@ -338,6 +338,26 @@ func (h *Hub) VoiceParticipants(channelID int64) []VoiceParticipant {
 	return voiceList(h.voiceChannels[channelID])
 }
 
+// VoiceCounts reports how many users are in a voice channel and how many of
+// them currently have a camera on (video unmuted). Used to enforce the group
+// caps (total participants, simultaneous cameras) without allocating a list.
+// userID is excluded from both counts when already present, so a re-join or a
+// camera re-toggle by an existing participant isn't counted against itself.
+func (h *Hub) VoiceCounts(channelID, exclude int64) (total, videoOn int) {
+	h.voiceMu.RLock()
+	defer h.voiceMu.RUnlock()
+	for id, p := range h.voiceChannels[channelID] {
+		if id == exclude {
+			continue
+		}
+		total++
+		if !p.VideoMuted {
+			videoOn++
+		}
+	}
+	return total, videoOn
+}
+
 // VoiceLeaveAll removes userID from every voice channel they are in.
 // Returns a map of channelID → updated participant list for each affected channel.
 func (h *Hub) VoiceLeaveAll(userID int64) map[int64][]VoiceParticipant {

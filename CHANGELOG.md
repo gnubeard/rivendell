@@ -5,6 +5,15 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-10
+
+### Added
+- Group voice and video calls: any voice channel now supports more than two people, with an N-tile video gallery and the active speaker highlighted. Turn your camera on with the 🎥 button in any call.
+- Calls are capped at 10 participants and 6 simultaneous cameras (configurable via `RIVENDELL_MAX_VOICE_AUDIO` / `RIVENDELL_MAX_VOICE_VIDEO`). Joining a full call tells you it's full; turning a camera on past the video limit keeps you in audio-only.
+
+### Changed
+- Outbound video bitrate now shrinks as a call grows, so a phone's uplink isn't saturated in a crowded call (a 1:1 call is unchanged).
+
 ## [1.3.129] - 2026-06-10
 
 ### Fixed

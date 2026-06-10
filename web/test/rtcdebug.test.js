@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { deltaOf, buildSnapshot, capPayload, rtcDebugEnabled } from "../static/rtcdebug.js";
+import { deltaOf, buildSnapshot, capPayload, rtcDebugEnabled, buildAggregate } from "../static/rtcdebug.js";
 
 // makeReport builds a Map that quacks like an RTCStatsReport (forEach(value,key)).
 function makeReport(stats) {
@@ -99,4 +99,22 @@ test("capPayload drops oldest snapshots, never events", () => {
 test("rtcDebugEnabled honours the server flag; off by default in node", () => {
   assert.equal(rtcDebugEnabled(true), true);
   assert.equal(rtcDebugEnabled(false), false); // no location/localStorage in node
+});
+
+test("buildAggregate sums up/down bytes to kbps, counts peers, worst RTT", () => {
+  // Two peers over a 1000 ms tick. up bytes: 1000 + 2000 = 3000 → 24 kbps
+  // (3000*8/1000). down bytes: 500 + 0 = 500 → 4 kbps. Worst RTT = max(30, 80).
+  const datas = [
+    { out: { v: { bytes_d: 1000 }, a: { bytes_d: 0 } }, in: { v: { bytes_d: 500 } }, pair: { rttMs: 30 } },
+    { out: { v: { bytes_d: 2000 } }, in: {}, pair: { rttMs: 80 } },
+  ];
+  const agg = buildAggregate(datas, 1000);
+  assert.deepEqual(agg, { peers: 2, up_kbps: 24, down_kbps: 4, worst_rtt_ms: 80 });
+});
+
+test("buildAggregate returns null for an empty tick and omits RTT when absent", () => {
+  assert.equal(buildAggregate([], 3000), null);
+  assert.equal(buildAggregate(null, 3000), null);
+  const agg = buildAggregate([{ out: { v: { bytes_d: 375 } } }], 3000); // 375*8/3000 = 1 kbps
+  assert.deepEqual(agg, { peers: 1, up_kbps: 1, down_kbps: 0 });
 });

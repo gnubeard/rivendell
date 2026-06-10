@@ -129,3 +129,26 @@ func TestTelemetryRecordsFormat(t *testing.T) {
 		t.Errorf("telemetry leaked an address: %s", out)
 	}
 }
+
+func TestTelemetryAggregateRecord(t *testing.T) {
+	up, down, rtt := int64(320), int64(180), 95.0
+	b := &telemetryBatch{
+		Aggregates: []telemetryAgg{{
+			CallID: "abc", ChannelID: 42, Peers: 4,
+			UpKbps: &up, DownKbps: &down, WorstRTTMs: &rtt,
+		}},
+	}
+	recs := telemetryRecords(3, b)
+	if len(recs) != 1 || recs[0].msg != "rtc-telem.agg" {
+		t.Fatalf("want one rtc-telem.agg record, got %+v", recs)
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).
+		LogAttrs(context.Background(), slog.LevelInfo, recs[0].msg, recs[0].attrs...)
+	out := buf.String()
+	for _, want := range []string{"self=3", "peers=4", "up.kbps=320", "down.kbps=180", "worst.rtt=95"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %s", want, out)
+		}
+	}
+}
