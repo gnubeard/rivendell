@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.18] - 2026-06-10
+
+### Changed
+- Swapped the sign-out icon from ⏻ to 🚪 so it renders consistently on mobile.
+
 ## [1.4.17] - 2026-06-10
 
 ### Fixed
