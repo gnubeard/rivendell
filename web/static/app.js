@@ -1464,11 +1464,14 @@ async function selectChannel(id) {
   } catch (e) {
     /* non-fatal: persistence is best-effort */
   }
+  // Snapshot whether there were unreads *before* clearing them, so we only
+  // show the "New messages" marker when the user actually had unread messages.
+  // Setting the cursor to 0 suppresses the marker entirely for channels the
+  // user was already caught up on (prevents it from popping on new arrivals).
+  const hadUnreads = !!(state.unread[id] || state.mentions[id]);
   state = S.clearUnread(state, id);
   state = S.clearMention(state, id);
-  // Snapshot the read cursor so the "New messages" marker lands at the right
-  // spot even after markActiveChannelRead() advances it.
-  channelUnreadFrom[id] = state.lastRead[id] || 0;
+  channelUnreadFrom[id] = hadUnreads ? (state.lastRead[id] || 0) : 0;
   renderChannels();
   renderDMs();
   renderNotificationTotal();
@@ -1515,12 +1518,14 @@ async function markActiveChannelRead() {
 }
 
 // scrollToUnreadMarker scrolls the message list so the "New messages" divider
-// is at the top of the visible area. No-op when no marker is in the DOM.
+// is at the top of the visible area. Returns true if a marker was found and
+// scrolled to, false if no marker exists (caller should fall back to bottom).
 function scrollToUnreadMarker() {
   const wrap = $("#message-list");
   const marker = wrap.querySelector(".unread-marker");
-  if (!marker) return;
+  if (!marker) return false;
   wrap.scrollTop = marker.offsetTop - wrap.offsetTop - 8;
+  return true;
 }
 
 // toggleMessageRead marks a message read or unread depending on its current
@@ -1735,9 +1740,10 @@ function beginTopicEdit() {
 
 async function loadChannel(id) {
   // Startup path calls loadChannel directly without selectChannel, so
-  // channelUnreadFrom may not be set yet — seed it from the live cursor.
+  // channelUnreadFrom may not be set yet — seed it from the live cursor only
+  // when there are actual unreads (same rule as selectChannel).
   if (channelUnreadFrom[id] === undefined) {
-    channelUnreadFrom[id] = state.lastRead[id] || 0;
+    channelUnreadFrom[id] = (state.unread[id] || state.mentions[id]) ? (state.lastRead[id] || 0) : 0;
   }
   const ch = state.channels[id];
   renderSecretBanner();
@@ -1762,8 +1768,14 @@ async function loadChannel(id) {
     // A short first page means there's nothing older to scroll back to.
     if (msgs.length < PAGE) historyComplete.add(id);
     else historyComplete.delete(id);
-    renderMessages(true); // opening a channel always lands at the newest message
-    scrollToUnreadMarker(); // if there are unreads, jump to the marker instead
+    // Use holdPosition so scrollToBottom's rAF callbacks don't fire and
+    // override the unread-marker scroll. We control the final position here.
+    renderMessages(false, true);
+    if (!scrollToUnreadMarker()) {
+      // No unread marker (channel was caught up): pin to the newest message.
+      const wrap = $("#message-list");
+      wrap.scrollTop = wrap.scrollHeight;
+    }
     renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
     if (id !== state.activeChannelId) return;

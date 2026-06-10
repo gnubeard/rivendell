@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-06-10
+
+### Fixed
+- Selecting a channel with unread messages now correctly scrolls to the first unread message instead of staying pinned to the bottom.
+- The "New messages" divider no longer appears when sending a message yourself or while actively watching a channel.
+
 ## [1.4.9] - 2026-06-10
 
 ### Added
