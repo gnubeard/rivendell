@@ -2830,7 +2830,7 @@ function renderEmojiPicker() {
   for (const ch of COMMON_EMOJI) {
     picker.append(el("button", {
       type: "button", class: "emoji-choice", title: ch,
-      onclick: () => chooseEmoji(ch, false),
+      onclick: (e) => chooseEmoji(ch, false, e),
     }, el("span", { class: "emoji-uni" }, ch)));
   }
   const codes = Object.keys(state.emojis).sort();
@@ -2839,7 +2839,7 @@ function renderEmojiPicker() {
     for (const code of codes) {
       picker.append(el("button", {
         type: "button", class: "emoji-choice", title: `:${code}:`,
-        onclick: () => chooseEmoji(code, true),
+        onclick: (e) => chooseEmoji(code, true, e),
       }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
     }
   }
@@ -2856,8 +2856,9 @@ function renderEmojiPicker() {
 // chooseEmoji routes a picked emoji to the popup's current target. isCustom marks a
 // custom shortcode (vs a literal Unicode glyph) — only the former is :colon:-wrapped
 // when inserted into a message; as a reaction value the bare shortcode is stored.
-function chooseEmoji(value, isCustom) {
-  $("#emoji-picker").hidden = true;
+// Shift-clicking keeps the picker open so multiple emoji can be inserted/reacted.
+function chooseEmoji(value, isCustom, evt) {
+  if (!evt?.shiftKey) $("#emoji-picker").hidden = true;
   if (pickerTarget.mode === "react") {
     toggleReaction(pickerTarget.messageId, value);
     return;

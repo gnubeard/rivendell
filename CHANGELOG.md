@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.13] - 2026-06-10
+
+### Added
+- Holding Shift while selecting an emoji from the picker keeps the picker open, allowing multiple emoji to be inserted or reacted without reopening it.
+
 ## [1.4.12] - 2026-06-10
 
 ### Fixed
