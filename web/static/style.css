@@ -232,11 +232,12 @@ button.primary:hover { filter: brightness(1.08); }
 .conn { width: 9px; height: 9px; border-radius: 50%; background: var(--text-faint); }
 .conn.online { background: var(--online); }
 .conn.offline { background: var(--danger); }
-/* Global "missed notifications" total: pushed to the right of the brand, just
-   before the connection dot. Relies on [hidden]{display:none!important}. */
-.notif-total { margin-left: auto; background: var(--danger); color: #fff; font-size: 0.66rem; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+/* Global "missed notifications" total: sits at the right with the connection
+   dot. Relies on [hidden]{display:none!important}. The signout button's
+   margin-right:auto eats the free space, so this group stays right-aligned. */
+.notif-total { background: var(--danger); color: #fff; font-size: 0.66rem; font-weight: 700; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
 .sidebar-head .conn { margin-left: 0.5rem; }
-.signout-btn { background: none; border: none; color: var(--text-faint); font-size: 1.1rem; cursor: pointer; padding: 0; margin-left: 0.5rem; line-height: 1; }
+.signout-btn { background: none; border: none; color: var(--text-faint); font-size: 1.1rem; cursor: pointer; padding: 0; margin-left: 0.5rem; margin-right: auto; line-height: 1; }
 .signout-btn:hover { color: var(--danger); }
 .hint { color: var(--text-faint); font-size: 0.8rem; margin: 0.1rem 0 0.6rem; min-height: 1.1em; }
 
