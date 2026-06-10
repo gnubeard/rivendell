@@ -1675,13 +1675,14 @@ async function loadChannel(id) {
   // A DM is 1:1 — there's no roster worth showing, so collapse the members
   // column and hide its toggle (CSS keys off body.dm-active).
   document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
-  await refreshActiveMembers();
+  // Reset scroll/history flags immediately so sentinels can't fire while in-flight.
   loadingOlder = false;
   loadingNewer = false;
   viewingHistory.delete(id);
   renderHistoryBanner();
   try {
-    const msgs = await api.messages(id, { limit: PAGE });
+    const [, msgs] = await Promise.all([refreshActiveMembers(), api.messages(id, { limit: PAGE })]);
+    if (id !== state.activeChannelId) return; // user switched away while fetching
     state = S.setMessages(state, id, msgs);
     // A short first page means there's nothing older to scroll back to.
     if (msgs.length < PAGE) historyComplete.add(id);
@@ -1689,6 +1690,7 @@ async function loadChannel(id) {
     renderMessages(true); // opening a channel always lands at the newest message
     renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
+    if (id !== state.activeChannelId) return;
     $("#message-list").innerHTML = "";
     $("#message-list").append(el("div", { class: "notice" }, ex.message));
   }
@@ -1796,6 +1798,7 @@ async function jumpToMessage(channelId, messageId) {
   }
   try {
     const msgs = await api.messages(channelId, { around: messageId });
+    if (channelId !== state.activeChannelId) return; // user switched away while fetching
     state = S.setMessages(state, channelId, msgs);
     historyComplete.delete(channelId);
     // Assume history until a forward probe proves otherwise. The around-window
@@ -1898,6 +1901,7 @@ function scrollToBottom(wrap) {
   wrap.querySelectorAll("img").forEach(media => {
     if (media.complete) return;
     media.addEventListener("load", () => {
+      if (!wrap.contains(media)) return; // image is from a prior channel render
       if (wrap.scrollTop >= targetTop - 5)
         wrap.scrollTop = wrap.scrollHeight;
     }, { once: true });
