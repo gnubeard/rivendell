@@ -810,6 +810,14 @@ function startRealtime() {
             if (pingsMe && !muted) firePing(evt, ch);
           } else if (isNewFromOther) {
             // You're looking right at it — keep the read cursor current.
+            // If the user is scrolled up, plant the marker at the current read
+            // position so they see where new messages begin when they scroll down.
+            if (!channelUnreadFrom[cid]) {
+              const ml = $("#message-list");
+              if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > 80) {
+                channelUnreadFrom[cid] = state.lastRead[cid] || 0;
+              }
+            }
             markActiveChannelRead();
             // If the admin panel is covering the conversation, a ping in the
             // active channel is still invisible — fire a toast so it's not silent.
@@ -1554,7 +1562,10 @@ async function toggleMessageRead(m) {
     // Read → mark unread: move cursor before this message.
     const newCursor = m.id - 1;
     state = S.setLastRead(state, cid, newCursor);
-    if (cid === state.activeChannelId) renderMessages();
+    if (cid === state.activeChannelId) {
+      channelUnreadFrom[cid] = newCursor;
+      renderMessages();
+    }
     try {
       await api.markUnread(cid, m.id);
     } catch (e) {

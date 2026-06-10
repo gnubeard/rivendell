@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.12] - 2026-06-10
+
+### Fixed
+- "New messages" bar now appears immediately when using "Mark unread" on a message in the active channel.
+- "New messages" bar now appears when new messages arrive while you are scrolled up in the active channel.
+
 ## [1.4.11] - 2026-06-10
 
 ### Fixed
