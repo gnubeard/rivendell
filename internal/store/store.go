@@ -115,22 +115,23 @@ const (
 )
 
 type User struct {
-	ID          int64      `json:"id"`
-	Username    string     `json:"username"`
-	DisplayName string     `json:"display_name"`
-	Role        Role       `json:"role"`
-	Status      string     `json:"status"`
-	StatusText  string     `json:"status_text"`
-	Theme       string     `json:"theme"`
-	Pronouns    string     `json:"pronouns"`
-	Bio         string     `json:"bio"`
-	HasAvatar   bool       `json:"has_avatar"`
-	HasPassword bool       `json:"has_password"`
-	IsActive    bool       `json:"is_active"`
-	IsBot       bool       `json:"is_bot"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
-	IdentityKey *string    `json:"identity_key,omitempty"`
+	ID              int64      `json:"id"`
+	Username        string     `json:"username"`
+	DisplayName     string     `json:"display_name"`
+	Role            Role       `json:"role"`
+	Status          string     `json:"status"`
+	StatusText      string     `json:"status_text"`
+	Theme           string     `json:"theme"`
+	Pronouns        string     `json:"pronouns"`
+	Bio             string     `json:"bio"`
+	HasAvatar       bool       `json:"has_avatar"`
+	AvatarUpdatedAt *time.Time `json:"avatar_updated_at,omitempty"`
+	HasPassword     bool       `json:"has_password"`
+	IsActive        bool       `json:"is_active"`
+	IsBot           bool       `json:"is_bot"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
+	IdentityKey     *string    `json:"identity_key,omitempty"`
 }
 
 type Channel struct {

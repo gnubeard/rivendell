@@ -13,20 +13,24 @@ var ErrNotFound = errors.New("store: not found")
 
 // userCols is the canonical projection used by scanUser.
 const userCols = `id, username, display_name, role, status, status_text, theme, pronouns, bio,
-	(avatar IS NOT NULL) AS has_avatar, (password_hash IS NOT NULL) AS has_password,
+	(avatar IS NOT NULL) AS has_avatar, avatar_updated_at, (password_hash IS NOT NULL) AS has_password,
 	is_active, is_bot, created_at, last_seen_at, identity_key`
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var lastSeen sql.NullTime
 	var identityKey sql.NullString
+	var avatarUpdatedAt sql.NullTime
 	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.Status,
-		&u.StatusText, &u.Theme, &u.Pronouns, &u.Bio, &u.HasAvatar, &u.HasPassword, &u.IsActive, &u.IsBot, &u.CreatedAt, &lastSeen, &identityKey)
+		&u.StatusText, &u.Theme, &u.Pronouns, &u.Bio, &u.HasAvatar, &avatarUpdatedAt, &u.HasPassword, &u.IsActive, &u.IsBot, &u.CreatedAt, &lastSeen, &identityKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
 	if err != nil {
 		return u, err
+	}
+	if avatarUpdatedAt.Valid {
+		u.AvatarUpdatedAt = &avatarUpdatedAt.Time
 	}
 	if lastSeen.Valid {
 		u.LastSeenAt = &lastSeen.Time
@@ -106,12 +110,12 @@ func (s *Store) TouchLastSeen(ctx context.Context, id int64) error {
 }
 
 func (s *Store) SetAvatar(ctx context.Context, id int64, mime string, data []byte) error {
-	return s.exec(ctx, `UPDATE users SET avatar = $2, avatar_mime = $3, updated_at = now() WHERE id = $1`,
+	return s.exec(ctx, `UPDATE users SET avatar = $2, avatar_mime = $3, avatar_updated_at = now(), updated_at = now() WHERE id = $1`,
 		id, data, mime)
 }
 
 func (s *Store) ClearAvatar(ctx context.Context, id int64) error {
-	return s.exec(ctx, `UPDATE users SET avatar = NULL, avatar_mime = NULL, updated_at = now() WHERE id = $1`, id)
+	return s.exec(ctx, `UPDATE users SET avatar = NULL, avatar_mime = NULL, avatar_updated_at = NULL, updated_at = now() WHERE id = $1`, id)
 }
 
 func (s *Store) GetAvatar(ctx context.Context, id int64) (mime string, data []byte, err error) {

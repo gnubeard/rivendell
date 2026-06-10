@@ -4446,12 +4446,16 @@ function presenceClass(u) {
   return "online";
 }
 
-// avatarSrc returns the avatar URL for a user, with a cache-bust token appended
-// when we know their avatar changed this session (see avatarVersion).
+// avatarSrc returns the avatar URL for a user with a ?v= token so the browser
+// can cache it aggressively. avatarVersion wins (set by user.update WS events
+// during the session); avatar_updated_at from the user object is the durable
+// fallback that persists across page loads.
 function avatarSrc(userId) {
   const v = avatarVersion[userId];
-  const base = api.avatarURL(userId);
-  return v ? `${base}?v=${v}` : base;
+  if (v) return `${api.avatarURL(userId)}?v=${v}`;
+  const u = state.users[userId];
+  if (u && u.avatar_updated_at) return `${api.avatarURL(userId)}?v=${encodeURIComponent(u.avatar_updated_at)}`;
+  return api.avatarURL(userId);
 }
 
 function initials(name) {

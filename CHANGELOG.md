@@ -9,6 +9,11 @@ Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment 
 
 ## [Unreleased]
 
+## [1.3.128] - 2026-06-10
+
+### Fixed
+- Avatars now cache in the browser for up to a year instead of 60 seconds; avatar URLs carry a `?v=<avatar_updated_at>` version token so the cache is busted immediately when someone changes their photo
+
 ## [1.3.127] - 2026-06-10
 
 ### Added

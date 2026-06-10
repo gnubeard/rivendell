@@ -459,7 +459,13 @@ func (s *Server) handleGetAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", "private, max-age=60")
+	// A versioned URL (?v=<avatar_updated_at>) is safe to cache indefinitely;
+	// fall back to 1 hour for unversioned requests (direct links, old clients).
+	if r.URL.Query().Has("v") {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
