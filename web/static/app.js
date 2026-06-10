@@ -2987,6 +2987,12 @@ function findMessage(messageId) {
 // registry) from literal Unicode graphemes, which don't match this pattern.
 const SHORTCODE_RE = /^[a-z0-9_]{2,32}$/;
 
+// Reverse of BUILTIN_EMOJI (glyph → shortcode name), so a Unicode reaction can
+// surface its `:shortcode:` in the hover tooltip alongside the names.
+const BUILTIN_GLYPH_TO_NAME = Object.fromEntries(
+  Object.entries(BUILTIN_EMOJI).map(([name, glyph]) => [glyph, name]),
+);
+
 // reactionsRow renders the pill row under a message, or null if it has none. Each
 // pill shows the emoji (custom shortcode → image, else the literal Unicode glyph)
 // and its count, is highlighted when I'm among the reactors, and toggles on click.
@@ -3002,15 +3008,25 @@ function reactionsRow(m) {
     const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
     // An orphaned reaction: value looks like a shortcode but is no longer in the
     // emoji registry (the custom emoji was deleted after the reaction was placed).
-    const isOrphan = !state.emojis[g.emoji] && SHORTCODE_RE.test(g.emoji);
-    const glyph = state.emojis[g.emoji]
+    const isCustom = !!state.emojis[g.emoji];
+    const isOrphan = !isCustom && SHORTCODE_RE.test(g.emoji);
+    const glyph = isCustom
       ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:` })
       : isOrphan
         ? el("span", { class: "r-emoji" }, "🪦")
         : el("span", { class: "r-emoji" }, g.emoji);
+    // Tooltip leads with the emoji's identity — its `:shortcode:` where one
+    // exists (custom/orphan store the bare code; builtin glyphs reverse-map to
+    // theirs), prefixed by the glyph for Unicode reactions — then the reactors.
+    const code = isCustom || isOrphan
+      ? `:${g.emoji}:`
+      : BUILTIN_GLYPH_TO_NAME[g.emoji]
+        ? `:${BUILTIN_GLYPH_TO_NAME[g.emoji]}:`
+        : null;
+    const ident = isCustom || isOrphan ? code : code ? `${g.emoji} ${code}` : g.emoji;
     const titleText = isOrphan
-      ? `${g.emoji}: ${names} (emoji deleted${mine ? " — click to remove" : ""})`
-      : `${g.emoji}: ${names}`;
+      ? `${ident} — ${names} (emoji deleted${mine ? " — click to remove" : ""})`
+      : `${ident} — ${names}`;
     row.append(el("button", {
       class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
       title: titleText,

@@ -189,6 +189,20 @@ form input, form textarea, form select, .composer textarea, .admin-create input,
 }
 form textarea { resize: vertical; line-height: 1.4; }
 form input:focus, form textarea:focus, form select:focus, .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
+/* Native file inputs ship an unstyled "Browse..." button — theme it to match
+   the rest of the form so it doesn't render as a bare system button. */
+input[type="file"] { padding: 0.35rem 0.5rem; }
+input[type="file"]::file-selector-button {
+  margin-right: 0.6rem;
+  padding: 0.35rem 0.7rem;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { background: var(--border); }
 button.primary {
   width: 100%;
   padding: 0.6rem;
@@ -367,6 +381,11 @@ body.ch-dragging, body.ch-dragging .channel { cursor: grabbing; }
 .msg-body .spoiler.revealed { background: var(--bg-3); color: var(--text); user-select: auto; }
 .msg-body .spoiler:not(.revealed) img.msg-image { filter: blur(16px); }
 .msg-body .spoiler:not(.revealed) a { color: transparent; }
+/* color:transparent hides plain text but not emoji — custom emoji are <img> and
+   Unicode emoji are color-font glyphs that ignore `color`. Hide both behind the
+   bar while preserving layout so the spoiler keeps its width. */
+.msg-body .spoiler:not(.revealed) img.emoji,
+.msg-body .spoiler:not(.revealed) .emoji-uni { opacity: 0; }
 .msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; position: relative; line-height: 1; }
 .msg-body pre.code-block code { background: none; padding: 0; }
 /* Language label shown top-right when a language hint is present. */
@@ -837,7 +856,7 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
 }
 .ping-toast:active { background: #d97706; }
 .ping-toast-who { font-weight: 700; font-size: 1rem; flex-shrink: 0; color: #1c1008; }
-.ping-toast-body { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #3b1f05; font-size: 1rem; }
+.ping-toast-body { min-width: 0; overflow: hidden; color: #3b1f05; font-size: 1rem; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; }
 @keyframes ping-toast-in {
   from { opacity: 0; transform: translateY(-100%); }
   to { opacity: 1; transform: translateY(0); }

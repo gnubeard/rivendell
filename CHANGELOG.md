@@ -5,6 +5,16 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-06-10
+
+### Changed
+- Spoiler bars now hide emoji too — both custom and Unicode emoji inside a `||spoiler||` stay obscured until you click, instead of leaking through.
+- Reaction hover tooltips now show the emoji's `:shortcode:` alongside who reacted.
+- In-app ping toasts wrap to multiple lines (up to four) instead of truncating a longer message to a single line.
+
+### Fixed
+- The file-picker "Browse…" button in the custom-emoji dialog is now themed to match the rest of the form instead of rendering as a bare system button.
+
 ## [1.4.2] - 2026-06-10
 
 ### Changed
