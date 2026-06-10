@@ -3,6 +3,10 @@
 All user-visible changes to Rivendell are documented here.
 Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
+## [1.3.126] - 2026-06-10
+
+Cleanup only: reverted a 13-commit mobile keyboard GIF / image-paste experiment (v1.3.113–v1.3.125) that never converged. No user-visible change from v1.3.112.
+
 ## [Unreleased]
 
 ### Changed
