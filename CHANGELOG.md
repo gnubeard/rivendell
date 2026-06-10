@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-06-10
+
+### Fixed
+- @-mention autocomplete no longer suggests users who are already mentioned in the message being composed.
+
 ## [1.4.7] - 2026-06-10
 
 ### Changed

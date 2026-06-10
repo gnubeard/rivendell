@@ -2284,9 +2284,22 @@ function attachAutocomplete(input, popup) {
 
   function filterMentions(partial) {
     const q = partial.toLowerCase();
+    const pos = input.selectionStart;
+    const triggerAt = pos - partial.length - 1; // index of the '@' char in input.value
+
+    // Collect usernames already @-mentioned elsewhere in the composed text.
+    const alreadyMentioned = new Set();
+    const re = /(^|[^A-Za-z0-9_/])@([A-Za-z0-9_]{2,32})/g;
+    let m;
+    while ((m = re.exec(input.value)) !== null) {
+      const atIdx = m.index + m[1].length;
+      if (atIdx !== triggerAt) alreadyMentioned.add(m[2].toLowerCase());
+    }
+
     return Object.values(state.users)
       .filter((u) => !u.disabled &&
         u.id !== state.me?.id &&
+        !alreadyMentioned.has(u.username.toLowerCase()) &&
         (!activeMemberIds || activeMemberIds.has(u.id)) &&
         (u.username.toLowerCase().startsWith(q) ||
           (u.display_name && u.display_name.toLowerCase().startsWith(q)))
