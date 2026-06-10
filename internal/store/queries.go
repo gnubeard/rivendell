@@ -1128,6 +1128,24 @@ func (s *Store) MarkRead(ctx context.Context, userID, channelID, messageID int64
 	return err
 }
 
+// MarkUnread moves a user's read cursor to beforeMessageID-1, making that
+// message and everything after it appear unread. Unlike MarkRead this is
+// intentionally non-monotonic so the cursor can move backward.
+func (s *Store) MarkUnread(ctx context.Context, userID, channelID, beforeMessageID int64) error {
+	cursor := beforeMessageID - 1
+	if cursor < 0 {
+		cursor = 0
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO channel_reads (user_id, channel_id, last_read_message_id, updated_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (user_id, channel_id) DO UPDATE
+		   SET last_read_message_id = EXCLUDED.last_read_message_id,
+		       updated_at = now()`,
+		userID, channelID, cursor)
+	return err
+}
+
 // SeedReadCursor sets a user's cursor for a channel to the channel's current
 // newest message id, but only if no cursor exists yet (ON CONFLICT DO NOTHING) —
 // so a user who gains access to a channel starts "caught up" rather than facing
@@ -1318,6 +1336,28 @@ func (s *Store) UnreadSummary(ctx context.Context, userID int64) ([]ChannelUnrea
 		get(cid).Mentions = n
 	}
 	if err := mentionRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Read cursors: populate LastReadMessageID for every visible channel that
+	// has a cursor row. This lets the client place the "New messages" marker.
+	cursorRows, err := s.db.QueryContext(ctx, visibleCTE+`
+		SELECT cr.channel_id, cr.last_read_message_id
+		FROM channel_reads cr
+		JOIN visible v ON v.id = cr.channel_id
+		WHERE cr.user_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer cursorRows.Close()
+	for cursorRows.Next() {
+		var cid, msgID int64
+		if err := cursorRows.Scan(&cid, &msgID); err != nil {
+			return nil, err
+		}
+		get(cid).LastReadMessageID = msgID
+	}
+	if err := cursorRows.Err(); err != nil {
 		return nil, err
 	}
 

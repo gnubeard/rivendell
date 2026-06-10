@@ -91,6 +91,9 @@ let notifEnabled = loadNotifPref();
 // Highest message id we've told the server we've read, per channel — dedupes the
 // mark-read POST so refocusing a tab doesn't spam the endpoint.
 const lastMarkedRead = {};
+// Cursor position at the moment a channel was opened — used to place the
+// "New messages" marker line and never moves until the channel is re-opened.
+const channelUnreadFrom = {};
 // Per-user avatar cache-bust token. The avatar URL is otherwise stable and
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
@@ -734,6 +737,10 @@ function startRealtime() {
         renderChannels();
         renderDMs();
         renderNotificationTotal();
+        // Keep 👁 button labels current in the open channel.
+        if (evt.type === "read.update" && evt.payload.channel_id === state.activeChannelId) {
+          renderMessages();
+        }
       }
       if (evt.type === "typing.update") {
         if (evt.payload.channel_id === state.activeChannelId) renderTypingIndicator();
@@ -1459,6 +1466,9 @@ async function selectChannel(id) {
   }
   state = S.clearUnread(state, id);
   state = S.clearMention(state, id);
+  // Snapshot the read cursor so the "New messages" marker lands at the right
+  // spot even after markActiveChannelRead() advances it.
+  channelUnreadFrom[id] = state.lastRead[id] || 0;
   renderChannels();
   renderDMs();
   renderNotificationTotal();
@@ -1495,10 +1505,56 @@ async function markActiveChannelRead() {
   }
   if (lastMarkedRead[cid] === newest) return; // server already knows
   lastMarkedRead[cid] = newest;
+  state = S.setLastRead(state, cid, newest);
+  renderMessages(); // update 👁 button labels now that cursor advanced
   try {
     await api.markRead(cid, newest);
   } catch (e) {
     lastMarkedRead[cid] = undefined; // let a later attempt retry
+  }
+}
+
+// scrollToUnreadMarker scrolls the message list so the "New messages" divider
+// is at the top of the visible area. No-op when no marker is in the DOM.
+function scrollToUnreadMarker() {
+  const wrap = $("#message-list");
+  const marker = wrap.querySelector(".unread-marker");
+  if (!marker) return;
+  wrap.scrollTop = marker.offsetTop - wrap.offsetTop - 8;
+}
+
+// toggleMessageRead marks a message read or unread depending on its current
+// state relative to the channel's live read cursor.
+async function toggleMessageRead(m) {
+  const cid = m.channel_id;
+  const cursor = state.lastRead[cid] || 0;
+  if (m.id > cursor) {
+    // Unread → mark read: advance cursor to include this message.
+    state = S.setLastRead(state, cid, m.id);
+    lastMarkedRead[cid] = m.id;
+    if (cid === state.activeChannelId) {
+      state = S.clearUnread(state, cid);
+      state = S.clearMention(state, cid);
+      renderChannels();
+      renderDMs();
+      renderNotificationTotal();
+    }
+    if (cid === state.activeChannelId) renderMessages();
+    try {
+      await api.markRead(cid, m.id);
+    } catch (e) {
+      lastMarkedRead[cid] = undefined;
+    }
+  } else {
+    // Read → mark unread: move cursor before this message.
+    const newCursor = m.id - 1;
+    state = S.setLastRead(state, cid, newCursor);
+    if (cid === state.activeChannelId) renderMessages();
+    try {
+      await api.markUnread(cid, m.id);
+    } catch (e) {
+      /* non-fatal: cursor will re-sync on next load */
+    }
   }
 }
 
@@ -1678,8 +1734,12 @@ function beginTopicEdit() {
 }
 
 async function loadChannel(id) {
+  // Startup path calls loadChannel directly without selectChannel, so
+  // channelUnreadFrom may not be set yet — seed it from the live cursor.
+  if (channelUnreadFrom[id] === undefined) {
+    channelUnreadFrom[id] = state.lastRead[id] || 0;
+  }
   const ch = state.channels[id];
-  renderChannelHeader(ch);
   renderSecretBanner();
   // Invite + leave affordances only make sense for a real private channel
   // (not DMs/public). Inviting is moderator+ only.
@@ -1703,6 +1763,7 @@ async function loadChannel(id) {
     if (msgs.length < PAGE) historyComplete.add(id);
     else historyComplete.delete(id);
     renderMessages(true); // opening a channel always lands at the newest message
+    scrollToUnreadMarker(); // if there are unreads, jump to the marker instead
     renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
     if (id !== state.activeChannelId) return;
@@ -2039,6 +2100,10 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   // In a DM, either participant may pin (mirrors the server rule); elsewhere
   // pinning is moderator+.
   const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  // Marker: the cursor position captured when this channel was opened. Any
+  // message with id > markerAt is "new since you last visited."
+  const markerAt = channelUnreadFrom[state.activeChannelId] || 0;
+  let markerInserted = false;
   let lastUser = null;
   let lastTime = 0;
   let i = 0;
@@ -2081,6 +2146,14 @@ function renderMessages(forceBottom = false, holdPosition = false) {
       continue;
     }
 
+    // Insert the "New messages" divider before the first message that is newer
+    // than the read cursor captured when this channel was opened.
+    if (!markerInserted && markerAt > 0 && m.id > markerAt) {
+      markerInserted = true;
+      wrap.append(el("div", { class: "unread-marker" },
+        el("span", { class: "unread-marker-label" }, "New messages")));
+    }
+
     const author = state.users[m.user_id];
     const t = new Date(m.created_at).getTime();
     // A reply always starts a fresh (non-grouped) block so its quote sits cleanly
@@ -2104,11 +2177,13 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const canDelete = isOwn || isMod; // non-mods can only delete their own
     // Anyone who can see a message can react to it, so "react" is always present;
     // edit/pin/delete stay conditional.
+    const isRead = m.id <= (state.lastRead[state.activeChannelId] || 0);
     const actions = el("div", { class: "msg-actions" },
       el("button", { class: "msg-act", title: "Add reaction",
         onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "😄"),
       el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
       !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
+      el("button", { class: "msg-act", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
       isOwn ? el("button", { class: "msg-act", title: "Edit", onclick: () => startEdit(m) }, "✏") : null,
       canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", onclick: () => togglePin(m) }, "📌") : null,
       canDelete ? el("button", { class: "msg-act danger", title: "Delete", onclick: () => deleteMessage(m) }, "🗑") : null);

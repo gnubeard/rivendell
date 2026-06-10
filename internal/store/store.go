@@ -150,9 +150,10 @@ type Channel struct {
 // own and deleted ones); Mentions counts the subset that pinged them (DMs and
 // @-mentions).
 type ChannelUnread struct {
-	ChannelID int64 `json:"channel_id"`
-	Unread    int   `json:"unread"`
-	Mentions  int   `json:"mentions"`
+	ChannelID         int64 `json:"channel_id"`
+	Unread            int   `json:"unread"`
+	Mentions          int   `json:"mentions"`
+	LastReadMessageID int64 `json:"last_read_message_id"`
 }
 
 // Emoji is a custom instance-wide emoji. The image bytes are never included in

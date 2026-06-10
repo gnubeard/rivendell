@@ -1741,6 +1741,37 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleMarkUnread moves the caller's read cursor backward so that message
+// message_id (and everything after it) appears unread. Broadcasts the new
+// cursor to the caller's other sessions so every tab/device stays in sync.
+func (s *Server) handleMarkUnread(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r.Context())
+	ch, ok := s.requireChannelAccess(w, r, u)
+	if !ok {
+		return
+	}
+	var req struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.MessageID <= 0 {
+		writeErr(w, http.StatusBadRequest, "message_id required")
+		return
+	}
+	if err := s.st.MarkUnread(r.Context(), u.ID, ch.ID, req.MessageID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not mark unread")
+		return
+	}
+	cursor := req.MessageID - 1
+	s.broadcast("read.update", map[string]int64{
+		"channel_id":           ch.ID,
+		"last_read_message_id": cursor,
+	}, map[int64]bool{u.ID: true})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // --- admin ---------------------------------------------------------------
 
 // handleCheckInvitation reports whether a signup invitation token is still

@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-06-10
+
+### Added
+- "New messages" divider line appears in the message list at the point where unread messages begin; clicking a channel with unreads scrolls directly to it.
+- Per-message "👁" action button lets you mark any message read or unread, moving your read cursor forward or backward on demand.
+
 ## [1.4.8] - 2026-06-10
 
 ### Fixed

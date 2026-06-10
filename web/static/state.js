@@ -15,6 +15,7 @@ export function initialState() {
     unread: {}, // channelId -> count of unseen messages
     mentions: {}, // channelId -> count of unseen @-mentions of me
     muted: {}, // channelId -> true for channels the user has silenced
+    lastRead: {}, // channelId -> last_read_message_id (server cursor)
     typing: {}, // channelId -> { userId -> true } for active typers
     emojis: {}, // shortcode -> emoji record (custom instance-wide emojis)
   };
@@ -95,14 +96,21 @@ export function clearMention(state, channelId) {
 // the badges survive a refresh/reconnect: the client trusts the server's numbers
 // rather than its own ephemeral tally. Zero counts are dropped so the maps only
 // hold channels that actually have something unseen.
+export function setLastRead(state, channelId, messageId) {
+  if (state.lastRead[channelId] === messageId) return state;
+  return { ...state, lastRead: { ...state.lastRead, [channelId]: messageId } };
+}
+
 export function setUnreadSummary(state, channels) {
   const unread = {};
   const mentions = {};
+  const lastRead = { ...state.lastRead };
   for (const c of channels || []) {
     if (c.unread) unread[c.channel_id] = c.unread;
     if (c.mentions) mentions[c.channel_id] = c.mentions;
+    if (c.last_read_message_id) lastRead[c.channel_id] = c.last_read_message_id;
   }
-  return { ...state, unread, mentions };
+  return { ...state, unread, mentions, lastRead };
 }
 
 // totalUnread / totalMentions sum the per-channel maps. totalMentions is the
@@ -344,9 +352,11 @@ export function applyEvent(state, evt) {
     case "reaction.update":
       return setReactions(state, evt.payload.channel_id, evt.payload.message_id, evt.payload.reactions);
     case "read.update":
-      // Another of my own sessions advanced the read cursor for a channel; the
-      // cursor only ever moves to the latest, so clear both counts here too.
-      return clearMention(clearUnread(state, evt.payload.channel_id), evt.payload.channel_id);
+      // Another of my own sessions advanced or moved the read cursor; sync it
+      // and clear badges (counts are always relative to the cursor).
+      return setLastRead(
+        clearMention(clearUnread(state, evt.payload.channel_id), evt.payload.channel_id),
+        evt.payload.channel_id, evt.payload.last_read_message_id);
     case "mute.update":
       // Another of my sessions muted/unmuted a channel; mirror it.
       return setMuted(state, evt.payload.channel_id, evt.payload.muted);

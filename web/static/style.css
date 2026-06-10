@@ -442,6 +442,10 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg-edit-emoji { background: none; border: none; padding: 0; cursor: pointer; font-size: 1rem; line-height: 1; opacity: 0.7; }
 .msg-edit-emoji:hover { opacity: 1; }
 .msg-edit-hint { color: var(--text-faint); font-size: 0.72rem; }
+/* "New messages" divider — rendered before the first unread message */
+.unread-marker { display: flex; align-items: center; gap: 0.6rem; margin: 0.35rem 0.5rem; pointer-events: none; }
+.unread-marker::before, .unread-marker::after { content: ""; flex: 1; height: 1px; background: var(--accent); opacity: 0.35; }
+.unread-marker-label { color: var(--accent); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; opacity: 0.85; }
 .msg.pinned { background: rgba(110, 168, 254, 0.06); border-radius: 6px; }
 .msg.pinned .msg-actions { background: linear-gradient(to right, transparent, #1e2430 30%); }
 .msg.mentioned { background: rgba(224, 164, 88, 0.09); border-radius: 6px; box-shadow: inset 2px 0 0 var(--away); }

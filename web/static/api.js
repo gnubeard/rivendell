@@ -143,6 +143,8 @@ export const api = {
   unread: () => req("GET", "/api/unread"),
   markRead: (channelId, messageId) =>
     req("POST", `/api/channels/${channelId}/read`, { message_id: messageId }),
+  markUnread: (channelId, messageId) =>
+    req("POST", `/api/channels/${channelId}/unread`, { message_id: messageId }),
   muteChannel: (channelId) => req("PUT", `/api/channels/${channelId}/mute`),
   unmuteChannel: (channelId) => req("DELETE", `/api/channels/${channelId}/mute`),
 
