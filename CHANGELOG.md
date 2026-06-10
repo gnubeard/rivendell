@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.17] - 2026-06-10
+
+### Fixed
+- "Mark unread" now sticks: a channel you marked unread stays unread (it won't auto-mark read while you're still in it) until you leave and return, at which point it jumps you to the "New messages" marker.
+
 ## [1.4.14] - 2026-06-10
 
 ### Changed

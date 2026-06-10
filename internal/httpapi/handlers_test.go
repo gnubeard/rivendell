@@ -1610,6 +1610,18 @@ func TestUnreadCountsAndMarkRead(t *testing.T) {
 	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Unread != 0 {
 		t.Fatalf("cursor moved backward: general unread = %d, want 0", cu.Unread)
 	}
+
+	// Mark-unread is intentionally non-monotonic: pointing it at the mention
+	// message moves the cursor back so that message (and everything after it)
+	// reads as unread again.
+	resp, muBody := doJSON(t, bobC, "POST", ts.URL+"/api/channels/"+itoa(general.ID)+"/unread",
+		map[string]int64{"message_id": mentionMsg.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mark unread: %d %s", resp.StatusCode, muBody)
+	}
+	if cu := chUnread(getUnread(t, bobC, ts), general.ID); cu.Unread != 1 || cu.Mentions != 1 {
+		t.Fatalf("after mark-unread: got %+v, want unread=1 mentions=1", cu)
+	}
 }
 
 // TestMentionClearedOnDeleteAndEdit confirms pings track the message: deleting a

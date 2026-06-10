@@ -264,6 +264,35 @@ test("applyEvent mute.update folds in the mute flag", () => {
   assert.equal(S.isMuted(s, 5), false);
 });
 
+test("setUnread sets an explicit count and clears on non-positive", () => {
+  let s = S.initialState();
+  s = S.setUnread(s, 7, 3);
+  assert.equal(s.unread[7], 3);
+  // Same value is a no-op returning the same reference.
+  const before = s;
+  s = S.setUnread(s, 7, 3);
+  assert.equal(s, before);
+  // Zero (or negative) clears the entry like clearUnread.
+  s = S.setUnread(s, 7, 0);
+  assert.equal(s.unread[7], undefined);
+});
+
+test("applyEvent read.unread raises the unread badge from loaded messages", () => {
+  let s = S.initialState();
+  s = { ...s, me: { id: 3 } };
+  // Channel 1 has three messages after cursor 5; two are from others (id 6, 8),
+  // one is mine (id 7) and must not count toward the unread badge.
+  s = S.setMessages(s, 1, [
+    { id: 4, channel_id: 1, user_id: 9 },
+    { id: 6, channel_id: 1, user_id: 9 },
+    { id: 7, channel_id: 1, user_id: 3 },
+    { id: 8, channel_id: 1, user_id: 9 },
+  ]);
+  s = S.applyEvent(s, { type: "read.unread", payload: { channel_id: 1, last_read_message_id: 5 } });
+  assert.equal(s.lastRead[1], 5);
+  assert.equal(s.unread[1], 2); // ids 6 and 8 (mine, id 7, excluded)
+});
+
 test("applyEvent read.update clears both counts for the channel", () => {
   let s = S.setUnreadSummary(S.initialState(), [
     { channel_id: 1, unread: 3, mentions: 1 },

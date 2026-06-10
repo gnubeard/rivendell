@@ -1743,7 +1743,9 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 
 // handleMarkUnread moves the caller's read cursor backward so that message
 // message_id (and everything after it) appears unread. Broadcasts the new
-// cursor to the caller's other sessions so every tab/device stays in sync.
+// cursor to the caller's sessions (including the requester's other tabs) as a
+// distinct read.unread event so clients re-raise the unread badge rather than
+// clearing it the way the read.update (caught-up) path does.
 func (s *Server) handleMarkUnread(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	ch, ok := s.requireChannelAccess(w, r, u)
@@ -1765,7 +1767,7 @@ func (s *Server) handleMarkUnread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cursor := req.MessageID - 1
-	s.broadcast("read.update", map[string]int64{
+	s.broadcast("read.unread", map[string]int64{
 		"channel_id":           ch.ID,
 		"last_read_message_id": cursor,
 	}, map[int64]bool{u.ID: true})

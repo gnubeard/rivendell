@@ -68,6 +68,15 @@ export function bumpUnread(state, channelId) {
   return { ...state, unread: { ...state.unread, [channelId]: n } };
 }
 
+// setUnread sets a channel's unseen count to an explicit value (used by the
+// mark-unread action, which knows exactly how many messages it just unread). A
+// non-positive count clears the entry, mirroring clearUnread.
+export function setUnread(state, channelId, n) {
+  if (n <= 0) return clearUnread(state, channelId);
+  if (state.unread[channelId] === n) return state;
+  return { ...state, unread: { ...state.unread, [channelId]: n } };
+}
+
 // clearUnread resets a channel's unseen count (e.g. when it becomes active).
 export function clearUnread(state, channelId) {
   if (!state.unread[channelId]) return state;
@@ -357,6 +366,18 @@ export function applyEvent(state, evt) {
       return setLastRead(
         clearMention(clearUnread(state, evt.payload.channel_id), evt.payload.channel_id),
         evt.payload.channel_id, evt.payload.last_read_message_id);
+    case "read.unread": {
+      // A session (possibly this tab) marked a message unread, moving the cursor
+      // back. Sync the cursor and raise the unread badge from the loaded messages
+      // after it (from others), so the channel reads as unread everywhere — never
+      // clear it the way read.update does. Mentions are left untouched; a reload
+      // re-syncs the exact figure from the server.
+      const cid = evt.payload.channel_id;
+      const cursor = evt.payload.last_read_message_id;
+      const n = (state.messages[cid] || [])
+        .filter((m) => m.id > cursor && m.user_id !== (state.me && state.me.id)).length;
+      return setUnread(setLastRead(state, cid, cursor), cid, n);
+    }
     case "mute.update":
       // Another of my sessions muted/unmuted a channel; mirror it.
       return setMuted(state, evt.payload.channel_id, evt.payload.muted);

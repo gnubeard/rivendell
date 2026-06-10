@@ -94,6 +94,11 @@ const lastMarkedRead = {};
 // Cursor position at the moment a channel was opened — used to place the
 // "New messages" marker line and never moves until the channel is re-opened.
 const channelUnreadFrom = {};
+// Channels where the user explicitly clicked "mark unread" while viewing them.
+// While set, markActiveChannelRead is suppressed for that channel so it stays
+// unread — until the user leaves and returns (selectChannel clears the flag),
+// honoring the intent of the mark-unread action.
+const manualUnread = {};
 // Per-user avatar cache-bust token. The avatar URL is otherwise stable and
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
@@ -731,14 +736,15 @@ function startRealtime() {
           $("#update-banner").hidden = false;
         }
       }
-      if (evt.type === "read.update" || evt.type === "mute.update") {
-        // Another of my sessions caught up on / muted a channel (state.applyEvent
+      if (evt.type === "read.update" || evt.type === "read.unread" || evt.type === "mute.update") {
+        // A session caught up on / marked unread / muted a channel (state.applyEvent
         // already folded it in); reflect the badges and the global total.
         renderChannels();
         renderDMs();
         renderNotificationTotal();
         // Keep 👁 button labels current in the open channel.
-        if (evt.type === "read.update" && evt.payload.channel_id === state.activeChannelId) {
+        if ((evt.type === "read.update" || evt.type === "read.unread") &&
+            evt.payload.channel_id === state.activeChannelId) {
           renderMessages();
         }
       }
@@ -1476,10 +1482,13 @@ async function selectChannel(id) {
   // show the "New messages" marker when the user actually had unread messages.
   // Setting the cursor to 0 suppresses the marker entirely for channels the
   // user was already caught up on (prevents it from popping on new arrivals).
-  const hadUnreads = !!(state.unread[id] || state.mentions[id]);
+  const hadUnreads = !!(state.unread[id] || state.mentions[id] || manualUnread[id]);
   state = S.clearUnread(state, id);
   state = S.clearMention(state, id);
   channelUnreadFrom[id] = hadUnreads ? (state.lastRead[id] || 0) : 0;
+  // Re-opening the channel honors any earlier mark-unread (we just jumped to its
+  // marker) and lifts the suppression so the channel marks read again from here.
+  delete manualUnread[id];
   renderChannels();
   renderDMs();
   renderNotificationTotal();
@@ -1504,6 +1513,9 @@ async function selectChannel(id) {
 async function markActiveChannelRead() {
   const cid = state.activeChannelId;
   if (!cid) return;
+  // The user deliberately marked this channel unread; leave the cursor where
+  // they put it. The flag is cleared when they leave and re-open the channel.
+  if (manualUnread[cid]) return;
   const msgs = state.messages[cid] || [];
   if (!msgs.length) return;
   const newest = msgs[msgs.length - 1].id; // messages are kept sorted ascending
@@ -1545,6 +1557,7 @@ async function toggleMessageRead(m) {
     // Unread → mark read: advance cursor to include this message.
     state = S.setLastRead(state, cid, m.id);
     lastMarkedRead[cid] = m.id;
+    delete manualUnread[cid]; // an explicit mark-read cancels mark-unread suppression
     if (cid === state.activeChannelId) {
       state = S.clearUnread(state, cid);
       state = S.clearMention(state, cid);
@@ -1562,6 +1575,19 @@ async function toggleMessageRead(m) {
     // Read → mark unread: move cursor before this message.
     const newCursor = m.id - 1;
     state = S.setLastRead(state, cid, newCursor);
+    lastMarkedRead[cid] = undefined; // forget the dedupe so a later re-read re-POSTs
+    // Suppress auto-mark-read until the user leaves and re-opens this channel,
+    // and surface a sidebar badge for the now-unread messages (from others) so
+    // the channel reads as unread and re-opening jumps to the "New messages"
+    // marker. Counting from loaded messages matches the server's tally closely
+    // enough; a reconnect re-syncs the exact figure.
+    manualUnread[cid] = true;
+    const unreadCount = (state.messages[cid] || [])
+      .filter((x) => x.id > newCursor && x.user_id !== (state.me && state.me.id)).length;
+    state = S.setUnread(state, cid, unreadCount);
+    renderChannels();
+    renderDMs();
+    renderNotificationTotal();
     if (cid === state.activeChannelId) {
       channelUnreadFrom[cid] = newCursor;
       renderMessages();
