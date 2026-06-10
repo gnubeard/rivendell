@@ -3274,29 +3274,70 @@ async function toggleReaction(messageId, emoji, knownMine) {
 
 // --- forward message -----------------------------------------------------
 
-// openForwardModal shows a channel picker to forward a message as a permalink.
-// Sending the permalink URL causes it to render as an embed card in the target
-// channel (via extractMessagePermalinkURL in buildLinkPreview).
-function openForwardModal(m) {
+// forwardBody builds the text a forward sends. A CHANNEL message forwards as a
+// permalink, which renders as an embed card in the target (via
+// extractMessagePermalinkURL in buildLinkPreview). A DM message forwards as a
+// quoted "*Forwarded:*" copy of its text instead: a DM permalink only resolves
+// for that DM's two participants, so an embed would be dead for everyone else.
+function forwardBody(m, fromDM, srcChannelId) {
+  if (!fromDM) return `${location.origin}/${permalinkHash(srcChannelId, m.id)}`;
+  const quoted = (m.content || "").split("\n").map((l) => "> " + l).join("\n");
+  return `*Forwarded:*\n${quoted}`;
+}
+
+// openForwardModal shows a picker to forward a message (see forwardBody for what
+// each kind sends). It hides DM targets whose other member can't see the source
+// channel — for a permalink forward the embed would be dead for them. The text
+// box filters the list by channel/person name.
+async function openForwardModal(m) {
   if (m.deleted_at) return;
   const srcChannelId = state.activeChannelId;
-  const msgId = m.id;
-  const list = $("#forward-list");
-  list.innerHTML = "";
-  for (const id of state.channelOrder) {
-    const ch = state.channels[id];
-    if (!ch) continue;
-    const label = ch.is_dm ? dmDisplayName(ch) : "#" + ch.name;
-    list.append(el("li", { class: "invite-item", onclick: async () => {
-      $("#forward-modal").hidden = true;
-      try {
-        await api.sendMessage(id, `${location.origin}/${permalinkHash(srcChannelId, msgId)}`, null);
-      } catch (ex) {
-        alert("Failed to forward: " + ex.message);
-      }
-    }}, label));
+  const srcCh = state.channels[srcChannelId];
+  const fromDM = !!(srcCh && srcCh.is_dm);
+
+  // Who can open a permalink to the source? Everyone, for a public channel or a
+  // DM copy (null sentinel ⇒ no DM filtering). For a private non-DM channel it's
+  // the members plus every mod/admin, mirroring the server's audienceForChannel.
+  let canSee = null;
+  if (!fromDM && srcCh && srcCh.is_private) {
+    try {
+      const ids = new Set((await api.channelMembers(srcChannelId)).map((u) => u.id));
+      canSee = (uid) => ids.has(uid) || ["admin", "moderator"].includes((state.users[uid] || {}).role);
+    } catch {
+      canSee = null; // on error, don't over-hide
+    }
   }
+
+  const list = $("#forward-list");
+  const filter = $("#forward-filter");
+  const render = () => {
+    const needle = filter.value.trim().toLowerCase();
+    list.innerHTML = "";
+    for (const id of state.channelOrder) {
+      const ch = state.channels[id];
+      if (!ch) continue;
+      if (ch.is_dm && canSee) {
+        const other = S.otherDMParticipant(ch, state.me.id);
+        if (other == null || !canSee(other)) continue;
+      }
+      const label = ch.is_dm ? dmDisplayName(ch) : "#" + ch.name;
+      if (needle && !label.toLowerCase().includes(needle)) continue;
+      list.append(el("li", { class: "invite-item", onclick: async () => {
+        $("#forward-modal").hidden = true;
+        try {
+          await api.sendMessage(id, forwardBody(m, fromDM, srcChannelId), null);
+        } catch (ex) {
+          alert("Failed to forward: " + ex.message);
+        }
+      }}, label));
+    }
+  };
+
+  filter.value = "";
+  filter.oninput = render;
+  render();
   $("#forward-modal").hidden = false;
+  filter.focus();
 }
 
 // --- mobile long-press context menu --------------------------------------

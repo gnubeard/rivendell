@@ -636,6 +636,10 @@ body.dm-active #members-toggle { display: none; }
 .modal-form .checkbox-row input { width: auto; margin: 0; }
 
 .invite-list { list-style: none; margin: 0.6rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+/* Forward picker rows are clickable; give them a hover cue like search results. */
+#forward-filter { width: 100%; box-sizing: border-box; margin: 0.6rem 0 0; }
+.invite-item { cursor: pointer; padding: 0.4rem 0.5rem; border-radius: var(--radius); }
+.invite-item:hover { background: var(--surface-2, rgba(127,127,127,0.08)); }
 .invite-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
 .invite-row .member-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .invite-in { color: var(--text-faint); font-size: 0.78rem; }

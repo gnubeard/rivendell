@@ -5,6 +5,14 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.19] - 2026-06-10
+
+### Changed
+- Forward picker now has a filter box, hover highlighting on the list, and hides DMs whose other member can't see the message you're forwarding.
+
+### Fixed
+- Forwarding a DM message now sends a quoted "*Forwarded:*" copy of its text instead of a permalink (a DM permalink only opens for that DM's two participants, so it was useless to everyone else). Forwarding a channel message is unchanged.
+
 ## [1.4.18] - 2026-06-10
 
 ### Changed
