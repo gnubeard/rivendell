@@ -59,7 +59,7 @@ func TestBootstrapSeedsAdminAndGeneralChannel(t *testing.T) {
 		t.Fatalf("want 1 admin after bootstrap, got %d", n)
 	}
 
-	channels, err := st.ListChannels(ctx)
+	channels, err := st.ListChannels(ctx, 0)
 	if err != nil {
 		t.Fatalf("list channels: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBootstrapSkipsGeneralWhenChannelsExist(t *testing.T) {
 
 	maybeBootstrap(ctx, bootstrapCfg(), st)
 
-	channels, err := st.ListChannels(ctx)
+	channels, err := st.ListChannels(ctx, 0)
 	if err != nil {
 		t.Fatalf("list channels: %v", err)
 	}

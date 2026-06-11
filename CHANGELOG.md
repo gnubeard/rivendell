@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.48] - 2026-06-11
+
+### Fixed
+- Re-opening a DM now sorts it to the top of the list even after a page refresh (initial channel load now considers `dm_open.opened_at`, matching the live-update path).
+
 ## [1.4.46] - 2026-06-11
 
 ### Fixed

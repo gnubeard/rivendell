@@ -598,7 +598,7 @@ func (s *Server) handleGetEmojiImage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
-	channels, err := s.st.ListChannels(r.Context())
+	channels, err := s.st.ListChannels(r.Context(), u.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list channels")
 		return
@@ -987,7 +987,7 @@ func (s *Server) requireChannelAccess(w http.ResponseWriter, r *http.Request, u 
 // whole channel list. Used to scope full-text search so a caller can never match
 // a message in a private channel or DM they aren't part of.
 func (s *Server) accessibleChannelIDs(r *http.Request, u store.User) ([]int64, error) {
-	channels, err := s.st.ListChannels(r.Context())
+	channels, err := s.st.ListChannels(r.Context(), u.ID)
 	if err != nil {
 		return nil, err
 	}

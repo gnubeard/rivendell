@@ -532,16 +532,17 @@ func (s *Store) CreateChannel(ctx context.Context, name, topic string, isPrivate
 		name, topic, isPrivate, createdBy))
 }
 
-func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
+func (s *Store) ListChannels(ctx context.Context, userID int64) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT c.id, c.name, c.topic, c.is_private, c.is_dm, c.position,
 		        c.created_at, c.archived_at,
-		        MAX(m.created_at) AS last_message_at
+		        GREATEST(MAX(m.created_at), MAX(dmo.opened_at)) AS last_message_at
 		 FROM channels c
 		 LEFT JOIN messages m ON m.channel_id = c.id AND m.deleted_at IS NULL
+		 LEFT JOIN dm_open dmo ON dmo.channel_id = c.id AND dmo.user_id = $1
 		 WHERE c.archived_at IS NULL
 		 GROUP BY c.id
-		 ORDER BY c.position, c.name`)
+		 ORDER BY c.position, c.name`, userID)
 	if err != nil {
 		return nil, err
 	}
