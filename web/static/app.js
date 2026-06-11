@@ -721,7 +721,10 @@ function startRealtime() {
             renderNotificationTotal();
             if (state.activeChannelId) loadChannel(state.activeChannelId);
           } else if (state.channels[channel_id] && channel_id === state.activeChannelId) {
-            // Admin lost membership — re-render the member roster to reflect the change.
+            // Admin lost membership on the active channel (could be via another session
+            // or removed by another admin) — hide the leave button and do a server
+            // re-fetch so the roster is accurate.
+            $("#leave-btn").hidden = true;
             refreshActiveMembers();
           }
         } else if (channel_id === state.activeChannelId && activeMemberIds) {
@@ -1407,9 +1410,16 @@ async function leaveActiveChannel() {
   if (!isAdmin && !confirm(`Leave #${ch.name}? You'll need an invite to rejoin.`)) return;
   try {
     await api.removeChannelMember(ch.id, state.me.id);
-    // Admins retain bypass access to private channels, so the channel stays in
-    // their list. The WS broadcast will re-render the member roster.
-    if (!isAdmin) {
+    if (isAdmin) {
+      // Admins retain bypass access so the channel stays in their list, but they
+      // are no longer a member — hide the leave button immediately and drop self
+      // from the roster without waiting for the WS round-trip.
+      $("#leave-btn").hidden = true;
+      if (activeMemberIds) {
+        activeMemberIds.delete(state.me.id);
+        renderMembers();
+      }
+    } else {
       state = S.removeChannel(state, ch.id); // also re-points activeChannelId
       renderChannels();
       renderDMs();

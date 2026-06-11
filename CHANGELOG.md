@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.42] - 2026-06-11
+
+### Fixed
+- Leaving a private channel as an admin now immediately hides the Leave button and removes yourself from the member roster, without waiting for the WebSocket round-trip.
+
 ## [1.4.41] - 2026-06-11
 
 ### Changed
