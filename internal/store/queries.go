@@ -581,6 +581,29 @@ func (s *Store) GetChannelWithLastMessage(ctx context.Context, id int64) (Channe
 	return c, err
 }
 
+// GetDMWithRecencyForUser returns the DM channel by ID with a last_message_at
+// that reflects the later of the most recent message or the user's opened_at in
+// dm_open. This lets the client sort an explicitly-opened DM to the top even
+// when no message has been exchanged recently.
+func (s *Store) GetDMWithRecencyForUser(ctx context.Context, channelID, userID int64) (Channel, error) {
+	var c Channel
+	err := s.db.QueryRowContext(ctx,
+		`SELECT c.id, c.name, c.topic, c.is_private, c.is_dm, c.position,
+		        c.created_at, c.archived_at,
+		        GREATEST(MAX(m.created_at), MAX(do.opened_at)) AS last_message_at
+		 FROM channels c
+		 LEFT JOIN messages m ON m.channel_id = c.id AND m.deleted_at IS NULL
+		 LEFT JOIN dm_open do ON do.channel_id = c.id AND do.user_id = $2
+		 WHERE c.id = $1
+		 GROUP BY c.id`, channelID, userID).Scan(
+		&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position,
+		&c.CreatedAt, &c.ArchivedAt, &c.LastMessageAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
 // dmName builds the canonical channel name for a DM between two users. The pair
 // is ordered so (a,b) and (b,a) map to the same name, and the result satisfies
 // the channels.name regex (^[a-z0-9-]{1,48}$) for any plausible BIGSERIAL ids.
@@ -636,13 +659,14 @@ func (s *Store) GetOrCreateDM(ctx context.Context, a, b int64) (Channel, bool, e
 	return c, true, nil
 }
 
-// OpenDM marks a DM channel open in a user's sidebar (idempotent). The presence
-// of the row is the server-authoritative "this DM is open for this user" state;
-// listing filters DMs to the ones a user has open.
+// OpenDM marks a DM channel open in a user's sidebar and refreshes opened_at so
+// the client can sort the DM to the top on an explicit re-open. The presence of
+// the row is the server-authoritative "this DM is open for this user" state.
 func (s *Store) OpenDM(ctx context.Context, userID, channelID int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO dm_open (user_id, channel_id) VALUES ($1, $2)
-		 ON CONFLICT DO NOTHING`, userID, channelID)
+		 ON CONFLICT (user_id, channel_id) DO UPDATE SET opened_at = now()`,
+		userID, channelID)
 	return err
 }
 

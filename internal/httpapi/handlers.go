@@ -770,8 +770,9 @@ func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not open DM")
 		return
 	}
-	// Refetch with last_message_at so the client can sort the DM correctly.
-	if full, err := s.st.GetChannelWithLastMessage(r.Context(), ch.ID); err == nil {
+	// Refetch using the caller's opened_at so an explicitly-opened DM — even one
+	// with an old last message — sorts to the top for this user.
+	if full, err := s.st.GetDMWithRecencyForUser(r.Context(), ch.ID, u.ID); err == nil {
 		ch = full
 	}
 	writeJSON(w, http.StatusOK, ch)

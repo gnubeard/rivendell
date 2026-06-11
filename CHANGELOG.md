@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.46] - 2026-06-11
+
+### Fixed
+- Re-opening an existing DM (one with old or no messages) now places it at the top of the DM list.
+
 ## [1.4.44] - 2026-06-11
 
 ### Fixed
