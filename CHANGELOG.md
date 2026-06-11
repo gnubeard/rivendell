@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.40] - 2026-06-11
+
+### Fixed
+- "Mark read" now advances the "New messages" divider to the new cursor position. If the next unread message is already in the viewport, the divider is dismissed entirely.
+
 ## [1.4.39] - 2026-06-11
 
 ### Fixed

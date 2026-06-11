@@ -1594,6 +1594,21 @@ async function toggleMessageRead(m) {
       renderChannels();
       renderDMs();
       renderNotificationTotal();
+      // Advance the "New messages" divider to the new cursor. Dismiss it entirely
+      // if the next unread message is already visible in the viewport.
+      const loadedMsgs = state.messages[cid] || [];
+      const nextUnread = loadedMsgs.find(x => x.id > m.id && !x.deleted_at);
+      let dismissDivider = !nextUnread;
+      if (!dismissDivider) {
+        const listEl = $("#message-list");
+        const nextEl = listEl && listEl.querySelector(`[data-msg-id="${nextUnread.id}"]`);
+        if (nextEl) {
+          const listRect = listEl.getBoundingClientRect();
+          const msgRect = nextEl.getBoundingClientRect();
+          dismissDivider = msgRect.top < listRect.bottom && msgRect.bottom > listRect.top;
+        }
+      }
+      channelUnreadFrom[cid] = dismissDivider ? 0 : m.id;
     }
     if (cid === state.activeChannelId) renderMessages();
     try {
