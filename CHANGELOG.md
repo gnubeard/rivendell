@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.43] - 2026-06-11
+
+### Fixed
+- The Leave button is now hidden for admins viewing a private channel they are not a member of.
+
 ## [1.4.42] - 2026-06-11
 
 ### Fixed

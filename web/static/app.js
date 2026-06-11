@@ -1501,6 +1501,7 @@ async function refreshActiveMembers() {
     activeMemberIds = null;
   }
   renderMembers();
+  updateLeaveBtn();
 }
 
 async function selectChannel(id) {
@@ -1666,6 +1667,16 @@ async function toggleMessageRead(m) {
 // isModPlus reports whether the current user is a moderator or admin.
 function isModPlus() {
   return !!(state.me && (state.me.role === "admin" || state.me.role === "moderator"));
+}
+
+// updateLeaveBtn syncs the leave-button visibility for the active channel.
+// Admins retain read-only bypass access to private channels they haven't
+// joined — the leave button must be hidden in that case.
+function updateLeaveBtn() {
+  const ch = state.channels[state.activeChannelId];
+  const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
+  const adminNonMember = !!(state.me && state.me.role === "admin" && activeMemberIds && !activeMemberIds.has(state.me.id));
+  $("#leave-btn").hidden = !realPrivate || adminNonMember;
 }
 
 // renderChannelHeader paints the active channel's title + topic into the header.
