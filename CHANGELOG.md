@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.38] - 2026-06-11
+
+### Fixed
+- Light mode: message hover strip was invisible (white-on-white) and the action button gradient used wrong colours. Now uses theme-aware CSS variables throughout.
+
 ## [1.4.37] - 2026-06-11
 
 ### Added
