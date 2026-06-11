@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.30] - 2026-06-11
+
+### Fixed
+- Accepting a voice call or secret chat request now navigates to the DM conversation. If the DM had been closed, it is automatically re-opened so the page renders correctly.
+
 ## [1.4.27] - 2026-06-11
 
 ### Fixed

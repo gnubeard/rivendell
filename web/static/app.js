@@ -1447,6 +1447,21 @@ async function startDM(userId) {
   }
 }
 
+// ensureDMOpen guarantees that a DM channel is present in state before navigation.
+// If the user had closed the DM, it won't be in state.channels; re-opening it
+// (createDM is idempotent and marks the row open server-side) makes selectChannel
+// render correctly. fromUserId is the other party's user ID.
+async function ensureDMOpen(channelId, fromUserId) {
+  if (state.channels[channelId]) return;
+  try {
+    const ch = await api.createDM(fromUserId);
+    state = S.upsertChannel(state, ch);
+  } catch (e) {
+    // Non-fatal: selectChannel will still navigate, just with a degraded header.
+    console.warn("ensureDMOpen: could not re-open DM", e && e.message);
+  }
+}
+
 // refreshActiveMembers re-scopes the members panel to the active channel:
 // private channels (incl. DMs) show only their members; public channels show
 // everyone (activeMemberIds = null).
@@ -4847,6 +4862,7 @@ function wireVoiceControls() {
   const acceptRing = async () => {
     if (!ringState) return;
     const chId = ringState.channelId;
+    const fromUserId = ringState.fromUserId;
     stopRingSound();
     clearRingNotification();
     // Send acceptance before joining so the caller gets the signal promptly.
@@ -4854,6 +4870,7 @@ function wireVoiceControls() {
     ringState = null;
     renderRingBanner();
     try {
+      await ensureDMOpen(chId, fromUserId);
       await joinVoiceChannel(chId, { enableVideo: loadCameraPreference(chId) });
       selectChannel(chId);
     } catch (e) {
@@ -5248,6 +5265,7 @@ function wireSecretControls() {
       console.warn("secret: could not publish identity key:", e && e.message);
     }
     try {
+      await ensureDMOpen(dmChannelId, fromUserId);
       await acceptSecret(dmChannelId, fromUserId, offer);
       selectChannel(dmChannelId);
     } catch (e) {
