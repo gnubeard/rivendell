@@ -12,7 +12,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.4.28"
+const Version = "1.4.29"
 
 type Config struct {
 	Addr            string        // listen address, e.g. ":8080"
@@ -40,7 +40,7 @@ type Config struct {
 func Load() (Config, error) {
 	c := Config{
 		Addr:            env("RIVENDELL_ADDR", ":8080"),
-		DatabaseURL:     env("RIVENDELL_DATABASE_URL", "postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable"),
+		DatabaseURL:     env("RIVENDELL_DATABASE_URL", ""),
 		WebDir:          env("RIVENDELL_WEB_DIR", "web"),
 		PublicURL:       env("RIVENDELL_PUBLIC_URL", "http://localhost:8080"),
 		Secure:          envBool("RIVENDELL_COOKIE_SECURE", false),
