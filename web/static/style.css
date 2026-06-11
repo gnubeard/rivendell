@@ -648,6 +648,7 @@ body.dm-active #members-toggle { display: none; }
 
 .pins-list { list-style: none; margin: 0.6rem 0 0; padding: 0; max-height: 60vh; overflow-y: auto; }
 .pin-row { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.pin-row:last-child { border-bottom: none; }
 .pin-head { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.2rem; }
 .pin-head .msg-time { margin-right: auto; }
 
