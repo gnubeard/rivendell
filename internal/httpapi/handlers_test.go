@@ -2301,7 +2301,9 @@ func TestReopenDMLastMessageAtIsRecent(t *testing.T) {
 	// Alice sends a message (so last_message_at exists in the DB).
 	_, body = doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages",
 		map[string]string{"content": "hello"})
-	var msg struct{ CreatedAt time.Time `json:"created_at"` }
+	var msg struct {
+		CreatedAt time.Time `json:"created_at"`
+	}
 	json.Unmarshal(body, &msg)
 
 	// Bob closes the DM.

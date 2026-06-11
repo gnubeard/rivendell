@@ -706,7 +706,11 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not update channel")
 		return
 	}
-	updated, _ := s.st.GetChannel(r.Context(), id)
+	updated, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load updated channel")
+		return
+	}
 	s.broadcast("channel.update", updated, s.audienceForChannel(r.Context(), updated))
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -772,9 +776,12 @@ func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
 	}
 	// Refetch using the caller's opened_at so an explicitly-opened DM — even one
 	// with an old last message — sorts to the top for this user.
-	if full, err := s.st.GetDMWithRecencyForUser(r.Context(), ch.ID, u.ID); err == nil {
-		ch = full
+	full, err := s.st.GetDMWithRecencyForUser(r.Context(), ch.ID, u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not open DM")
+		return
 	}
+	ch = full
 	writeJSON(w, http.StatusOK, ch)
 }
 
@@ -931,7 +938,9 @@ func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Auto-archive the channel when the last member leaves.
-	if n, err := s.st.CountChannelMembers(r.Context(), id); err == nil && n == 0 {
+	if n, err := s.st.CountChannelMembers(r.Context(), id); err != nil {
+		log.Printf("removeChannelMember: count for auto-archive: %v", err)
+	} else if n == 0 {
 		if err := s.st.ArchiveChannel(r.Context(), id); err != nil {
 			log.Printf("auto-archive empty channel %d: %v", id, err)
 		} else {
@@ -1133,7 +1142,7 @@ func (s *Server) sendPushNotifications(ch store.Channel, msg store.Message, reci
 		if s.hub.IsConnected(uid) {
 			continue
 		}
-		if muted, err := s.st.IsChannelMuted(ctx, uid, ch.ID); err == nil && muted {
+		if muted, err := s.st.IsChannelMuted(ctx, uid, ch.ID); err != nil || muted {
 			continue
 		}
 		subs, err := s.st.ListPushSubscriptions(ctx, uid)
@@ -1432,7 +1441,11 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not edit message")
 		return
 	}
-	ch, _ := s.st.GetChannel(r.Context(), msg.ChannelID)
+	ch, err := s.st.GetChannel(r.Context(), msg.ChannelID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load channel")
+		return
+	}
 	// An edit may add or remove an @-mention; recompute the ping rows from the
 	// new content so durable counts stay accurate.
 	if err := s.st.DeleteMentionsForMessage(r.Context(), msg.ID); err != nil {
@@ -1467,7 +1480,11 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.DeleteReactionsForMessage(r.Context(), msg.ID); err != nil {
 		log.Printf("deleteMessage: clear reactions: %v", err)
 	}
-	ch, _ := s.st.GetChannel(r.Context(), msg.ChannelID)
+	ch, err := s.st.GetChannel(r.Context(), msg.ChannelID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load channel")
+		return
+	}
 	s.broadcast("message.delete", map[string]int64{
 		"id":         msg.ID,
 		"channel_id": msg.ChannelID,
