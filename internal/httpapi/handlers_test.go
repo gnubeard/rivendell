@@ -2280,6 +2280,61 @@ func TestAudienceMirrorsAccess(t *testing.T) {
 	}
 }
 
+// TestReopenDMLastMessageAtIsRecent asserts that POST /api/dms for a
+// re-opened (previously closed) DM returns a last_message_at that reflects
+// the reopen time — not the original channel creation date — so the JS client
+// can sort it to the top of the DM list without a page refresh.
+func TestReopenDMLastMessageAtIsRecent(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	seedAdmin(t, ts, st)
+	aliceC, alice := seedMember(t, ts, st, "alice", "Alice", store.RoleMember)
+	bobC, bob := seedMember(t, ts, st, "bob", "Bob", store.RoleMember)
+	_ = alice
+
+	// Alice opens a DM with Bob.
+	_, body := doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": bob.ID})
+	var dm store.Channel
+	if err := json.Unmarshal(body, &dm); err != nil {
+		t.Fatalf("unmarshal DM: %v", err)
+	}
+
+	// Alice sends a message (so last_message_at exists in the DB).
+	_, body = doJSON(t, aliceC, "POST", ts.URL+"/api/channels/"+itoa(dm.ID)+"/messages",
+		map[string]string{"content": "hello"})
+	var msg struct{ CreatedAt time.Time `json:"created_at"` }
+	json.Unmarshal(body, &msg)
+
+	// Bob closes the DM.
+	resp, body := doJSON(t, bobC, "DELETE", ts.URL+"/api/dms/"+itoa(dm.ID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("close DM: %d %s", resp.StatusCode, body)
+	}
+
+	// Small sleep so "now" is clearly after the message timestamp.
+	time.Sleep(5 * time.Millisecond)
+	before := time.Now()
+
+	// Bob re-opens the DM by POSTing to /api/dms.
+	resp, body = doJSON(t, bobC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": alice.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reopen DM: %d %s", resp.StatusCode, body)
+	}
+	var reopened store.Channel
+	if err := json.Unmarshal(body, &reopened); err != nil {
+		t.Fatalf("unmarshal reopened DM: %v", err)
+	}
+
+	// last_message_at must be present and >= before (i.e. reflects the reopen
+	// time, not the original message or channel-creation timestamp).
+	if reopened.LastMessageAt == nil {
+		t.Fatalf("POST /api/dms for a re-opened DM returned no last_message_at; client will sort it by created_at (bottom of list)")
+	}
+	if reopened.LastMessageAt.Before(before) {
+		t.Fatalf("last_message_at %v is before the reopen time %v; client will sort DM to bottom instead of top",
+			reopened.LastMessageAt, before)
+	}
+}
+
 func itoa(i int64) string {
 	return strconv.FormatInt(i, 10)
 }

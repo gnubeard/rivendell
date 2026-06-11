@@ -591,10 +591,10 @@ func (s *Store) GetDMWithRecencyForUser(ctx context.Context, channelID, userID i
 	err := s.db.QueryRowContext(ctx,
 		`SELECT c.id, c.name, c.topic, c.is_private, c.is_dm, c.position,
 		        c.created_at, c.archived_at,
-		        GREATEST(MAX(m.created_at), MAX(do.opened_at)) AS last_message_at
+		        GREATEST(MAX(m.created_at), MAX(dmo.opened_at)) AS last_message_at
 		 FROM channels c
 		 LEFT JOIN messages m ON m.channel_id = c.id AND m.deleted_at IS NULL
-		 LEFT JOIN dm_open do ON do.channel_id = c.id AND do.user_id = $2
+		 LEFT JOIN dm_open dmo ON dmo.channel_id = c.id AND dmo.user_id = $2
 		 WHERE c.id = $1
 		 GROUP BY c.id`, channelID, userID).Scan(
 		&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position,
