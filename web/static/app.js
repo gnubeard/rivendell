@@ -795,6 +795,7 @@ function startRealtime() {
         // Keep last_message_at current so DM list stays sorted by recency.
         if (evt.type === "message.new" && ch) {
           state = S.upsertChannel(state, { ...ch, last_message_at: evt.payload.created_at });
+          if (isNewFromMe && ch.is_dm) renderDMs();
         }
         if (cid === state.activeChannelId) {
           if (isNewFromMe && viewingHistory.has(cid)) {

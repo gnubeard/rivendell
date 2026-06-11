@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.32] - 2026-06-11
+
+### Fixed
+- Sending a DM now moves that conversation to the top of the DM list, matching the behaviour when receiving a message.
+
 ## [1.4.31] - 2026-06-11
 
 ### Changed
