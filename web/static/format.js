@@ -91,17 +91,20 @@ function applyEmoticons(s) {
 // already-escaped run. This deliberately does NOT touch links — link extraction
 // happens one layer up in inline(), so a URL is never fed through these regexes
 // (that is what keeps underscores in a URL from being chewed into <em>).
-function inlineMarkup(escaped, meLower, channels) {
+function inlineMarkup(escaped, meLower, channels, usernames) {
   let out = applyEmoticons(escaped);
   // Bold then italic (order matters so ** isn't eaten by *).
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  // Mentions: style @username; flag the current user's own. The captured name is
-  // [A-Za-z0-9_], so it can't carry HTML metacharacters.
+  // Mentions: style @username only for known usernames (when a set is provided).
+  // When no set is provided all @tokens are styled (backward-compat / tests).
+  // The captured name is [A-Za-z0-9_], so it can't carry HTML metacharacters.
   out = out.replace(MENTION_RE, (full, pre, name) => {
-    const cls = meLower && name.toLowerCase() === meLower ? "mention mention-me" : "mention";
+    const nameLower = name.toLowerCase();
+    if (usernames && !usernames.has(nameLower)) return full;
+    const cls = meLower && nameLower === meLower ? "mention mention-me" : "mention";
     return `${pre}<span class="${cls}">@${name}</span>`;
   });
   // Channel links: #channelname → clickable link when the channel exists.
@@ -150,16 +153,16 @@ function imageEmbed(url) {
 // an image renders the image inline (unless embedImages is false, e.g. in search
 // rows, where it falls back to a plain link). A bare URL matching hideUrl is
 // suppressed entirely — its YouTube embed (or message-permalink card) renders it instead.
-function inline(escaped, meLower, channels, embedImages, hideUrl) {
+function inline(escaped, meLower, channels, embedImages, hideUrl, usernames) {
   let out = "";
   let last = 0;
   let m;
   LINK_RE.lastIndex = 0;
   while ((m = LINK_RE.exec(escaped)) !== null) {
-    out += inlineMarkup(escaped.slice(last, m.index), meLower, channels);
+    out += inlineMarkup(escaped.slice(last, m.index), meLower, channels, usernames);
     if (m[1] !== undefined) {
       // [text](url): keep the author's text (with markup); never an image.
-      out += linkAnchor(m[2], inlineMarkup(m[1], meLower, channels));
+      out += linkAnchor(m[2], inlineMarkup(m[1], meLower, channels, usernames));
     } else {
       const url = m[3];
       if (hideUrl && url === hideUrl) {
@@ -170,7 +173,7 @@ function inline(escaped, meLower, channels, embedImages, hideUrl) {
     }
     last = m.index + m[0].length;
   }
-  return out + inlineMarkup(escaped.slice(last), meLower, channels);
+  return out + inlineMarkup(escaped.slice(last), meLower, channels, usernames);
 }
 
 // atQuery scans backward from `pos` in `text` for an @token that should
@@ -383,9 +386,9 @@ function cellAlign(spec) {
   return "";
 }
 
-function renderTable(header, aligns, body, meLower, emojis, channels, embedImages, hideUrl) {
+function renderTable(header, aligns, body, meLower, emojis, channels, embedImages, hideUrl, usernames) {
   const ncols = header.length;
-  const fmt = (c) => inlineWithCode(c || "", meLower, emojis, channels, embedImages, hideUrl);
+  const fmt = (c) => inlineWithCode(c || "", meLower, emojis, channels, embedImages, hideUrl, usernames);
   // align values are from a fixed {left,right,center,""} set — safe to inline.
   const alignAttr = (i) => (aligns[i] ? ` style="text-align:${aligns[i]}"` : "");
   let out = '<table class="md-table"><thead><tr>';
@@ -403,18 +406,26 @@ function renderTable(header, aligns, body, meLower, emojis, channels, embedImage
   return out + "</table>";
 }
 
-// formatMessage opts: { embedImages, hideUrl, channels } — embedImages: when
-// false, bare image URLs render as plain links instead of inline <img> (search
-// rows). hideUrl: a URL to suppress from inline rendering when its preview card
-// is shown instead. channels: the state.channels map (keyed by id) used to
-// resolve #channelname tokens into clickable channel links.
+// formatMessage opts: { embedImages, hideUrl, channels, users } — embedImages:
+// when false, bare image URLs render as plain links instead of inline <img>
+// (search rows). hideUrl: a URL to suppress when its preview card is shown.
+// channels: state.channels map (keyed by id) for #channel links. users: the
+// state.users map (keyed by id); when provided, only @mentions whose lowercase
+// username appears in it are styled — unknown @tokens are left as plain text.
 export function formatMessage(text, me, emojis, opts) {
   if (text == null) return "";
   const embedImages = !opts || opts.embedImages !== false;
   const hideUrl = opts && opts.hideUrl ? escapeHtml(String(opts.hideUrl)) : null;
   const channels = (opts && opts.channels) || null;
   const meLower = me ? String(me).toLowerCase() : null;
-  return renderBlocks(String(text).split("\n"), meLower, emojis, channels, embedImages, hideUrl);
+  let usernames = null;
+  if (opts && opts.users) {
+    usernames = new Set();
+    for (const u of Object.values(opts.users)) {
+      if (u && u.username) usernames.add(String(u.username).toLowerCase());
+    }
+  }
+  return renderBlocks(String(text).split("\n"), meLower, emojis, channels, embedImages, hideUrl, usernames);
 }
 
 // FENCE_RE matches a fenced-code delimiter line: ``` optionally followed by a
@@ -434,8 +445,8 @@ const QUOTE_STRIP = /^\s*>\s?/;
 // runs (stripped one level and rendered recursively), GFM tables, # headers, * / -
 // unordered lists, and otherwise inline runs. Every non-fence branch escapes its
 // text before the inline markdown pass, preserving the escape-first XSS invariant.
-function renderBlocks(lines, meLower, emojis, channels, embedImages, hideUrl) {
-  const fmt = (s) => inlineWithCode(escapeHtml(s), meLower, emojis, channels, embedImages, hideUrl);
+function renderBlocks(lines, meLower, emojis, channels, embedImages, hideUrl, usernames) {
+  const fmt = (s) => inlineWithCode(escapeHtml(s), meLower, emojis, channels, embedImages, hideUrl, usernames);
   const rendered = [];
   for (let li = 0; li < lines.length; li++) {
     const raw = lines[li];
@@ -461,7 +472,7 @@ function renderBlocks(lines, meLower, emojis, channels, embedImages, hideUrl) {
       const inner = [];
       let j = li;
       for (; j < lines.length && QUOTE_RE.test(lines[j]); j++) inner.push(lines[j].replace(QUOTE_STRIP, ""));
-      rendered.push(`<blockquote>${renderBlocks(inner, meLower, emojis, channels, embedImages, hideUrl)}</blockquote>`);
+      rendered.push(`<blockquote>${renderBlocks(inner, meLower, emojis, channels, embedImages, hideUrl, usernames)}</blockquote>`);
       li = j - 1;
       continue;
     }
@@ -475,7 +486,7 @@ function renderBlocks(lines, meLower, emojis, channels, embedImages, hideUrl) {
       for (; j < lines.length && isTableRow(lines[j]) && !FENCE_RE.test(lines[j]) && !QUOTE_RE.test(lines[j]); j++) {
         body.push(splitRow(escapeHtml(lines[j])));
       }
-      rendered.push(renderTable(header, aligns, body, meLower, emojis, channels, embedImages, hideUrl));
+      rendered.push(renderTable(header, aligns, body, meLower, emojis, channels, embedImages, hideUrl, usernames));
       li = j - 1;
       continue;
     }
@@ -512,13 +523,13 @@ function renderBlocks(lines, meLower, emojis, channels, embedImages, hideUrl) {
 // inlineWithBlobImages splits an escaped segment on BLOB_IMG_RE, rendering each
 // match as an <img> (or plain link when embedImages is false, e.g. search rows).
 // Gaps between matches are handed off to inline() for the normal link/markup pass.
-function inlineWithBlobImages(seg, meLower, channels, embedImages, hideUrl) {
+function inlineWithBlobImages(seg, meLower, channels, embedImages, hideUrl, usernames) {
   let out = "";
   let last = 0;
   BLOB_IMG_RE.lastIndex = 0;
   let m;
   while ((m = BLOB_IMG_RE.exec(seg)) !== null) {
-    out += inline(seg.slice(last, m.index), meLower, channels, embedImages, hideUrl);
+    out += inline(seg.slice(last, m.index), meLower, channels, embedImages, hideUrl, usernames);
     // m[1] is already HTML-escaped (from the escaped input string).
     // m[2] is /api/blobs/<hex64> — no user-controlled characters.
     if (embedImages) {
@@ -528,7 +539,7 @@ function inlineWithBlobImages(seg, meLower, channels, embedImages, hideUrl) {
     }
     last = m.index + m[0].length;
   }
-  return out + inline(seg.slice(last), meLower, channels, embedImages, hideUrl);
+  return out + inline(seg.slice(last), meLower, channels, embedImages, hideUrl, usernames);
 }
 
 // SPOILER_RE matches ||text|| pairs. Uses a lazy quantifier so nested or
@@ -539,25 +550,25 @@ const SPOILER_RE = /\|\|([\s\S]*?)\|\|/g;
 
 // Render spoiler spans (||content||). Content is passed through the full inline
 // pipeline so images, links, and formatting inside spoilers render correctly.
-function inlineWithSpoiler(seg, meLower, emojis, channels, embedImages, hideUrl) {
+function inlineWithSpoiler(seg, meLower, emojis, channels, embedImages, hideUrl, usernames) {
   let out = "";
   let last = 0;
   let m;
   SPOILER_RE.lastIndex = 0;
   while ((m = SPOILER_RE.exec(seg)) !== null) {
-    out += inlineWithEmoji(seg.slice(last, m.index), meLower, emojis, channels, embedImages, hideUrl);
-    const innerHtml = inlineWithEmoji(m[1], meLower, emojis, channels, embedImages, hideUrl);
+    out += inlineWithEmoji(seg.slice(last, m.index), meLower, emojis, channels, embedImages, hideUrl, usernames);
+    const innerHtml = inlineWithEmoji(m[1], meLower, emojis, channels, embedImages, hideUrl, usernames);
     out += `<span class="spoiler" tabindex="0">${innerHtml}</span>`;
     last = m.index + m[0].length;
   }
-  return out + inlineWithEmoji(seg.slice(last), meLower, emojis, channels, embedImages, hideUrl);
+  return out + inlineWithEmoji(seg.slice(last), meLower, emojis, channels, embedImages, hideUrl, usernames);
 }
 
 // Handle `inline code` spans, leaving their contents free of inline markdown.
 // Uses a placeholder strategy so that bold/italic/strike markers that span
 // across a code token are matched correctly by inlineWithSpoiler/inlineMarkup.
 // Unmatched backticks (odd count) are left as literal backtick characters.
-function inlineWithCode(escapedLine, meLower, emojis, channels, embedImages, hideUrl) {
+function inlineWithCode(escapedLine, meLower, emojis, channels, embedImages, hideUrl, usernames) {
   const tokens = [];
   // Replace each matched `...` span with a null-byte sentinel so inlineMarkup
   // sees the surrounding text as one continuous string.
@@ -567,7 +578,7 @@ function inlineWithCode(escapedLine, meLower, emojis, channels, embedImages, hid
     return `\x00${idx}\x00`;
   });
   // Run the full inline pipeline on the substituted string, then restore.
-  const rendered = inlineWithSpoiler(substituted, meLower, emojis, channels, embedImages, hideUrl);
+  const rendered = inlineWithSpoiler(substituted, meLower, emojis, channels, embedImages, hideUrl, usernames);
   return rendered.replace(/\x00(\d+)\x00/g, (_, i) => tokens[+i]);
 }
 
@@ -580,7 +591,7 @@ function inlineWithCode(escapedLine, meLower, emojis, channels, embedImages, hid
 // next so that !(…) syntax is consumed before LINK_RE sees it.
 // Builtin emoji (BUILTIN_EMOJI) always render as Unicode glyphs; custom emoji
 // from the server registry render as <img> tags.
-function inlineWithEmoji(seg, meLower, emojis, channels, embedImages, hideUrl) {
+function inlineWithEmoji(seg, meLower, emojis, channels, embedImages, hideUrl, usernames) {
   let out = "";
   let last = 0;
   let m;
@@ -589,8 +600,8 @@ function inlineWithEmoji(seg, meLower, emojis, channels, embedImages, hideUrl) {
     const builtin = BUILTIN_EMOJI[m[1]];
     if (!builtin && !hasEmoji(emojis, m[1])) continue;
     const rendered = builtin ? emojiGlyph(builtin, m[1]) : emojiImg(m[1]);
-    out += inlineWithBlobImages(seg.slice(last, m.index), meLower, channels, embedImages, hideUrl) + rendered;
+    out += inlineWithBlobImages(seg.slice(last, m.index), meLower, channels, embedImages, hideUrl, usernames) + rendered;
     last = m.index + m[0].length;
   }
-  return out + inlineWithBlobImages(seg.slice(last), meLower, channels, embedImages, hideUrl);
+  return out + inlineWithBlobImages(seg.slice(last), meLower, channels, embedImages, hideUrl, usernames);
 }

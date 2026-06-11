@@ -354,6 +354,15 @@ test("formatMessage styles mentions and flags the current user", () => {
   assert.ok(out.includes('<span class="mention mention-me">@alice</span>'), "my mention flagged");
 });
 
+test("formatMessage only styles real @mentions when users map is provided", () => {
+  const users = { 1: { username: "alice" }, 2: { username: "bob" } };
+  const out = formatMessage("hi @bob and @me and @alice", "alice", null, { users });
+  assert.ok(out.includes('<span class="mention">@bob</span>'), "known user styled");
+  assert.ok(out.includes('<span class="mention mention-me">@alice</span>'), "own mention flagged");
+  assert.ok(!out.includes('<span class="mention">@me</span>'), "unknown @me not styled");
+  assert.ok(out.includes("@me"), "unknown @me left as plain text");
+});
+
 test("atQuery finds the @token immediately before the caret", () => {
   assert.deepEqual(atQuery("@alice", 6), { start: 0, partial: "alice" });
   assert.deepEqual(atQuery("hey @bob", 8), { start: 4, partial: "bob" });

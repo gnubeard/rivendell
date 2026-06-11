@@ -247,10 +247,13 @@ export function dmParticipants(channel) {
 
 // otherDMParticipant returns the id of the *other* member of a DM (the one who
 // isn't `meId`), or null if this isn't a DM we're part of.
+// For a self-DM (dm-N-N) both ids equal meId; we return meId so callers can
+// still resolve a user object and display name.
 export function otherDMParticipant(channel, meId) {
   const ids = dmParticipants(channel);
+  if (!ids.length) return null;
   const other = ids.find((id) => id !== meId);
-  return other == null ? null : other;
+  return other != null ? other : (ids[0] === meId ? meId : null);
 }
 
 // setMessages replaces the message list for a channel (used on initial load).

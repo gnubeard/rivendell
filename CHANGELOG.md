@@ -5,6 +5,14 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.53] - 2026-06-11
+
+### Added
+- Self-DM: you can now open a direct message with yourself as a personal notes/scratchpad space.
+
+### Fixed
+- @mentions are only highlighted for real usernames; arbitrary @words (e.g. `@me`, `@everyone`) are left as plain text.
+
 ## [1.4.52] - 2026-06-11
 
 ### Fixed

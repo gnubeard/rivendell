@@ -753,10 +753,15 @@ func TestDMCreateFindAndScoping(t *testing.T) {
 		t.Fatalf("create-or-find returned a different channel: %d vs %d", dm2.ID, dm.ID)
 	}
 
-	// You cannot DM yourself.
-	resp, _ = doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": alice.ID})
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("self-DM should be 400, got %d", resp.StatusCode)
+	// Self-DM: opening a DM with yourself is supported (notes/scratchpad use-case).
+	resp, body = doJSON(t, aliceC, "POST", ts.URL+"/api/dms", map[string]int64{"user_id": alice.ID})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("self-DM should succeed, got %d %s", resp.StatusCode, body)
+	}
+	var selfDM store.Channel
+	json.Unmarshal(body, &selfDM)
+	if !selfDM.IsDM || !selfDM.IsPrivate {
+		t.Fatalf("self-DM channel should be private+is_dm, got %+v", selfDM)
 	}
 
 	// Both participants see the DM in their channel list.

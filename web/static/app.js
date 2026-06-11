@@ -993,8 +993,13 @@ function navigateUnread(delta) {
 
 // dmDisplayName resolves a DM channel to the other participant's display name,
 // falling back to the raw channel name if that user isn't loaded.
+// For a self-DM the "other" participant is the current user; we append "(you)".
 function dmDisplayName(ch) {
   const otherId = S.otherDMParticipant(ch, state.me.id);
+  if (otherId === state.me.id) {
+    const me = state.users[state.me.id] || state.me;
+    return (me.display_name || me.username) + " (you)";
+  }
   const other = otherId != null ? state.users[otherId] : null;
   return other ? other.display_name : ch.name;
 }
@@ -1067,7 +1072,7 @@ function renderDMs() {
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
-        el("span", { class: "ch-name" }, other ? other.display_name : ch.name),
+        el("span", { class: "ch-name" }, dmDisplayName(ch)),
         hasSecretReq ? el("span", { class: "secret-req-badge", title: "Secret chat request" }, "🔒") : null,
         unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
         el("span", { class: "ch-controls" },
@@ -1129,9 +1134,9 @@ function renderMembers() {
     list.append(
       el("li", {
         "data-user-id": String(u.id),
-        class: (isSelf ? "member" : "member clickable") + (onCall ? " on-call" : "") + (speaking ? " speaking" : ""),
+        class: "member clickable" + (onCall ? " on-call" : "") + (speaking ? " speaking" : ""),
         title: titleParts.join(" · "),
-        onclick: isSelf ? null : () => startDM(u.id),
+        onclick: () => startDM(u.id),
       },
         el("span", { class: `dot ${presenceClass(u)}` }),
         el("div", { class: "member-text" },
@@ -2182,7 +2187,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(m.fromUserId)})` })
         : el("div", { class: "msg-avatar" }, initials(u ? u.display_name : "?"));
       const body = el("div", { class: "msg-body" });
-      body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true, channels: state.channels });
+      body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true, channels: state.channels, users: state.users });
       wrap.append(
         el("div", { class: "msg secret" },
           avatar,
@@ -2293,7 +2298,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const hideUrl = preview ? extractHideURL(m.content, location.origin) : null;
     const body = editing
       ? editorFor(m)
-      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
     const mentionsMe = m.user_id !== state.me.id &&
       (mentionsUser(m.content, state.me.username) || m.reply_to_user_id === state.me.id);
 
@@ -3190,7 +3195,7 @@ function renderMsgEmbedCard(msg, channelId, messageId) {
   if (msg.deleted_at) {
     body.append(el("span", { class: "deleted" }, "message deleted"));
   } else {
-    body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false, channels: state.channels });
+    body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false, channels: state.channels, users: state.users });
   }
   card.append(body);
   card.addEventListener("click", (e) => { e.preventDefault(); jumpToMessage(channelId, messageId); });
@@ -3589,7 +3594,7 @@ async function refreshPins() {
                 },
               }, "unpin")
             : null),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { channels: state.channels }) }),
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { channels: state.channels, users: state.users }) }),
         reactionsRow(m))
     );
   }
@@ -3674,7 +3679,7 @@ async function runSearch(reset) {
           el("span", { class: "search-channel" }, channelLabel(ch)),
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
           el("span", { class: "msg-time" }, formatTime(m.created_at))),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { embedImages: false, channels: state.channels }) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { embedImages: false, channels: state.channels, users: state.users }) }))
     );
   }
   // A full page implies more may exist; advance the cursor to the oldest hit.
@@ -4285,7 +4290,7 @@ async function openUserCard(userId) {
     badges,
     u.status_text ? el("div", { class: "user-card-status" }, u.status_text) : null,
     u.bio
-      ? el("div", { class: "user-card-bio", html: formatMessage(u.bio, state.me.username, state.emojis, { embedImages: false, channels: state.channels }) })
+      ? el("div", { class: "user-card-bio", html: formatMessage(u.bio, state.me.username, state.emojis, { embedImages: false, channels: state.channels, users: state.users }) })
       : null,
     el("div", { class: "user-card-since hint" }, "Member since " + new Date(u.created_at).toLocaleDateString()),
     el("button", { class: "primary small", onclick: () => { $("#user-modal").hidden = true; startDM(u.id); } }, "Message"),

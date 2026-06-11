@@ -744,10 +744,6 @@ func (s *Server) handleCreateDM(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if req.UserID == u.ID {
-		writeErr(w, http.StatusBadRequest, "cannot start a DM with yourself")
-		return
-	}
 	other, err := s.st.GetUserByID(r.Context(), req.UserID)
 	if err != nil || !other.IsActive {
 		writeErr(w, http.StatusNotFound, "user not found")
