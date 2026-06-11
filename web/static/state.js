@@ -174,7 +174,17 @@ export function setPresence(state, userId, online, status, idle = false) {
 
 function sortChannels(channels) {
   return Object.values(channels)
-    .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
+    .sort((a, b) => {
+      // DMs are sorted by most recent message (newest first).
+      if (a.is_dm && b.is_dm) {
+        const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : new Date(a.created_at).getTime();
+        const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : new Date(b.created_at).getTime();
+        return tb - ta;
+      }
+      // Non-DMs sort before DMs; within non-DMs, use position then name.
+      if (a.is_dm !== b.is_dm) return a.is_dm ? 1 : -1;
+      return a.position - b.position || a.name.localeCompare(b.name);
+    })
     .map((c) => c.id);
 }
 

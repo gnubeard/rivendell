@@ -534,13 +534,26 @@ func (s *Store) CreateChannel(ctx context.Context, name, topic string, isPrivate
 
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+channelCols+`
-		 FROM channels WHERE archived_at IS NULL
-		 ORDER BY position, name`)
+		`SELECT c.id, c.name, c.topic, c.is_private, c.is_dm, c.position,
+		        c.created_at, c.archived_at,
+		        MAX(m.created_at) AS last_message_at
+		 FROM channels c
+		 LEFT JOIN messages m ON m.channel_id = c.id AND m.deleted_at IS NULL
+		 WHERE c.archived_at IS NULL
+		 GROUP BY c.id
+		 ORDER BY c.position, c.name`)
 	if err != nil {
 		return nil, err
 	}
-	return collectRows(rows, scanChannel)
+	return collectRows(rows, func(row interface{ Scan(...any) error }) (Channel, error) {
+		var c Channel
+		err := row.Scan(&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position,
+			&c.CreatedAt, &c.ArchivedAt, &c.LastMessageAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return c, ErrNotFound
+		}
+		return c, err
+	})
 }
 
 func (s *Store) GetChannel(ctx context.Context, id int64) (Channel, error) {

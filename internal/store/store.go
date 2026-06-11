@@ -135,14 +135,15 @@ type User struct {
 }
 
 type Channel struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	Topic      string     `json:"topic"`
-	IsPrivate  bool       `json:"is_private"`
-	IsDM       bool       `json:"is_dm"`
-	Position   int        `json:"position"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	Topic         string     `json:"topic"`
+	IsPrivate     bool       `json:"is_private"`
+	IsDM          bool       `json:"is_dm"`
+	Position      int        `json:"position"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
+	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
 }
 
 // ChannelUnread is the per-channel unread/mention summary for a user, returned

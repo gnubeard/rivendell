@@ -792,6 +792,10 @@ function startRealtime() {
         // My own new message snaps the view to the newest, so I land on what I
         // just sent even if I'd scrolled up to read.
         const isNewFromMe = evt.type === "message.new" && evt.payload.user_id === state.me.id;
+        // Keep last_message_at current so DM list stays sorted by recency.
+        if (evt.type === "message.new" && ch) {
+          state = S.upsertChannel(state, { ...ch, last_message_at: evt.payload.created_at });
+        }
         if (cid === state.activeChannelId) {
           if (isNewFromMe && viewingHistory.has(cid)) {
             // I sent while viewing a history window (below the live tail): reload

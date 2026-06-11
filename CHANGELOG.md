@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.31] - 2026-06-11
+
+### Changed
+- Direct messages in the sidebar are now ordered by most recent message, with the conversation you last heard from at the top.
+
 ## [1.4.30] - 2026-06-11
 
 ### Fixed
