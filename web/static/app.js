@@ -547,6 +547,7 @@ async function enterApp() {
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
   state = S.setUsers(state, users);
   state = S.setChannels(state, channels);
+  preloadAvatars(); // warm the avatar cache so channel switches paint without jank
   // Custom emojis power :shortcode: rendering; best-effort so a failure here
   // never blocks the app from loading (messages just render the literal text).
   try {
@@ -686,6 +687,7 @@ function startRealtime() {
         if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
           // Their avatar may have changed — force a re-fetch on next render.
           avatarVersion[evt.payload.id] = Date.now();
+          preloadAvatars(); // warm the new versioned URL ahead of the repaint
         }
         renderMembers();
         renderMe();
@@ -868,6 +870,7 @@ async function resync() {
     const [users, channels] = await Promise.all([api.users(), api.channels()]);
     state = S.setUsers(state, users);
     state = S.setChannels(state, channels);
+    preloadAvatars(); // re-warm the avatar cache after a reconnect roster refresh
     try {
       state = S.setEmojis(state, await api.emojis());
     } catch (e) {
@@ -4788,6 +4791,25 @@ function avatarSrc(userId) {
 
 function initials(name) {
   return (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+}
+
+// preloadAvatars eagerly warms the browser HTTP cache for member avatars so they
+// paint instantly on channel switch instead of streaming in afterwards (which
+// looks janky). With a ~20-friend roster this is a handful of small images.
+// Keyed by the versioned avatarSrc URL, so a changed avatar (new ?v= token)
+// re-warms while unchanged ones are skipped — calling it repeatedly is cheap.
+const preloadedAvatars = new Set();
+function preloadAvatars() {
+  for (const id in state.users) {
+    const u = state.users[id];
+    if (!u || !u.has_avatar) continue;
+    const url = avatarSrc(u.id);
+    if (preloadedAvatars.has(url)) continue;
+    preloadedAvatars.add(url);
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+  }
 }
 
 // --- voice calling -------------------------------------------------------

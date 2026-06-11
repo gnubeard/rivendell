@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.26] - 2026-06-11
+
+### Changed
+- Member avatars are now preloaded so they paint instantly when you switch channels, instead of streaming in afterwards.
+
 ## [1.4.25] - 2026-06-11
 
 ### Fixed
