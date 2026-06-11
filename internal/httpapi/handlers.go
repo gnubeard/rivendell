@@ -360,6 +360,41 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleGetUserNote returns the caller's private note about user {id}.
+func (s *Server) handleGetUserNote(w http.ResponseWriter, r *http.Request) {
+	subjectID, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
+		return
+	}
+	me := userFrom(r.Context())
+	note, err := s.st.GetUserNote(r.Context(), me.ID, subjectID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not get note")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"note": note})
+}
+
+// handlePutUserNote saves the caller's private note about user {id}.
+func (s *Server) handlePutUserNote(w http.ResponseWriter, r *http.Request) {
+	subjectID, ok := requirePathInt(w, r, "id", "invalid user id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Note string `json:"note"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	me := userFrom(r.Context())
+	if err := s.st.UpsertUserNote(r.Context(), me.ID, subjectID, req.Note); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not save note")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"note": req.Note})
+}
+
 // handleInstance reports public, unauthenticated instance metadata (the display
 // name) so the web client can brand itself before login.
 func (s *Server) handleInstance(w http.ResponseWriter, r *http.Request) {

@@ -1508,6 +1508,33 @@ func (s *Store) CreateBlob(ctx context.Context, hash string, uploaderID int64, c
 	return err
 }
 
+// --- user notes ----------------------------------------------------------
+
+// GetUserNote returns the note owner_id has written about subject_id.
+// Returns an empty string (not ErrNotFound) when no note exists yet.
+func (s *Store) GetUserNote(ctx context.Context, ownerID, subjectID int64) (string, error) {
+	var note string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT note FROM user_notes WHERE owner_id = $1 AND subject_id = $2`,
+		ownerID, subjectID).Scan(&note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return note, err
+}
+
+// UpsertUserNote saves (or replaces) owner_id's note about subject_id.
+func (s *Store) UpsertUserNote(ctx context.Context, ownerID, subjectID int64, note string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO user_notes (owner_id, subject_id, note, updated_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (owner_id, subject_id) DO UPDATE SET note = EXCLUDED.note, updated_at = now()`,
+		ownerID, subjectID, note)
+	return err
+}
+
+// --- blobs ---------------------------------------------------------------
+
 // GetBlob returns the metadata for a blob by hash.
 func (s *Store) GetBlob(ctx context.Context, hash string) (Blob, error) {
 	var b Blob

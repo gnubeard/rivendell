@@ -61,6 +61,8 @@ export const api = {
   // users
   users: () => req("GET", "/api/users"),
   avatarURL: (userId) => `/api/users/${userId}/avatar`,
+  getUserNote: (userId) => req("GET", `/api/users/${userId}/note`),
+  putUserNote: (userId, note) => req("PUT", `/api/users/${userId}/note`, { note }),
   adminUploadAvatar: async (userId, file) => {
     const res = await fetch(`/api/admin/users/${userId}/avatar`, {
       method: "POST",

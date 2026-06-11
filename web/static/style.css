@@ -352,6 +352,8 @@ body.ch-dragging, body.ch-dragging .channel { cursor: grabbing; }
 .user-card-status { font-style: italic; color: var(--text-dim); }
 .user-card-bio { align-self: stretch; text-align: left; white-space: pre-wrap; word-break: break-word; background: var(--bg-3); border-radius: var(--radius); padding: 0.6rem 0.7rem; margin-top: 0.25rem; line-height: 1.45; }
 .user-card-since { min-height: 0; margin: 0.25rem 0 0; }
+.user-card-note-label { align-self: stretch; text-align: left; font-size: 0.78rem; color: var(--text-faint); margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.user-card-note { width: 100%; resize: vertical; font-size: 0.85rem; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.6rem; color: var(--text); font-family: inherit; line-height: 1.4; }
 .msg-time { color: var(--text-faint); font-size: 0.72rem; text-decoration: none; }
 .msg-time:hover { text-decoration: underline; }
 @keyframes anchor-flash { 0% { background: rgba(224, 164, 88, 0.28); } 100% { background: transparent; } }

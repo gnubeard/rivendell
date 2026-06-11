@@ -131,6 +131,8 @@ func (s *Server) Handler() http.Handler {
 	// Users + presence.
 	mux.HandleFunc("GET /api/users", s.auth(s.handleListUsers))
 	mux.HandleFunc("GET /api/users/{id}/avatar", s.auth(s.handleGetAvatar))
+	mux.HandleFunc("GET /api/users/{id}/note", s.auth(s.handleGetUserNote))
+	mux.HandleFunc("PUT /api/users/{id}/note", s.auth(s.handlePutUserNote))
 
 	// Custom emojis (instance-wide). Listing/image are any authed user; create
 	// and delete are moderator+ (managed from the emoji picker or admin panel).

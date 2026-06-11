@@ -5,6 +5,15 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.36] - 2026-06-11
+
+### Added
+- Private notes on user profiles: clicking a user's avatar/name shows a "Notes" textarea where you can jot private reminders about that person — notes are stored server-side, visible only to you, and autosave on blur.
+
+### Changed
+- Profile card (user modal): removed the "Profile" heading and the × close button for a cleaner look; dismiss by clicking outside the card or pressing Escape.
+- Edit profile modal: removed the × close button; dismiss by clicking outside or pressing Escape.
+
 ## [1.4.35] - 2026-06-11
 
 ### Fixed

@@ -3688,9 +3688,6 @@ function wireControls() {
 
   $("#me-name").onclick = openProfileModal;
   $("#me-status-text").onclick = openProfileModal;
-  $("#user-close").onclick = () => { $("#user-modal").hidden = true; };
-  // Closing the modal without saving must drop a live theme preview.
-  $("#profile-close").onclick = () => { $("#profile-modal").hidden = true; applyTheme(myTheme()); };
   // Live-preview the theme as the user browses the list; persisted on Save,
   // reverted (to myTheme) if the modal is dismissed without saving.
   $("#profile-theme").onchange = (e) => applyTheme(e.target.value);
@@ -4172,7 +4169,7 @@ function openProfileModal() {
 // openUserCard shows a read-only profile card for any user. The full roster
 // (incl. pronouns/bio) already lives in state.users, so no fetch is needed;
 // clicking your own card just routes to the editable profile modal.
-function openUserCard(userId) {
+async function openUserCard(userId) {
   const u = state.users[userId];
   if (!u) return;
   if (u.id === state.me.id) { openProfileModal(); return; }
@@ -4186,6 +4183,29 @@ function openUserCard(userId) {
     u.role === "admin" || u.role === "moderator"
       ? el("span", { class: "bot-badge" }, u.role) : null,
     u.is_bot ? el("span", { class: "bot-badge" }, "bot") : null);
+
+  const noteTextarea = el("textarea", {
+    class: "user-card-note",
+    placeholder: "Private notes (only you can see these)",
+    rows: 3,
+    maxlength: 2000,
+  });
+  const noteLabel = el("label", { class: "user-card-note-label" }, "Notes");
+  noteLabel.append(noteTextarea);
+
+  let noteSaveTimer = null;
+  const saveNote = async () => {
+    try { await api.putUserNote(u.id, noteTextarea.value); } catch (_) {}
+  };
+  noteTextarea.oninput = () => {
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = setTimeout(saveNote, 1000);
+  };
+  noteTextarea.onblur = () => {
+    clearTimeout(noteSaveTimer);
+    saveNote();
+  };
+
   card.append(...[
     avatar,
     el("div", { class: "user-card-name" },
@@ -4199,8 +4219,14 @@ function openUserCard(userId) {
       : null,
     el("div", { class: "user-card-since hint" }, "Member since " + new Date(u.created_at).toLocaleDateString()),
     el("button", { class: "primary small", onclick: () => { $("#user-modal").hidden = true; startDM(u.id); } }, "Message"),
+    noteLabel,
   ].filter(x => x != null));
   $("#user-modal").hidden = false;
+
+  try {
+    const { note } = await api.getUserNote(u.id);
+    noteTextarea.value = note;
+  } catch (_) {}
 }
 
 // --- admin panel ---------------------------------------------------------
