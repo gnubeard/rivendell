@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.41] - 2026-06-11
+
+### Changed
+- A private channel with no members left is automatically archived.
+- Admins leaving a private channel get no confirmation dialog and the channel remains in their sidebar (admins retain bypass access regardless of membership).
+
 ## [1.4.40] - 2026-06-11
 
 ### Fixed

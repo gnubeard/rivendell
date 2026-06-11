@@ -925,6 +925,16 @@ func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "could not remove member")
 		return
 	}
+	// Auto-archive the channel when the last member leaves.
+	if n, err := s.st.CountChannelMembers(r.Context(), id); err == nil && n == 0 {
+		if err := s.st.ArchiveChannel(r.Context(), id); err != nil {
+			log.Printf("auto-archive empty channel %d: %v", id, err)
+		} else {
+			s.broadcast("channel.archive", map[string]int64{"id": id}, audience)
+			writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+			return
+		}
+	}
 	// One event does both jobs: the departing user's clients drop the channel,
 	// and remaining members drop them from the roster — no re-fetch needed.
 	s.broadcast("member.remove", map[string]int64{"channel_id": id, "user_id": target}, audience)

@@ -713,13 +713,16 @@ function startRealtime() {
         const { channel_id, user_id } = evt.payload;
         if (user_id === state.me.id) {
           // I left (or was removed): drop the channel, unless I already removed
-          // it locally in leaveActiveChannel.
-          if (state.channels[channel_id]) {
+          // it locally in leaveActiveChannel, or I'm an admin (who retains bypass access).
+          if (state.channels[channel_id] && state.me.role !== "admin") {
             state = S.removeChannel(state, channel_id);
             renderChannels();
             renderDMs();
             renderNotificationTotal();
             if (state.activeChannelId) loadChannel(state.activeChannelId);
+          } else if (state.channels[channel_id] && channel_id === state.activeChannelId) {
+            // Admin lost membership — re-render the member roster to reflect the change.
+            refreshActiveMembers();
           }
         } else if (channel_id === state.activeChannelId && activeMemberIds) {
           // Someone else left the channel I'm viewing — drop them from the roster
@@ -1400,14 +1403,19 @@ async function toggleMute(id) {
 async function leaveActiveChannel() {
   const ch = state.channels[state.activeChannelId];
   if (!ch || !ch.is_private || ch.is_dm) return;
-  if (!confirm(`Leave #${ch.name}? You'll need an invite to rejoin.`)) return;
+  const isAdmin = state.me.role === "admin";
+  if (!isAdmin && !confirm(`Leave #${ch.name}? You'll need an invite to rejoin.`)) return;
   try {
     await api.removeChannelMember(ch.id, state.me.id);
-    state = S.removeChannel(state, ch.id); // also re-points activeChannelId
-    renderChannels();
-    renderDMs();
-    renderNotificationTotal();
-    if (state.activeChannelId) await loadChannel(state.activeChannelId);
+    // Admins retain bypass access to private channels, so the channel stays in
+    // their list. The WS broadcast will re-render the member roster.
+    if (!isAdmin) {
+      state = S.removeChannel(state, ch.id); // also re-points activeChannelId
+      renderChannels();
+      renderDMs();
+      renderNotificationTotal();
+      if (state.activeChannelId) await loadChannel(state.activeChannelId);
+    }
   } catch (ex) {
     alert(ex.message);
   }

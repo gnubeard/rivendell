@@ -721,6 +721,12 @@ func (s *Store) RemoveChannelMember(ctx context.Context, channelID, userID int64
 		channelID, userID)
 }
 
+func (s *Store) CountChannelMembers(ctx context.Context, channelID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM channel_members WHERE channel_id = $1`, channelID).Scan(&n)
+	return n, err
+}
+
 func (s *Store) IsChannelMember(ctx context.Context, channelID, userID int64) (bool, error) {
 	var ok bool
 	err := s.db.QueryRowContext(ctx,
