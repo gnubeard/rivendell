@@ -433,7 +433,7 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .yt-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 2.5rem; color: #fff; text-shadow: 0 0 12px rgba(0,0,0,.8); background: rgba(0,0,0,.15); transition: background .15s; }
 .yt-thumb:hover .yt-play { background: rgba(0,0,0,.32); }
 .msg-actions { position: absolute; top: 0.15rem; right: 0; display: flex; gap: 0.3rem; padding: 0 0.2rem 0 0.8rem; background: linear-gradient(to right, transparent, var(--bg-2) 30%); visibility: hidden; pointer-events: none; }
-.msg-act { background: none; border: none; padding: 0 0.05rem; cursor: pointer; font-size: 1rem; line-height: 1; opacity: 0.5; transition: opacity .1s; }
+.msg-act { background: none; border: none; padding: 0 0.05rem; cursor: pointer; font-size: 1rem; line-height: 1; color: var(--text-dim); opacity: 0.75; transition: opacity .1s; }
 .msg-act:hover { opacity: 1; }
 .msg-act.danger:hover { opacity: 1; }
 .msg:hover { background: var(--bg-hover); border-radius: 6px; }

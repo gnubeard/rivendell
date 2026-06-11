@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.39] - 2026-06-11
+
+### Fixed
+- Message action buttons are more visible on hover: raised resting opacity from 50% to 75% and anchored icon colour to `--text-dim`.
+
 ## [1.4.38] - 2026-06-11
 
 ### Fixed
