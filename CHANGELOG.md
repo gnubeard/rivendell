@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.35] - 2026-06-11
+
+### Fixed
+- Secret chat: a malformed or truncated offer/accept frame (missing `eph`, `sig`, `session_nonce`, or peer identity key) now throws a clean error and tears down the pending session instead of letting `atob(undefined)` crash the accept handler as an unhandled promise rejection.
+
 ## [1.4.34] - 2026-06-11
 
 ### Fixed

@@ -414,6 +414,10 @@ export async function initiateSecret(dmChannelId, peerUserId, peerIdKeyB64) {
 export async function acceptSecret(dmChannelId, fromUserId, offer) {
   const { eph: peerEphB64, sig: sigB64, session_nonce: nonceB64, peerIdKeyB64 } = offer;
 
+  if (!peerEphB64 || !sigB64 || !nonceB64 || !peerIdKeyB64) {
+    throw new Error("Malformed secret offer: missing required field.");
+  }
+
   const idKp = await ensureIdentityKey();
 
   // Import peer's Ed25519 identity public key.
@@ -615,6 +619,10 @@ export async function handleSecretEvent(evt, peerIdKeyResolver) {
     }
 
     try {
+      if (!p.eph || !p.sig) {
+        throw new Error("Malformed secret.accept: missing required field.");
+      }
+
       // Import peer's Ed25519 identity public key.
       const peerIdPub = await crypto.subtle.importKey(
         "spki", b64dec(peerIdKeyB64), { name: "Ed25519" }, true, ["verify"],
