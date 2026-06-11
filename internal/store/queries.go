@@ -561,6 +561,26 @@ func (s *Store) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		`SELECT `+channelCols+` FROM channels WHERE id = $1`, id))
 }
 
+// GetChannelWithLastMessage returns a channel by ID and includes the timestamp
+// of its most recent non-deleted message so the client can sort it correctly.
+func (s *Store) GetChannelWithLastMessage(ctx context.Context, id int64) (Channel, error) {
+	var c Channel
+	err := s.db.QueryRowContext(ctx,
+		`SELECT c.id, c.name, c.topic, c.is_private, c.is_dm, c.position,
+		        c.created_at, c.archived_at,
+		        MAX(m.created_at) AS last_message_at
+		 FROM channels c
+		 LEFT JOIN messages m ON m.channel_id = c.id AND m.deleted_at IS NULL
+		 WHERE c.id = $1
+		 GROUP BY c.id`, id).Scan(
+		&c.ID, &c.Name, &c.Topic, &c.IsPrivate, &c.IsDM, &c.Position,
+		&c.CreatedAt, &c.ArchivedAt, &c.LastMessageAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
 // dmName builds the canonical channel name for a DM between two users. The pair
 // is ordered so (a,b) and (b,a) map to the same name, and the result satisfies
 // the channels.name regex (^[a-z0-9-]{1,48}$) for any plausible BIGSERIAL ids.

@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.44] - 2026-06-11
+
+### Fixed
+- Opening or re-opening a DM now places it at the top of the DM list instead of the bottom.
+
 ## [1.4.43] - 2026-06-11
 
 ### Fixed
