@@ -5,6 +5,13 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.27] - 2026-06-11
+
+### Fixed
+- Deactivated users no longer appear in the @-mention autocomplete list.
+- Secret chat messages now correctly highlight your own @-mentions and render custom emoji shortcodes.
+- Mobile long-press menu now shows the Pin/Unpin action for DM participants (not just mods).
+
 ## [1.4.26] - 2026-06-11
 
 ### Changed

@@ -2118,7 +2118,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(m.fromUserId)})` })
         : el("div", { class: "msg-avatar" }, initials(u ? u.display_name : "?"));
       const body = el("div", { class: "msg-body" });
-      body.innerHTML = formatMessage(m.text, { embedImages: true });
+      body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true });
       wrap.append(
         el("div", { class: "msg secret" },
           avatar,
@@ -2432,7 +2432,7 @@ function attachAutocomplete(input, popup) {
     }
 
     return Object.values(state.users)
-      .filter((u) => !u.disabled &&
+      .filter((u) => u.is_active !== false &&
         u.id !== state.me?.id &&
         !alreadyMentioned.has(u.username.toLowerCase()) &&
         (!activeMemberIds || activeMemberIds.has(u.id)) &&
@@ -3398,7 +3398,7 @@ function showMobileCtxActions(m) {
   if (!isDeleted) inner.append(closeBtn("↪  Forward", () => openForwardModal(m)));
   if (!isDeleted) inner.append(closeBtn("📋  Copy", () => navigator.clipboard.writeText(m.content)));
   if (isOwn && !isDeleted) inner.append(closeBtn("✏  Edit", () => startEdit(m)));
-  if (isMod && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
+  if ((isMod || !!(activeCh && activeCh.is_dm)) && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
   const isRead = m.id <= (state.lastRead[m.channel_id] || 0);
   inner.append(closeBtn(isRead ? "👁  Mark unread" : "👁  Mark read", () => toggleMessageRead(m)));
 
