@@ -459,6 +459,8 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg.mentioned .msg-actions { background: linear-gradient(to right, transparent, #201f1b 30%); }
 .mention { color: var(--accent); background: rgba(110, 168, 254, 0.14); border-radius: 4px; padding: 0 0.15em; }
 .mention.mention-me { color: var(--text); background: rgba(224, 164, 88, 0.28); }
+a.channel-link { color: var(--accent); background: rgba(110, 168, 254, 0.14); border-radius: 4px; padding: 0 0.15em; text-decoration: none; cursor: pointer; }
+a.channel-link:hover { background: rgba(110, 168, 254, 0.25); text-decoration: underline; }
 .pin-mark { font-size: 0.7rem; opacity: 0.85; }
 .msg.grouped .msg-gutter .pin-mark { display: block; text-align: center; }
 

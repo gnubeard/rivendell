@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 test("escapes HTML to prevent XSS", () => {
@@ -486,6 +486,45 @@ test("colonQuery: uppercase after colon does not open picker", () => {
 test("colonQuery: lowercase still triggers normally", () => {
   assert.deepEqual(colonQuery(":fire", 5), { start: 0, partial: "fire" });
   assert.deepEqual(colonQuery("hello :joy", 10), { start: 6, partial: "joy" });
+});
+
+test("hashQuery finds the #channel token immediately before the caret", () => {
+  assert.deepEqual(hashQuery("#general", 8), { start: 0, partial: "general" });
+  assert.deepEqual(hashQuery("see #gen", 8), { start: 4, partial: "gen" });
+  assert.deepEqual(hashQuery("see #", 5), { start: 4, partial: "" });
+  assert.deepEqual(hashQuery("#gen", 3), { start: 0, partial: "ge" });
+  assert.deepEqual(hashQuery("#my-channel", 11), { start: 0, partial: "my-channel" });
+});
+
+test("hashQuery returns null when there is no valid trigger", () => {
+  assert.equal(hashQuery("hello world", 11), null, "no # present");
+  assert.equal(hashQuery("id#123", 6), null, "word char before #");
+  assert.equal(hashQuery("path/#section", 13), null, "/ before #");
+  assert.equal(hashQuery("#general", 0), null, "caret before #");
+  assert.equal(hashQuery("text #gen", 5), null, "caret lands on #, not past it");
+  assert.equal(hashQuery("#General", 8), null, "uppercase after # does not trigger");
+  assert.equal(hashQuery("#123", 4), null, "digit-only start does not trigger");
+});
+
+test("formatMessage renders known #channel as a clickable link", () => {
+  const channels = { 5: { id: 5, name: "general", is_dm: false } };
+  const out = formatMessage("check #general for updates", null, null, { channels });
+  assert.ok(out.includes('class="channel-link"'), "channel-link class present");
+  assert.ok(out.includes('data-channel-id="5"'), "channel id present");
+  assert.ok(out.includes("#general"), "channel name present");
+});
+
+test("formatMessage leaves unknown #name as plain text", () => {
+  const channels = { 5: { id: 5, name: "general", is_dm: false } };
+  const out = formatMessage("see #unknown channel", null, null, { channels });
+  assert.ok(!out.includes("channel-link"), "unknown channel is not linkified");
+  assert.ok(out.includes("#unknown"), "text preserved");
+});
+
+test("formatMessage does not linkify #channel when channels opt is omitted", () => {
+  const out = formatMessage("check #general please");
+  assert.ok(!out.includes("channel-link"), "no linkification without channels opt");
+  assert.ok(out.includes("#general"), "text preserved");
 });
 
 test("permalinkHash builds the canonical no-slash hash", () => {

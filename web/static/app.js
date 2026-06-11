@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -2138,7 +2138,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
         ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(m.fromUserId)})` })
         : el("div", { class: "msg-avatar" }, initials(u ? u.display_name : "?"));
       const body = el("div", { class: "msg-body" });
-      body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true });
+      body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true, channels: state.channels });
       wrap.append(
         el("div", { class: "msg secret" },
           avatar,
@@ -2249,7 +2249,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const hideUrl = preview ? extractHideURL(m.content, location.origin) : null;
     const body = editing
       ? editorFor(m)
-      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
     const mentionsMe = m.user_id !== state.me.id &&
       (mentionsUser(m.content, state.me.username) || m.reply_to_user_id === state.me.id);
 
@@ -2476,14 +2476,24 @@ function attachAutocomplete(input, popup) {
       .slice(0, 8);
   }
 
+  function filterChannels(partial) {
+    const q = partial.toLowerCase();
+    return Object.values(state.channels)
+      .filter((c) => !c.is_dm && c.name.startsWith(q))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 8);
+  }
+
   // Detect which trigger (if any) sits just before the caret. @-mentions take
-  // precedence over :emoji — a single caret can't satisfy both.
+  // precedence over :emoji and #channel — a single caret can't satisfy both.
   function detectCompletion() {
     const pos = input.selectionStart;
     const at = atQuery(input.value, pos);
     if (at) return { kind: "mention", query: at, items: filterMentions(at.partial) };
     const colon = colonQuery(input.value, pos);
     if (colon) return { kind: "emoji", query: colon, items: filterEmojis(colon.partial) };
+    const hash = hashQuery(input.value, pos);
+    if (hash) return { kind: "channel", query: hash, items: filterChannels(hash.partial) };
     return null;
   }
 
@@ -2511,6 +2521,13 @@ function attachAutocomplete(input, popup) {
           item.display_name && item.display_name !== item.username
             ? el("span", { class: "mention-item-display" }, item.display_name)
             : null,
+        );
+      } else if (completion.kind === "channel") {
+        li = el("li", {
+          class: "mention-item" + active,
+          ...itemHandlers,
+        },
+          el("span", { class: "mention-item-name" }, "#" + item.name),
         );
       } else {
         li = el("li", {
@@ -2545,13 +2562,14 @@ function attachAutocomplete(input, popup) {
   }
 
   // Insert the chosen completion, replacing from the trigger char to the caret:
-  // "@username " for a mention (item is a user), ":shortcode: " for an emoji
-  // (item is a { code, glyph? } object). The synthetic input event re-runs the
-  // host's autosize (and re-checks for a follow-on trigger — there is none, the
-  // caret lands past a trailing space).
+  // "@username " for a mention, ":shortcode: " for an emoji, "#name " for a channel.
+  // The synthetic input event re-runs the host's autosize (and re-checks for a
+  // follow-on trigger — there is none, the caret lands past a trailing space).
   function pick(item) {
     if (!completion) return;
-    const text = completion.kind === "mention" ? "@" + item.username + " " : `:${item.code}: `;
+    const text = completion.kind === "mention" ? "@" + item.username + " "
+      : completion.kind === "channel" ? "#" + item.name + " "
+      : `:${item.code}: `;
     const before = input.value.slice(0, completion.query.start);
     const after = input.value.slice(input.selectionStart);
     input.value = before + text + after;
@@ -3128,7 +3146,7 @@ function renderMsgEmbedCard(msg, channelId, messageId) {
   if (msg.deleted_at) {
     body.append(el("span", { class: "deleted" }, "message deleted"));
   } else {
-    body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false });
+    body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false, channels: state.channels });
   }
   card.append(body);
   card.addEventListener("click", (e) => { e.preventDefault(); jumpToMessage(channelId, messageId); });
@@ -3527,7 +3545,7 @@ async function refreshPins() {
                 },
               }, "unpin")
             : null),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis) }),
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { channels: state.channels }) }),
         reactionsRow(m))
     );
   }
@@ -3612,7 +3630,7 @@ async function runSearch(reset) {
           el("span", { class: "search-channel" }, channelLabel(ch)),
           el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
           el("span", { class: "msg-time" }, formatTime(m.created_at))),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { embedImages: false }) }))
+        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { embedImages: false, channels: state.channels }) }))
     );
   }
   // A full page implies more may exist; advance the cursor to the oldest hit.
@@ -3650,6 +3668,14 @@ function wireControls() {
     if (spoiler && !spoiler.classList.contains("revealed")) {
       e.preventDefault();
       spoiler.classList.add("revealed");
+      return;
+    }
+    // Channel links (#channelname) navigate to the channel in-app.
+    const chLink = e.target.closest && e.target.closest("a.channel-link");
+    if (chLink) {
+      e.preventDefault();
+      const id = parseInt(chLink.dataset.channelId, 10);
+      if (id && state.channels[id]) selectChannel(id);
       return;
     }
     // Inline images open in a large in-app lightbox rather than a new tab. The
@@ -4215,7 +4241,7 @@ async function openUserCard(userId) {
     badges,
     u.status_text ? el("div", { class: "user-card-status" }, u.status_text) : null,
     u.bio
-      ? el("div", { class: "user-card-bio", html: formatMessage(u.bio, state.me.username, state.emojis, { embedImages: false }) })
+      ? el("div", { class: "user-card-bio", html: formatMessage(u.bio, state.me.username, state.emojis, { embedImages: false, channels: state.channels }) })
       : null,
     el("div", { class: "user-card-since hint" }, "Member since " + new Date(u.created_at).toLocaleDateString()),
     el("button", { class: "primary small", onclick: () => { $("#user-modal").hidden = true; startDM(u.id); } }, "Message"),

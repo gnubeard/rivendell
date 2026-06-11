@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.37] - 2026-06-11
+
+### Added
+- Channel picker: typing `#` in the composer or edit box now opens an autocomplete picker for channels (like `@` for mentions and `:` for emoji).
+- Channel links: `#channelname` in messages renders as a clickable link that navigates directly to that channel when it exists.
+
 ## [1.4.36] - 2026-06-11
 
 ### Added
