@@ -3,13 +3,22 @@
 // Security model: the input is UNTRUSTED. We escape all HTML first, then apply a
 // small, fixed set of inline markdown rules to the *escaped* string. Because the
 // raw text can no longer contain real tags after escaping, the markdown pass can
-// only ever introduce the specific tags we add ourselves. Code blocks are the one
-// exception: we split on ``` before escaping so the raw content can be passed to
-// the syntax highlighter, which escapes it internally.
+// only ever introduce the specific tags we add ourselves. Fenced code blocks are
+// the one exception: their raw content is handed to the syntax highlighter, which
+// escapes it internally.
+//
+// Block parsing is line-based (renderBlocks): a ``` line opens a fenced code block
+// (closed by the next ``` line); a run of `>` lines is a blockquote whose inner
+// lines are stripped of one quote level and rendered RECURSIVELY as their own
+// blocks. That recursion is what lets a quoted table or quoted code block — e.g. a
+// forwarded message, where every line is prefixed with `> ` — render as the real
+// block instead of a wall of broken quote lines. Fences must sit at the start of a
+// line (after any quote markers), matching standard Markdown.
 //
 // Supported: ```fenced code```, `inline code`, **bold**, *italic*, _italic_,
-// ~~strike~~, > blockquote, [text](url) links, autolinked http(s) URLs, inline
-// images (a bare URL pointing at an image renders the image), and newlines.
+// ~~strike~~, > blockquote (recursive), # headers, * / - lists, | tables |,
+// [text](url) links, autolinked http(s) URLs, inline images (a bare URL pointing
+// at an image renders the image), and newlines.
 //
 // This module is pure (no DOM, no globals) so it can be unit-tested under Node.
 
@@ -369,75 +378,99 @@ export function formatMessage(text, me, emojis, opts) {
   const embedImages = !opts || opts.embedImages !== false;
   const hideUrl = opts && opts.hideUrl ? escapeHtml(String(opts.hideUrl)) : null;
   const meLower = me ? String(me).toLowerCase() : null;
+  return renderBlocks(String(text).split("\n"), meLower, emojis, embedImages, hideUrl);
+}
 
-  // Split on ``` BEFORE escaping: raw code content goes to the syntax highlighter
-  // (which escapes it internally); non-code parts are escaped below as before.
-  const parts = String(text).split(/```/);
-  let html = "";
-  for (let i = 0; i < parts.length; i++) {
-    if (i % 2 === 1) {
-      // Inside a fence: capture optional language hint, then highlight raw content.
-      const raw = parts[i];
-      const langM = raw.match(/^([a-zA-Z0-9+_-]+)\n/);
-      const lang = langM ? langM[1].toLowerCase() : "";
-      let code = raw.replace(/^[a-zA-Z0-9+_-]*\n/, "");
-      code = code.replace(/^\n/, "").replace(/\n$/, "");
+// FENCE_RE matches a fenced-code delimiter line: ``` optionally followed by a
+// language hint (and trailing spaces), nothing else. Detection is per-line so a
+// fence works at the start of any line — including inside a blockquote, after its
+// quote marker has been stripped.
+const FENCE_RE = /^```([a-zA-Z0-9+_-]*)\s*$/;
+const FENCE_CLOSE_RE = /^```\s*$/;
+// QUOTE_RE matches a blockquote line (optional indent, then `>`). QUOTE_STRIP
+// removes exactly one quote level and its single optional following space, so
+// nested `> > x` peels one layer per recursion.
+const QUOTE_RE = /^\s*>/;
+const QUOTE_STRIP = /^\s*>\s?/;
+
+// renderBlocks turns an array of raw (unescaped) lines into block-level HTML. It
+// recognizes, per line: fenced code blocks (raw content → highlighter), blockquote
+// runs (stripped one level and rendered recursively), GFM tables, # headers, * / -
+// unordered lists, and otherwise inline runs. Every non-fence branch escapes its
+// text before the inline markdown pass, preserving the escape-first XSS invariant.
+function renderBlocks(lines, meLower, emojis, embedImages, hideUrl) {
+  const fmt = (s) => inlineWithCode(escapeHtml(s), meLower, emojis, embedImages, hideUrl);
+  const rendered = [];
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
+
+    // Fenced code block: ``` (optional language hint) on its own line, running
+    // to the next closing ``` line — or to end-of-input if the fence is unclosed.
+    const fence = raw.match(FENCE_RE);
+    if (fence) {
+      const lang = fence[1].toLowerCase();
+      const code = [];
+      let j = li + 1;
+      for (; j < lines.length && !FENCE_CLOSE_RE.test(lines[j]); j++) code.push(lines[j]);
       const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
-      html += `<pre class="code-block"${langAttr}><code>${highlight(code, lang)}</code></pre>`;
-    } else {
-      // Outside a fence: escape then handle inline code, blockquotes, headers,
-      // tables, line breaks.
-      const escaped = escapeHtml(parts[i]);
-      const lines = escaped.split("\n");
-      const rendered = [];
-      for (let li = 0; li < lines.length; li++) {
-        // Table: a pipe-bearing row immediately followed by a delimiter row.
-        if (li + 1 < lines.length && isTableRow(lines[li]) && TABLE_DELIM_RE.test(lines[li + 1])) {
-          const header = splitRow(lines[li]);
-          const aligns = splitRow(lines[li + 1]).map(cellAlign);
-          const body = [];
-          let j = li + 2;
-          for (; j < lines.length && isTableRow(lines[j]); j++) body.push(splitRow(lines[j]));
-          rendered.push(renderTable(header, aligns, body, meLower, emojis, embedImages, hideUrl));
-          li = j - 1;
-          continue;
-        }
-        const line = lines[li];
-        if (/^&gt;\s?/.test(line)) {
-          const body = line.replace(/^&gt;\s?/, "");
-          rendered.push(`<blockquote>${inlineWithCode(body, meLower, emojis, embedImages, hideUrl)}</blockquote>`);
-          continue;
-        }
-        const hm = line.match(/^(#{1,3})\s+(.*)/);
-        if (hm) {
-          const tag = ["h3", "h4", "h5"][hm[1].length - 1];
-          rendered.push(`<${tag}>${inlineWithCode(hm[2], meLower, emojis, embedImages, hideUrl)}</${tag}>`);
-          continue;
-        }
-        // Unordered list: consecutive lines starting with "* " or "- ". The required
-        // trailing space means "*italic*" (no space after *) is left to inlineMarkup.
-        if (/^[*-]\s+/.test(line)) {
-          let j = li;
-          const lis = [];
-          for (; j < lines.length && /^[*-]\s+/.test(lines[j]); j++) {
-            const item = lines[j].replace(/^[*-]\s+/, "");
-            lis.push(`<li>${inlineWithCode(item, meLower, emojis, embedImages, hideUrl)}</li>`);
-          }
-          rendered.push(`<ul>${lis.join("")}</ul>`);
-          li = j - 1;
-          continue;
-        }
-        rendered.push(inlineWithCode(line, meLower, emojis, embedImages, hideUrl));
-      }
-      // Block elements don't need <br> separators — their block formatting provides the newline.
-      const isBlock = (s) => /^<(?:blockquote|h[1-6]|table|ul)/.test(s);
-      html += rendered.reduce((acc, item, idx) => {
-        if (idx === 0) return item;
-        return acc + (isBlock(rendered[idx - 1]) || isBlock(item) ? "" : "<br>") + item;
-      }, "");
+      rendered.push(`<pre class="code-block"${langAttr}><code>${highlight(code.join("\n"), lang)}</code></pre>`);
+      li = j; // skip the closing fence; if unclosed, j === lines.length and we stop
+      continue;
     }
+
+    // Blockquote: a run of consecutive `>` lines. Strip one quote level and render
+    // the inner lines as their own blocks, so a quoted table / code / list / nested
+    // quote survives. This is what makes forwarded messages render correctly.
+    if (QUOTE_RE.test(raw)) {
+      const inner = [];
+      let j = li;
+      for (; j < lines.length && QUOTE_RE.test(lines[j]); j++) inner.push(lines[j].replace(QUOTE_STRIP, ""));
+      rendered.push(`<blockquote>${renderBlocks(inner, meLower, emojis, embedImages, hideUrl)}</blockquote>`);
+      li = j - 1;
+      continue;
+    }
+
+    // Table: a pipe-bearing row immediately followed by a delimiter row.
+    if (li + 1 < lines.length && isTableRow(raw) && TABLE_DELIM_RE.test(escapeHtml(lines[li + 1]))) {
+      const header = splitRow(escapeHtml(raw));
+      const aligns = splitRow(escapeHtml(lines[li + 1])).map(cellAlign);
+      const body = [];
+      let j = li + 2;
+      for (; j < lines.length && isTableRow(lines[j]) && !FENCE_RE.test(lines[j]) && !QUOTE_RE.test(lines[j]); j++) {
+        body.push(splitRow(escapeHtml(lines[j])));
+      }
+      rendered.push(renderTable(header, aligns, body, meLower, emojis, embedImages, hideUrl));
+      li = j - 1;
+      continue;
+    }
+
+    const hm = raw.match(/^(#{1,3})\s+(.*)/);
+    if (hm) {
+      const tag = ["h3", "h4", "h5"][hm[1].length - 1];
+      rendered.push(`<${tag}>${fmt(hm[2])}</${tag}>`);
+      continue;
+    }
+
+    // Unordered list: consecutive lines starting with "* " or "- ". The required
+    // trailing space means "*italic*" (no space after *) is left to inlineMarkup.
+    if (/^[*-]\s+/.test(raw)) {
+      let j = li;
+      const lis = [];
+      for (; j < lines.length && /^[*-]\s+/.test(lines[j]); j++) lis.push(`<li>${fmt(lines[j].replace(/^[*-]\s+/, ""))}</li>`);
+      rendered.push(`<ul>${lis.join("")}</ul>`);
+      li = j - 1;
+      continue;
+    }
+
+    rendered.push(fmt(raw));
   }
-  return html;
+
+  // Block elements don't need <br> separators — their block formatting provides the newline.
+  const isBlock = (s) => /^<(?:blockquote|h[1-6]|table|ul|pre)/.test(s);
+  return rendered.reduce((acc, item, idx) => {
+    if (idx === 0) return item;
+    return acc + (isBlock(rendered[idx - 1]) || isBlock(item) ? "" : "<br>") + item;
+  }, "");
 }
 
 // inlineWithBlobImages splits an escaped segment on BLOB_IMG_RE, rendering each

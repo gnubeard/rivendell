@@ -163,6 +163,40 @@ test("blockquote adjacent to text has no extra <br> separators", () => {
   assert.ok(out.includes("before<blockquote>quote</blockquote>after"));
 });
 
+test("multi-line blockquote is one container, not adjacent quotes", () => {
+  const out = formatMessage("> line one\n> line two");
+  assert.equal((out.match(/<blockquote>/g) || []).length, 1, "single blockquote");
+  assert.ok(out.includes("line one<br>line two"), "inner lines kept on separate lines");
+});
+
+test("nested blockquote peels one level per layer", () => {
+  const out = formatMessage("> > deep");
+  assert.ok(out.includes("<blockquote><blockquote>deep</blockquote></blockquote>"));
+});
+
+test("quoted table renders as a real table (forwarded message)", () => {
+  // Forwarding prefixes every line with "> "; the table must still parse.
+  const out = formatMessage("*Forwarded:*\n> | A | B |\n> | --- | --- |\n> | 1 | 2 |");
+  assert.ok(out.includes("<blockquote>"), "wrapped in a blockquote");
+  assert.ok(out.includes('<table class="md-table">'), "table renders inside the quote");
+  assert.ok(out.includes("<th>A</th><th>B</th>"), "header cells parsed");
+  assert.ok(out.includes("<td>1</td><td>2</td>"), "body cells parsed");
+  assert.ok(!out.includes("&gt;"), "no leftover literal quote markers");
+});
+
+test("quoted fenced code block renders verbatim, no quote markers in code", () => {
+  const out = formatMessage("> ```go\n> x := 1\n> ```");
+  assert.ok(out.includes('<pre class="code-block"'), "code block renders inside quote");
+  assert.ok(out.includes('data-lang="go"'), "language hint survives quoting");
+  assert.ok(out.includes("x :="), "code body present");
+  assert.ok(!out.includes("&gt;"), "no leftover quote markers baked into the code");
+});
+
+test("quoted list renders as a <ul> inside the blockquote", () => {
+  const out = formatMessage("> - one\n> - two");
+  assert.ok(out.includes("<blockquote><ul><li>one</li><li>two</li></ul></blockquote>"));
+});
+
 test("markdown headers h1-h3", () => {
   assert.ok(formatMessage("# Title").includes("<h3>Title</h3>"));
   assert.ok(formatMessage("## Sub").includes("<h4>Sub</h4>"));

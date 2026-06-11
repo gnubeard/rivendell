@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.25] - 2026-06-11
+
+### Fixed
+- Quoting a message that contains a table, code block, or list (e.g. when forwarding it) no longer mangles the formatting. Blockquotes now render their contents as real Markdown blocks, so a forwarded table stays a table instead of becoming a wall of `>`-prefixed lines.
+
 ## [1.4.24] - 2026-06-11
 
 ### Changed
