@@ -1721,34 +1721,42 @@ function renderChannelHeader(ch) {
     } else {
       dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
     }
-    // Show/update the call button for DM channels.
-    if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
-      callBtn.textContent = "✅";
-      callBtn.title = "Answer call";
-    } else if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
-      callBtn.textContent = "📵";
-      callBtn.title = "Cancel call";
-    } else if (isInCall() && voiceCallState.channelId === ch.id) {
-      callBtn.textContent = "📵";
-      callBtn.title = "Leave call";
+    // Self-DM scratch pad: calling yourself or starting a secret session with
+    // yourself makes no sense — hide both buttons.
+    const isSelfDM = otherId === (state.me && state.me.id);
+    if (isSelfDM) {
+      callBtn.hidden = true;
+      secretBtn.hidden = true;
     } else {
-      callBtn.textContent = "📞";
-      callBtn.title = "Start voice call";
+      // Show/update the call button for DM channels.
+      if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
+        callBtn.textContent = "✅";
+        callBtn.title = "Answer call";
+      } else if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
+        callBtn.textContent = "📵";
+        callBtn.title = "Cancel call";
+      } else if (isInCall() && voiceCallState.channelId === ch.id) {
+        callBtn.textContent = "📵";
+        callBtn.title = "Leave call";
+      } else {
+        callBtn.textContent = "📞";
+        callBtn.title = "Start voice call";
+      }
+      callBtn.hidden = false;
+      // Secret chat button: visible on DMs if browser supports WebCrypto.
+      const supported = secretBtn.dataset.supported !== "0";
+      const sess = getSession(ch.id);
+      secretBtn.className = "icon-btn" + ((sess && sess.phase === "active") ? " secret-btn-active" : "");
+      if (sess && sess.phase === "active") {
+        secretBtn.textContent = "🔒";
+        secretBtn.title = sess.verified ? "Secret session — verified (click to view safety number)" : "Secret session — unverified (click to view safety number)";
+        secretBtn.classList.add(sess.verified ? "secret-btn-verified" : "secret-btn-unverified");
+      } else {
+        secretBtn.textContent = "🔒";
+        secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
+      }
+      secretBtn.hidden = !supported;
     }
-    callBtn.hidden = false;
-    // Secret chat button: visible on DMs if browser supports WebCrypto.
-    const supported = secretBtn.dataset.supported !== "0";
-    const sess = getSession(ch.id);
-    secretBtn.className = "icon-btn" + ((sess && sess.phase === "active") ? " secret-btn-active" : "");
-    if (sess && sess.phase === "active") {
-      secretBtn.textContent = "🔒";
-      secretBtn.title = sess.verified ? "Secret session — verified (click to view safety number)" : "Secret session — unverified (click to view safety number)";
-      secretBtn.classList.add(sess.verified ? "secret-btn-verified" : "secret-btn-unverified");
-    } else {
-      secretBtn.textContent = "🔒";
-      secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
-    }
-    secretBtn.hidden = !supported;
     // Video/chat toggle: mobile-only (CSS hides on desktop). During a DM video
     // call, 💬 lets the user switch to chat; 📺 returns them to the video view.
     const headerCamBtn = $("#header-camera-btn");

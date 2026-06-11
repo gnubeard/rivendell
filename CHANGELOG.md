@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.54] - 2026-06-11
+
+### Fixed
+- Self-DM scratch pad no longer shows the call button or the OTR secret-chat button (calling yourself or starting a secret session with yourself is not meaningful).
+
 ## [1.4.53] - 2026-06-11
 
 ### Added
