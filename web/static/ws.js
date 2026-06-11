@@ -27,6 +27,7 @@ export function connectRealtime(onEvent, onStatusChange) {
   let backoff = 500;
   let closedByUs = false;
   let hiddenAt = 0; // timestamp the page last became hidden (0 = currently visible)
+  let retryTimer = null;
 
   function url() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -35,12 +36,24 @@ export function connectRealtime(onEvent, onStatusChange) {
 
   function retryLater() {
     if (closedByUs) return;
-    setTimeout(open, backoff);
+    retryTimer = setTimeout(open, backoff);
     backoff = Math.min(backoff * 2, 15000);
   }
 
   function open() {
     if (closedByUs) return;
+    retryTimer = null;
+    // Tear down any existing socket before creating a new one.  Without this,
+    // a retryLater() timer firing after reconnectNow() already opened a new
+    // socket would overwrite ws without closing the old one, leaving both
+    // sockets alive with onmessage handlers pointing at the same onEvent
+    // callback — every server frame would then be dispatched twice.
+    if (ws) {
+      const dead = ws;
+      ws = null;
+      dead.onopen = dead.onmessage = dead.onclose = dead.onerror = null;
+      try { dead.close(); } catch {}
+    }
     let sock;
     try {
       sock = new WebSocket(url());
@@ -80,17 +93,15 @@ export function connectRealtime(onEvent, onStatusChange) {
     };
   }
 
-  // reconnectNow replaces the current socket immediately, detaching the old
-  // one's handlers so its (eventual) onclose doesn't also schedule a reconnect.
+  // reconnectNow replaces the current socket immediately.  It cancels any
+  // pending backoff timer so the timer cannot fire open() a second time after
+  // this call has already opened a fresh socket.  open() itself also tears
+  // down ws, so every reconnect path is single-socket by construction.
   function reconnectNow() {
     if (closedByUs) return;
-    const dead = ws;
-    ws = null;
-    if (dead) {
-      dead.onopen = dead.onmessage = dead.onclose = dead.onerror = null;
-      try {
-        dead.close();
-      } catch {}
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
     }
     backoff = 500;
     open();
@@ -121,6 +132,10 @@ export function connectRealtime(onEvent, onStatusChange) {
   return {
     close() {
       closedByUs = true;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", onResume);
       window.removeEventListener("pageshow", onResume);

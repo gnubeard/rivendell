@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.33] - 2026-06-11
+
+### Fixed
+- Fixed a race condition where a pending backoff-retry timer could fire after a resume-triggered reconnect, leaving two live WebSocket connections feeding the same event handler — causing notifications (toasts, chimes) to fire twice per message.
+
 ## [1.4.32] - 2026-06-11
 
 ### Fixed
