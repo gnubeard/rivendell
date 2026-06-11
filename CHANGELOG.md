@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.52] - 2026-06-11
+
+### Fixed
+- Bold, italic, and strikethrough markers that span across an inline code span (e.g. `**foo \`bar\` baz**`) now render correctly instead of being swallowed.
+
 ## [1.4.48] - 2026-06-11
 
 ### Fixed

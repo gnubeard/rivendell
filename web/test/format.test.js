@@ -29,6 +29,26 @@ test("inline code is not further formatted", () => {
   assert.ok(!out.includes("<strong>"));
 });
 
+test("bold spanning a code span renders correctly", () => {
+  const out = formatMessage("**foo `bar` baz**");
+  assert.ok(out.includes("<strong>"), "outer bold rendered");
+  assert.ok(out.includes("<code>bar</code>"), "inner code span rendered");
+  assert.ok(!out.includes("**"), "bold markers consumed");
+});
+
+test("italic spanning a code span renders correctly", () => {
+  const out = formatMessage("_foo `bar` baz_");
+  assert.ok(out.includes("<em>"), "outer italic rendered");
+  assert.ok(out.includes("<code>bar</code>"), "inner code span rendered");
+  assert.ok(!out.includes("_foo"), "italic markers consumed");
+});
+
+test("unmatched backtick is left as literal", () => {
+  const out = formatMessage("foo `bar baz");
+  assert.ok(out.includes("`bar baz"), "unmatched backtick left literal");
+  assert.ok(!out.includes("<code>"), "no code element for unmatched backtick");
+});
+
 test("fenced code block preserved verbatim", () => {
   const out = formatMessage("```\nline1\nline2\n```");
   assert.ok(out.includes('<pre class="code-block">'), "pre element present");

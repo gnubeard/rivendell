@@ -554,17 +554,21 @@ function inlineWithSpoiler(seg, meLower, emojis, channels, embedImages, hideUrl)
 }
 
 // Handle `inline code` spans, leaving their contents free of inline markdown.
+// Uses a placeholder strategy so that bold/italic/strike markers that span
+// across a code token are matched correctly by inlineWithSpoiler/inlineMarkup.
+// Unmatched backticks (odd count) are left as literal backtick characters.
 function inlineWithCode(escapedLine, meLower, emojis, channels, embedImages, hideUrl) {
-  const segs = escapedLine.split(/`/);
-  let out = "";
-  for (let i = 0; i < segs.length; i++) {
-    if (i % 2 === 1) {
-      out += `<code>${segs[i]}</code>`;
-    } else {
-      out += inlineWithSpoiler(segs[i], meLower, emojis, channels, embedImages, hideUrl);
-    }
-  }
-  return out;
+  const tokens = [];
+  // Replace each matched `...` span with a null-byte sentinel so inlineMarkup
+  // sees the surrounding text as one continuous string.
+  const substituted = escapedLine.replace(/`([^`]*)`/g, (_, inner) => {
+    const idx = tokens.length;
+    tokens.push(`<code>${inner}</code>`);
+    return `\x00${idx}\x00`;
+  });
+  // Run the full inline pipeline on the substituted string, then restore.
+  const rendered = inlineWithSpoiler(substituted, meLower, emojis, channels, embedImages, hideUrl);
+  return rendered.replace(/\x00(\d+)\x00/g, (_, i) => tokens[+i]);
 }
 
 // Render known :shortcode: emojis in an escaped, non-code segment. We SPLIT on
