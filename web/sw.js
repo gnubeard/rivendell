@@ -20,6 +20,69 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// urlBase64ToUint8Array decodes a base64url VAPID key into the Uint8Array
+// pushManager.subscribe expects. Duplicated from notify.js because a classic
+// service worker can't import the page's ES modules. Keep the two in sync.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+// pushsubscriptionchange fires when the browser rotates or expires our push
+// endpoint (Firefox does this periodically). Without re-registering the new
+// subscription with the server, the server keeps pushing to the dead endpoint,
+// gets 410 Gone, prunes it, and the user silently stops receiving pushes until
+// they next reload the page with notifications on. So renew it here, from the
+// worker, with no tab open. The session cookie is SameSite=Lax + same-origin, so
+// credentialed fetches still authenticate. Best-effort throughout.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        // Firefox usually hands us the replacement directly; Chrome leaves it
+        // null and expects us to re-subscribe with the original server key.
+        let sub = event.newSubscription || null;
+        if (!sub) {
+          const keyResp = await fetch("/api/push/key", { credentials: "include" });
+          if (!keyResp.ok) return;
+          const { enabled, key } = await keyResp.json();
+          if (!enabled || !key) return;
+          sub = await self.registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key),
+          });
+        }
+        const json = sub.toJSON();
+        await fetch("/api/push/subscribe", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            endpoint: json.endpoint,
+            keys: { p256dh: json.keys && json.keys.p256dh, auth: json.keys && json.keys.auth },
+          }),
+        });
+        // Drop the stale endpoint server-side so it doesn't linger as a dead row.
+        const old = event.oldSubscription && event.oldSubscription.endpoint;
+        if (old && old !== json.endpoint) {
+          await fetch("/api/push/unsubscribe", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: old }),
+          });
+        }
+      } catch (e) {
+        /* best-effort renewal — nothing useful to do on failure here */
+      }
+    })()
+  );
+});
+
 self.addEventListener("push", (event) => {
   let data = {};
   try {

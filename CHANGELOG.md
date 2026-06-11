@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.23] - 2026-06-11
+
+### Fixed
+- Web Push now renews itself when the browser rotates the push endpoint (a `pushsubscriptionchange` handler in the service worker re-registers the new subscription with the server). Previously a rotated endpoint went stale, the server pruned it on the first failed push, and notifications silently stopped until a full page reload — most visible as backgrounded-tab notifications disappearing on Firefox for Android.
+
 ## [1.4.21] - 2026-06-10
 
 ### Added
