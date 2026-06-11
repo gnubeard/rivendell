@@ -958,17 +958,7 @@ func (s *Server) handleRemoveChannelMember(w http.ResponseWriter, r *http.Reques
 // --- messages ------------------------------------------------------------
 
 func (s *Server) canAccessChannel(r *http.Request, ch store.Channel, u store.User) bool {
-	if !ch.IsPrivate {
-		return true
-	}
-	member, err := s.st.IsChannelMember(r.Context(), ch.ID, u.ID)
-	isMember := err == nil && member
-	// A DM is readable only by its two participants — no bypass for anyone.
-	// Private non-DM channels keep the admin-only bypass (not moderators).
-	if ch.IsDM {
-		return isMember
-	}
-	return isMember || roleRank(u.Role) >= roleRank(store.RoleAdmin)
+	return s.channelVisibleTo(r.Context(), ch, u)
 }
 
 // requireChannelAccess parses the channel id from the path, fetches the channel,

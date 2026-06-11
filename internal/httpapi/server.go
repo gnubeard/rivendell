@@ -390,36 +390,37 @@ func (s *Server) broadcastUserUpdate(ctx context.Context, id int64) store.User {
 	return updated
 }
 
+// channelVisibleTo reports whether u may see ch, using the same logic as
+// canAccessChannel but accepting a plain context so it can be called from
+// non-HTTP paths (e.g. audienceForChannel).
+func (s *Server) channelVisibleTo(ctx context.Context, ch store.Channel, u store.User) bool {
+	if !ch.IsPrivate {
+		return true
+	}
+	member, err := s.st.IsChannelMember(ctx, ch.ID, u.ID)
+	isMember := err == nil && member
+	if ch.IsDM {
+		return isMember
+	}
+	return isMember || roleRank(u.Role) >= roleRank(store.RoleAdmin)
+}
+
 // audienceForChannel returns nil (everyone) for public channels, or the set of
-// users who may receive a private channel's realtime events. That set mirrors
-// canAccessChannel exactly: the members, plus — for a non-DM private channel —
-// every admin, who holds a read/write bypass there even without membership.
-// Moderators no longer get this bypass; only their own memberships determine
-// their audience. Without the admin union, an admin who posts (or edits/deletes)
-// in a channel they aren't a member of never sees their own change echoed, since
-// the client renders messages only from the broadcast, not the POST response.
-// DMs are exempt from the bypass and stay strictly members-only.
+// users who may receive a private channel's realtime events. It delegates to
+// channelVisibleTo so the visibility predicate has exactly one implementation.
 func (s *Server) audienceForChannel(ctx context.Context, ch store.Channel) map[int64]bool {
 	if !ch.IsPrivate {
 		return nil
 	}
-	ids, err := s.st.ListChannelMemberIDs(ctx, ch.ID)
+	users, err := s.st.ListUsers(ctx)
 	if err != nil {
 		log.Printf("audienceForChannel: %v", err)
 		return map[int64]bool{} // fail closed
 	}
-	set := make(map[int64]bool, len(ids))
-	for _, id := range ids {
-		set[id] = true
-	}
-	if !ch.IsDM {
-		admins, err := s.st.ListAdminUserIDs(ctx)
-		if err != nil {
-			log.Printf("audienceForChannel admins: %v", err)
-			return set // best-effort: members still receive the event
-		}
-		for _, id := range admins {
-			set[id] = true
+	set := make(map[int64]bool, len(users))
+	for _, u := range users {
+		if s.channelVisibleTo(ctx, ch, u) {
+			set[u.ID] = true
 		}
 	}
 	return set
