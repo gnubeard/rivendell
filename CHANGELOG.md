@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.34] - 2026-06-11
+
+### Fixed
+- The "manage custom emojis" button (visible to mods/admins) now renders as a footer strip below the emoji picker instead of floating over the bottom-right corner of the grid.
+
 ## [1.4.33] - 2026-06-11
 
 ### Fixed

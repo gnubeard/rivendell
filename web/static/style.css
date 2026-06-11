@@ -507,15 +507,15 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .attachment.spoiler-marked img { filter: blur(6px); }
 .attachment-spinner { position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: attachment-spin 0.7s linear infinite; }
 @keyframes attachment-spin { to { transform: rotate(360deg); } }
-.emoji-picker { position: absolute; bottom: 100%; right: 1.2rem; margin: 0 0 3px; padding: 0.4rem; width: 239px; max-height: 240px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 0.25rem; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.45); z-index: 10; }
+.emoji-wrap { position: absolute; bottom: 100%; right: 1.2rem; margin: 0 0 3px; width: 239px; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 -4px 16px rgba(0,0,0,.45); z-index: 10; display: flex; flex-direction: column; }
+.emoji-picker { padding: 0.4rem; max-height: 240px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .emoji-choice { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 3px; border: none; border-radius: 6px; background: transparent; cursor: pointer; touch-action: manipulation; }
 .emoji-choice:hover { background: var(--bg-hover); }
 .emoji-choice img { height: 24px; width: 24px; object-fit: contain; }
 .emoji-choice .emoji-uni { font-size: 1.3rem; line-height: 1; }
 .emoji-empty { color: var(--text-dim); font-size: 0.85rem; padding: 0.4rem; }
-/* Moderator+ "manage custom emojis" affordance, pinned to the picker's bottom-right
-   corner (sticky so it stays put while the emoji grid scrolls). */
-.emoji-manage-btn { position: sticky; bottom: 0; margin-left: auto; align-self: flex-end; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); color: var(--text-dim); cursor: pointer; font-size: 1rem; line-height: 1; box-shadow: 0 1px 4px rgba(0,0,0,.35); touch-action: manipulation; }
+/* Moderator+ "manage custom emojis" affordance — a footer strip below the emoji grid. */
+.emoji-manage-btn { width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 0.3rem; padding: 0.3rem 0.5rem; border: none; border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); background: var(--bg-2); color: var(--text-dim); cursor: pointer; font-size: 0.8rem; touch-action: manipulation; }
 .emoji-manage-btn:hover { background: var(--bg-hover); color: var(--text); }
 /* Full-width divider between the common Unicode palette and the custom emoji grid. */
 .emoji-sep { flex-basis: 100%; height: 1px; margin: 0.25rem 0.1rem; background: var(--border); }

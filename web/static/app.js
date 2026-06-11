@@ -2876,13 +2876,16 @@ let pickerTarget = { mode: "insert" };
 const COMMON_EMOJI = ["👍", "👎", "❤️", "😂", "😉", "😍", "🤔", "🎉", "🙌", "😮", "😢", "😡", "🙏", "🔥", "✅", "👀", "💯", "👋"];
 
 function emojiPickerOpen() {
-  const p = $("#emoji-picker");
+  const p = $("#emoji-wrap");
   return p && !p.hidden;
 }
 
 function renderEmojiPicker() {
   const picker = $("#emoji-picker");
+  const wrap = $("#emoji-wrap");
   picker.innerHTML = "";
+  // Remove any manage button appended to the wrap by a previous render.
+  wrap.querySelector(".emoji-manage-btn")?.remove();
   // Quick Unicode palette first — usable as a reaction or dropped into a message.
   for (const ch of COMMON_EMOJI) {
     picker.append(el("button", {
@@ -2900,13 +2903,12 @@ function renderEmojiPicker() {
       }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
     }
   }
-  // Moderators+ get a ➕ pinned to the bottom-right that opens the custom-emoji
-  // manager (the same interface as the admin panel).
+  // Moderators+ get a ➕ footer strip below the grid that opens the custom-emoji manager.
   if (isModPlus()) {
-    picker.append(el("button", {
+    wrap.append(el("button", {
       type: "button", class: "emoji-manage-btn", title: "Manage custom emojis",
-      onclick: (e) => { e.stopPropagation(); $("#emoji-picker").hidden = true; openEmojiManager(); },
-    }, "➕"));
+      onclick: (e) => { e.stopPropagation(); $("#emoji-wrap").hidden = true; openEmojiManager(); },
+    }, "➕ Manage emojis"));
   }
 }
 
@@ -2915,7 +2917,7 @@ function renderEmojiPicker() {
 // when inserted into a message; as a reaction value the bare shortcode is stored.
 // Shift-clicking keeps the picker open so multiple emoji can be inserted/reacted.
 function chooseEmoji(value, isCustom, evt) {
-  if (!evt?.shiftKey) $("#emoji-picker").hidden = true;
+  if (!evt?.shiftKey) $("#emoji-wrap").hidden = true;
   if (pickerTarget.mode === "react") {
     toggleReaction(pickerTarget.messageId, value);
     return;
@@ -2942,17 +2944,17 @@ function floatPickerAt(picker, anchorEl) {
 // floatPicker readies the shared picker as an off-screen fixed popup, renders it,
 // then places it next to anchorEl. Shared setup for the reaction + edit pickers.
 function floatPicker(anchorEl) {
-  const picker = $("#emoji-picker");
+  const wrap = $("#emoji-wrap");
   // Render off-screen first so we can measure it, then place it relative to the
   // control (flipping below if there's no room above).
-  picker.style.position = "fixed";
-  picker.style.left = "-9999px";
-  picker.style.top = "0";
-  picker.style.right = "auto";
-  picker.style.bottom = "auto";
-  picker.hidden = false;
+  wrap.style.position = "fixed";
+  wrap.style.left = "-9999px";
+  wrap.style.top = "0";
+  wrap.style.right = "auto";
+  wrap.style.bottom = "auto";
+  wrap.hidden = false;
   renderEmojiPicker();
-  floatPickerAt(picker, anchorEl);
+  floatPickerAt(wrap, anchorEl);
 }
 
 // openReactionPicker opens the shared popup in reaction mode, floated next to the
@@ -2966,9 +2968,9 @@ function openReactionPicker(messageId, anchorEl) {
 // button and routes picks into that textarea. Clicking the button again while it
 // is already open for the same box toggles it closed.
 function openEditEmojiPicker(input, anchorEl) {
-  const picker = $("#emoji-picker");
-  if (!picker.hidden && pickerTarget.input === input) {
-    picker.hidden = true;
+  const wrap = $("#emoji-wrap");
+  if (!wrap.hidden && pickerTarget.input === input) {
+    wrap.hidden = true;
     return;
   }
   pickerTarget = { mode: "insert", input };
@@ -2976,16 +2978,16 @@ function openEditEmojiPicker(input, anchorEl) {
 }
 
 function toggleEmojiPicker() {
-  const picker = $("#emoji-picker");
-  if (picker.hidden) {
+  const wrap = $("#emoji-wrap");
+  if (wrap.hidden) {
     pickerTarget = { mode: "insert" }; // no .input ⇒ targets the composer
     // Clear any fixed-position overrides left by a reaction pick so the popup
     // returns to its CSS anchor above the composer.
-    picker.style.position = picker.style.left = picker.style.top = picker.style.right = picker.style.bottom = "";
+    wrap.style.position = wrap.style.left = wrap.style.top = wrap.style.right = wrap.style.bottom = "";
     renderEmojiPicker();
-    picker.hidden = false;
+    wrap.hidden = false;
   } else {
-    picker.hidden = true;
+    wrap.hidden = true;
   }
 }
 
@@ -3002,7 +3004,7 @@ function insertIntoInput(input, token) {
   input.value = before + insert + input.value.slice(end);
   const pos = start + insert.length;
   input.setSelectionRange(pos, pos);
-  $("#emoji-picker").hidden = true;
+  $("#emoji-wrap").hidden = true;
   input.focus();
   input.dispatchEvent(new Event("input"));
 }
@@ -3871,8 +3873,8 @@ function wireControls() {
   $("#emoji-btn").onclick = (e) => { e.stopPropagation(); toggleEmojiPicker(); };
   // Dismiss the emoji picker on any click outside it (the button toggles itself).
   document.addEventListener("click", (e) => {
-    if (emojiPickerOpen() && !e.target.closest("#emoji-picker") && !e.target.closest("#emoji-btn")) {
-      $("#emoji-picker").hidden = true;
+    if (emojiPickerOpen() && !e.target.closest("#emoji-wrap") && !e.target.closest("#emoji-btn")) {
+      $("#emoji-wrap").hidden = true;
     }
   });
 
