@@ -3333,7 +3333,10 @@ async function openForwardModal(m) {
       list.append(el("li", { class: "invite-item", onclick: async () => {
         $("#forward-modal").hidden = true;
         try {
-          await api.sendMessage(id, forwardBody(m, fromDM, srcChannelId), null);
+          // Jump to the forwarded copy in its target channel rather than leaving
+          // the user where they were — follow the message to where it landed.
+          const sent = await api.sendMessage(id, forwardBody(m, fromDM, srcChannelId), null);
+          if (sent && sent.id) await jumpToMessage(id, sent.id);
         } catch (ex) {
           alert("Failed to forward: " + ex.message);
         }

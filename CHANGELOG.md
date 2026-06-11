@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.24] - 2026-06-11
+
+### Changed
+- Forwarding a message now jumps you to the forwarded copy in its target channel instead of leaving you where you were.
+
 ## [1.4.23] - 2026-06-11
 
 ### Fixed
