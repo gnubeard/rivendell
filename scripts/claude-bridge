@@ -112,6 +112,7 @@ api() {
     curl -sf -X "$method" \
         -H "Authorization: Bearer $RIVENDELL_BOT_TOKEN" \
         -H "Content-Type: application/json" \
+        -H "User-Agent: rivendell-claude-bridge/1.0" \
         "$RIVENDELL_URL/api$path" "$@"
 }
 
@@ -207,6 +208,7 @@ fetch_message_images() {
         outfile="$outdir/$h"
         ct=$(curl -sf -X GET \
             -H "Authorization: Bearer $RIVENDELL_BOT_TOKEN" \
+            -H "User-Agent: rivendell-claude-bridge/1.0" \
             -o "$outfile" -w '%{content_type}' \
             "$RIVENDELL_URL/api/blobs/$h" 2>/dev/null) || continue
         case "$ct" in
