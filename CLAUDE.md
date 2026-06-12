@@ -1,4 +1,4 @@
-# Rivendell — project guide for Claude Code
+# rivendell — project guide for Claude Code
 
 Small self-hosted chat server (~20 friends). Single Go binary + Postgres + vanilla-JS client.
 Owner is technical, privacy-minded; forthright answers, no hand-holding.
@@ -24,7 +24,8 @@ web/static/                   app.js, api.js, ws.js, format.js, state.js,
                               voice.js, secret.js, notify.js, syntax.js, style.css
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test suites for all pure JS modules
-docs/                         otr.md, voice.md, video.md, web_push.md
+docs/                         otr.md, voice.md, video.md, web_push.md,
+                              composer-paste-qa.md
 ```
 
 Module path `rivendell`; Go 1.26. Imports `rivendell/internal/...`.

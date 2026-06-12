@@ -35,7 +35,7 @@ WebRTC renegotiation handles the track addition transparently.
 | Server state | `Muted bool` in VoiceParticipant | + `VideoMuted bool` |
 | WS event | `voice.mute {muted}` | extend payload: `{muted, video_muted}` |
 | Renegotiation | never needed | needed when camera is toggled mid-call |
-| Participant cap | warn at 8, block at 12 | much lower — see scaling section |
+| Participant cap | 10 audio; 6 simultaneous cameras | much lower — see scaling section |
 | Layout | fixed strip in sidebar | dedicated video grid panel/modal |
 
 ---

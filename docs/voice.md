@@ -61,9 +61,9 @@ Mesh costs: `n*(n-1)/2` connections, each carrying one Opus stream in each
 direction. Opus voice at 32 kbps is effectively transparent; at 8 people that's
 28 connections, ~450 kbps per client upstream. Fine for home broadband.
 
-Soft cap: warn the UI at 8 participants, hard-stop joining at 12. At 12 you'd
-have 66 peer connections; still functional but the UX degrades. For 20 friends
-there will rarely be more than 4–5 in a voice channel at once.
+Hard cap: 10 participants (audio); simultaneous cameras capped separately at 6.
+At 10 you'd have 45 peer connections; still functional but the UX degrades. For
+20 friends there will rarely be more than 4–5 in a voice channel at once.
 
 If that cap ever feels wrong in practice, an SFU (Pion, mediasoup) is the
 natural next step — but that's a new service, new dependency, and real ops work.
@@ -122,7 +122,7 @@ credentials without coturn needing a user database.
 
 ```
 username  = "{unix_timestamp}:{user_id}"
-credential = HMAC-SHA256(TURN_SECRET, username)
+credential = HMAC-SHA1(TURN_SECRET, username)
 ```
 
 A new endpoint `GET /api/rtc/credentials` returns a fresh credential pair valid
