@@ -506,6 +506,12 @@ a.channel-link:hover { background: rgba(110, 168, 254, 0.25); text-decoration: u
   pointer-events: none;
   color: var(--text-faint);
 }
+/* Locked state (ended secret session) — the facade's `disabled` setter
+   toggles this class; :disabled can't match a contenteditable div. */
+#composer-input.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 /* The emoji + attach buttons sit on the composer's bottom-right (Enter sends, so
    the right edge is otherwise unused); the picker pops above like the mentions.
    Two buttons, so they're laid out side by side — emoji rightmost, attach to its

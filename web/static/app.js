@@ -2188,7 +2188,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   if (attachBtn) attachBtn.hidden = inSecretView;
   // Reset the composer if we're not in a secret view (e.g. switching channels).
   if (!inSecretView) {
-    const inp = $("#compose-input");
+    const inp = $("#composer-input");
     if (inp && inp.disabled) { inp.disabled = false; inp.placeholder = "Message…"; }
   }
 
@@ -2232,12 +2232,12 @@ function renderMessages(forceBottom = false, holdPosition = false) {
             clearEndedSession(state.activeChannelId);
             renderMessages(true);
             renderChannelHeader(state.channels[state.activeChannelId]);
-            const inp = $("#compose-input");
+            const inp = $("#composer-input");
             if (inp) { inp.disabled = false; inp.placeholder = "Message…"; }
           },
         }, "Return to chat")));
     }
-    const inp = $("#compose-input");
+    const inp = $("#composer-input");
     if (inp) {
       inp.disabled = secretSess.phase === "ended";
       inp.placeholder = secretSess.phase === "ended" ? "Session ended" : "Message…";
@@ -2713,6 +2713,9 @@ function upgradeComposerField(el) {
   // a bricked composer. Fall back to full contenteditable there; the input
   // handler's normalize pass keeps the content effectively plain.
   if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
+  // Remembered so the `disabled` setter can restore the right mode (the
+  // feature-detect above may have downgraded plaintext-only → true).
+  const editableMode = el.contentEditable;
 
   // The single definition of "the text": flat walk, <br> → "\n". (innerText
   // is rendering-dependent and can't be reconciled with selection offsets;
@@ -2788,6 +2791,23 @@ function upgradeComposerField(el) {
     },
     selectionStart: { get() { return selOffset("start"); } },
     selectionEnd: { get() { return selOffset("end"); } },
+    // Textarea-vocabulary disable/placeholder, so call sites (the secret-
+    // session ended lockout) need not know this is a div. `disabled` maps to
+    // contentEditable=false + aria-disabled + a .disabled class for styling;
+    // `placeholder` maps to the data-ph attribute the :empty::before CSS
+    // placeholder reads from.
+    disabled: {
+      get() { return el.contentEditable === "false"; },
+      set(v) {
+        el.contentEditable = v ? "false" : editableMode;
+        el.setAttribute("aria-disabled", v ? "true" : "false");
+        el.classList.toggle("disabled", !!v);
+      },
+    },
+    placeholder: {
+      get() { return el.dataset.ph || ""; },
+      set(v) { el.dataset.ph = v; },
+    },
   });
 }
 
@@ -3025,6 +3045,10 @@ function wireComposer() {
   }
 
   input.onkeydown = async (e) => {
+    // Locked composer (ended secret session): contentEditable=false already
+    // makes the div unfocusable, so this shouldn't fire — but a stale focus
+    // or synthetic event mustn't send into a locked field.
+    if (input.disabled) return;
     if (ac.handleKeydown(e)) return;
     // Esc on the composer cancels a pending reply (when no autocomplete is open).
     if (e.key === "Escape" && replyingToId != null && popup.hidden) {
@@ -3114,6 +3138,9 @@ function wireComposer() {
       if (files.length) {
         e.preventDefault();
         if (secretActive()) return; // images never enter a secret session
+        // A non-editable div still receives drop events (unlike a disabled
+        // textarea, which the browser inerts) — honor the lockout here too.
+        if (composerEl.disabled) return;
         for (const file of files) uploadAndInsert(file);
       }
     });

@@ -17,7 +17,9 @@
 //     Shift+Enter newlines round-trip through .value, Enter sends, the
 //     URL-wrap paste rewrites a selection, @-mention autocomplete picks via
 //     Enter without sending, and emptying the field restores the placeholder
-//     (the stranded-<br> normalization).
+//     (the stranded-<br> normalization). The `disabled`/`placeholder`
+//     properties (the ended-secret-session lockout) lock and restore the
+//     field correctly.
 //
 // Real on-device flavors (Gboard clipboard history, screenshot-copy vs
 // browser Copy-image) can't be automated here — see the manual QA list in
@@ -231,5 +233,64 @@ test("@-mention autocomplete picks with Enter instead of sending", async () => {
   await page.keyboard.press("Enter"); // consumed by the completion, not the send path
   expect(await page.evaluate(() => document.querySelector("#composer-input").value)).toBe("@" + USER2 + " ");
   expect(await page.locator("#message-list .msg").count()).toBe(before); // nothing sent
+  await resetComposer();
+});
+
+test("disabled facade locks the composer: no typing, no Enter-send, no drop; placeholder swaps", async () => {
+  // The lockout the secret-session ended state relies on. The full OTR
+  // end-session flow needs a second crypto-capable context; the facade's
+  // contract is what matters here, so drive `disabled` directly.
+  const locked = await page.evaluate(() => {
+    const el = document.querySelector("#composer-input");
+    el.placeholder = "Session ended";
+    el.disabled = true;
+    return {
+      editable: el.isContentEditable,
+      aria: el.getAttribute("aria-disabled"),
+      cls: el.classList.contains("disabled"),
+      ph: el.dataset.ph,
+      readback: el.disabled,
+    };
+  });
+  expect(locked).toEqual({ editable: false, aria: "true", cls: true, ph: "Session ended", readback: true });
+
+  // Typing must not enter text (the div is no longer focusable/editable).
+  await page.locator("#composer-input").click({ force: true });
+  await page.keyboard.type("should not appear");
+  expect(await page.evaluate(() => document.querySelector("#composer-input").value)).toBe("");
+
+  // A synthetic Enter on the element must not send (keydown guard).
+  const before = await page.locator("#message-list .msg").count();
+  await page.evaluate(() => {
+    document.querySelector("#composer-input").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  });
+  expect(await page.locator("#message-list .msg").count()).toBe(before);
+
+  // A drop must stage nothing (drop fires on non-editable divs; the handler
+  // honors the lockout explicitly).
+  await page.evaluate((b64) => {
+    const el = document.querySelector("#composer-input");
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], "locked.png", { type: "image/png" }));
+    el.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, PNG_B64);
+  expect(await tiles().count()).toBe(0);
+
+  // Re-enable restores the original editable mode and the normal placeholder.
+  const restored = await page.evaluate(() => {
+    const el = document.querySelector("#composer-input");
+    el.disabled = false;
+    el.placeholder = "Message…";
+    return { mode: el.contentEditable, aria: el.getAttribute("aria-disabled"), cls: el.classList.contains("disabled") };
+  });
+  expect(restored.mode === "plaintext-only" || restored.mode === "true").toBe(true);
+  expect(restored.aria).toBe("false");
+  expect(restored.cls).toBe(false);
+  const input = page.locator("#composer-input");
+  await input.click();
+  await page.keyboard.type("alive again");
+  expect(await page.evaluate(() => document.querySelector("#composer-input").value)).toBe("alive again");
   await resetComposer();
 });
