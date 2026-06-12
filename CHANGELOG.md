@@ -3,6 +3,18 @@
 All user-visible changes to rivendell are documented here.
 Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
+## [Unreleased]
+
+## [1.4.61] - 2026-06-12
+
+### Added
+- Fenced code blocks now support Perl syntax highlighting (`perl`, `pl`, `pm`).
+
+## [1.4.60] - 2026-06-12
+
+### Added
+- Images in background channels are now prefetched after startup. The app walks all channels in sidebar order, warming up to 5 blob images per channel one at a time, so switching channels finds images already cached.
+
 ## [1.4.57] - 2026-06-12
 
 ### Added

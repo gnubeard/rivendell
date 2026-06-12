@@ -176,6 +176,22 @@ const RUBY_BI = ["puts","print","p","pp","gets","require","require_relative","lo
   "attr_accessor","attr_reader","attr_writer","include","extend","prepend",
   "private","protected","public","initialize","new","send","respond_to"];
 
+const PERL_KW = ["BEGIN","END","CHECK","INIT","UNITCHECK","if","elsif","else","unless",
+  "while","until","for","foreach","do","last","next","redo","return","my","our","local",
+  "sub","package","use","require","no","and","or","not","x","eq","ne","lt","gt","le","ge",
+  "cmp","defined","undef","wantarray","bless","ref","scalar","local","tie","untie",
+  "eval","die","warn","exit","goto","lock","given","when","default"];
+
+const PERL_BI = ["print","say","printf","sprintf","open","close","read","write","seek",
+  "tell","eof","binmode","sysread","syswrite","push","pop","shift","unshift","splice",
+  "join","split","reverse","sort","map","grep","each","keys","values","delete","exists",
+  "length","substr","index","rindex","chr","ord","lc","uc","lcfirst","ucfirst","chomp",
+  "chop","chdir","mkdir","rmdir","rename","unlink","stat","lstat","chmod","chown",
+  "opendir","readdir","closedir","glob","system","exec","sleep","time","localtime",
+  "gmtime","abs","int","rand","srand","sqrt","log","exp","sin","cos","atan2","hex","oct",
+  "pos","quotemeta","reset","scalar","wantarray","prototype","STDIN","STDOUT","STDERR",
+  "ARGV","ENV","INC","ISA","SIG","DATA","_","__DATA__","__END__"];
+
 // SQL uses uppercase keywords; we'll uppercase the code for matching.
 const SQL_KW = new Set(["SELECT","FROM","WHERE","JOIN","LEFT","RIGHT","INNER","OUTER",
   "CROSS","FULL","ON","AND","OR","NOT","AS","GROUP","BY","ORDER","HAVING","LIMIT",
@@ -287,6 +303,35 @@ function shRules() {
   ];
 }
 
+function perlRules() {
+  const kwSet = new Set(PERL_KW);
+  const biSet = new Set(PERL_BI);
+  return [
+    { re: /#[^\n]*/y, cls: "hl-cm" },
+    { re: /qq\{(?:[^{}\\]|\\.)*\}/y, cls: "hl-str" },
+    { re: /qq\[(?:[^\]\\]|\\.)*\]/y, cls: "hl-str" },
+    { re: /qq\((?:[^()\\]|\\.)*\)/y, cls: "hl-str" },
+    { re: /qq\/(?:[^\/\\]|\\.)*\//y, cls: "hl-str" },
+    { re: /qw\{[^{}]*\}/y, cls: "hl-str" },
+    { re: /qw\[[^\]]*\]/y, cls: "hl-str" },
+    { re: /qw\([^)]*\)/y, cls: "hl-str" },
+    { re: /q\{[^{}]*\}/y, cls: "hl-str" },
+    { re: /q\[[^\]]*\]/y, cls: "hl-str" },
+    { re: /q\([^)]*\)/y, cls: "hl-str" },
+    { re: /"(?:[^"\\]|\\.)*"/y, cls: "hl-str" },
+    { re: /'(?:[^'\\]|\\.)*'/y, cls: "hl-str" },
+    { re: /0[xXbBoO][0-9a-fA-F_]+/y, cls: "hl-num" },
+    { re: /\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y, cls: "hl-num" },
+    { re: /\$\{[^}]*\}/y, cls: "hl-bi" },
+    { re: /\$[a-zA-Z_][a-zA-Z0-9_]*/y, cls: "hl-bi" },
+    { re: /\$[0-9!@#$%&*\-+=|?]/y, cls: "hl-bi" },
+    { re: /@[a-zA-Z_][a-zA-Z0-9_]*/y, cls: "hl-bi" },
+    { re: /%[a-zA-Z_][a-zA-Z0-9_]*/y, cls: "hl-bi" },
+    idRule(kwSet, biSet, true),
+    idRule(kwSet, biSet, false),
+  ];
+}
+
 function jsonRules() {
   return [
     { re: /"(?:[^"\\]|\\.)*"(?=\s*:)/y, cls: "hl-bi" },  // object keys
@@ -326,6 +371,8 @@ function buildRules(lang) {
       return htmlRules();
     case "sh": case "bash": case "shell": case "zsh": case "fish":
       return shRules();
+    case "pl": case "perl": case "pm":
+      return perlRules();
     case "sql": case "psql": case "pgsql":
       return sqlRules();
     default:

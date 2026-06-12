@@ -31,3 +31,34 @@ test("bash highlights ordinary and ${VAR}-bearing double-quoted strings", () => 
   assert.ok(highlight('"hello"', "bash").includes('<span class="hl-str">&quot;hello&quot;</span>'));
   assert.ok(highlight('"x${VAR}y"', "bash").includes('<span class="hl-str">&quot;x${VAR}y&quot;</span>'));
 });
+
+test("perl highlights keywords", () => {
+  const out = highlight("my $x = 1;", "perl");
+  assert.ok(out.includes('<span class="hl-kw">my</span>'), `missing keyword span: ${out}`);
+});
+
+test("perl highlights sigils as builtins", () => {
+  const out = highlight('my @arr = (1, 2);', "perl");
+  assert.ok(out.includes('<span class="hl-bi">@arr</span>'), `missing sigil span: ${out}`);
+});
+
+test("perl highlights double-quoted strings", () => {
+  const out = highlight('"hello world"', "perl");
+  assert.ok(out.includes('<span class="hl-str">&quot;hello world&quot;</span>'), `missing str span: ${out}`);
+});
+
+test("perl highlights comments", () => {
+  const out = highlight("# a comment", "perl");
+  assert.ok(out.includes('<span class="hl-cm"># a comment</span>'), `missing comment span: ${out}`);
+});
+
+test("perl aliases pl/pm resolve", () => {
+  const pl = highlight("my $x;", "pl");
+  const pm = highlight("my $x;", "pm");
+  assert.ok(pl.includes("hl-kw") && pm.includes("hl-kw"));
+});
+
+test("perl highlights qw list", () => {
+  const out = highlight("my @days = qw(Mon Tue Wed);", "perl");
+  assert.ok(out.includes('<span class="hl-str">qw(Mon Tue Wed)</span>'), `missing qw span: ${out}`);
+});
