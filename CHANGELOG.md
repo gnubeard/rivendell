@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.55] - 2026-06-12
+
+### Fixed
+- Visiting an expired or invalid invite or magic link now shows a clear error message instead of a blank card with no form.
+
 ## [1.4.54] - 2026-06-11
 
 ### Fixed
