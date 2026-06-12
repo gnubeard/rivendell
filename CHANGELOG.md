@@ -3,7 +3,26 @@
 All user-visible changes to Rivendell are documented here.
 Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
-## [Unreleased]
+## [1.4.57] - 2026-06-12
+
+### Added
+- Image paste now works in the message composer on Firefox for Android (screenshot-copy, browser "Copy image", and Gboard clipboard-history flavors). Pasted images stage as attachments through the same upload path as the attach button.
+
+### Changed
+- The message composer is now a `contenteditable` field instead of a `<textarea>` (required for Android image paste delivery). Typing, drafts, @-mention autocomplete, emoji insertion, Enter-to-send, Shift+Enter newlines, and URL-wrap paste behave as before; the field now auto-grows via CSS instead of JS measurement.
+
+### Fixed
+- When the other person leaves a secret session, the composer now actually locks and shows "Session ended" until you return to chat. (A selector typo meant this lockout had never taken effect; the field stayed live in an ended session.)
+
+## [1.4.56] - 2026-06-12
+
+### Added
+- Animated loading screen (three bouncing dots) shown while the app boots; dismissed once the first channel and its images are fully loaded, so the initial frame is always content-complete rather than a flash of partially-rendered state.
+
+## [1.4.55] - 2026-06-12
+
+### Fixed
+- Visiting an expired or invalid invite or magic link now shows a clear error message instead of a blank card with no form.
 
 ## [1.4.54] - 2026-06-11
 

@@ -53,8 +53,8 @@
           <input id="sp-password2" type="password" autocomplete="new-password" minlength="10" required>
         </label>
         <button type="submit" class="primary">Set password</button>
-        <p id="sp-error" class="error" role="alert"></p>
       </form>
+      <p id="sp-error" class="error" role="alert"></p>
     </div>
   </section>
 
@@ -79,8 +79,8 @@
           <input id="su-password2" type="password" autocomplete="new-password" minlength="10" required>
         </label>
         <button type="submit" class="primary">Create account</button>
-        <p id="su-error" class="error" role="alert"></p>
       </form>
+      <p id="su-error" class="error" role="alert"></p>
     </div>
   </section>
 
@@ -170,7 +170,16 @@
         </div>
         <div id="composer-reply" class="composer-reply" hidden></div>
         <div id="composer-attachments" class="composer-attachments" hidden></div>
-        <textarea id="composer-input" rows="1" placeholder="Message…"></textarea>
+        <!-- A contenteditable div, not a <textarea>: GeckoView (Firefox for
+             Android) never delivers image clipboard content to a textarea
+             through any mechanism, while a plaintext-only editable region
+             receives it (see the paste channels in wireComposer, app.js).
+             upgradeComposerField() grafts .value/.selectionStart/
+             .setSelectionRange onto it so the rest of the client keeps
+             textarea semantics. -->
+        <div id="composer-input" contenteditable="plaintext-only" role="textbox"
+             aria-multiline="true" aria-label="Message" data-ph="Message…"
+             spellcheck="true" autocapitalize="sentences" autocorrect="on"></div>
         <input id="attach-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
         <button id="attach-btn" class="emoji-btn" type="button" title="Upload image" aria-label="Upload image">📎</button>
         <button id="emoji-btn" class="emoji-btn" type="button" title="Custom emoji" aria-label="Insert custom emoji">😀</button>
@@ -447,6 +456,11 @@
 
   <!-- Ping toasts: brief top-of-screen alerts when a ping arrives while the tab is focused. -->
   <div id="ping-toasts" class="ping-toasts"></div>
+
+  <!-- LOADING SCREEN — covers the app shell while enterApp() seeds state and loads the first channel. -->
+  <div id="loading-screen" aria-hidden="true">
+    <div class="loading-dots"><span></span><span></span><span></span></div>
+  </div>
 
   <script type="module" src="/static/app.js?v=__RIVENDELL_VERSION__"></script>
 </body>

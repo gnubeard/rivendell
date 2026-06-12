@@ -54,8 +54,8 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - **Bump `Version` in `internal/config/config.go`** (patch increment) with every meaningful commit to develop.
 - Passwords: PBKDF2 format `pbkdf2-sha256$<iter>$<b64salt>$<b64key>`, 600k iterations. Don't lower.
 - Roles: admin > moderator > member. Guard last-admin removal (`CountAdmins`).
-- `audienceForChannel` must mirror `canAccessChannel`: private non-DM channels include all mods/admins.
-  DMs are strictly members-only.
+- `channelVisibleTo` is the single visibility predicate — `audienceForChannel` and `canAccessChannel` both delegate to it.
+  Private non-DM channels include all admins; DMs are strictly members-only.
 - `users.status` is durable — `onPresenceChange` must **never** write it. `TestStatusDurableAcrossReconnect` guards this.
 - Presence debounce (~1s, `schedulePresenceUpdate`) — don't "simplify" to immediate apply. Own user is exempt.
 - `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last.

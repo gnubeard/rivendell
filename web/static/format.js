@@ -605,3 +605,30 @@ function inlineWithEmoji(seg, meLower, emojis, channels, embedImages, hideUrl, u
   }
   return out + inlineWithBlobImages(seg.slice(last), meLower, channels, embedImages, hideUrl, usernames);
 }
+
+// --- pasted-image decoding ------------------------------------------------
+
+const DATA_URI_EXT = { "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" };
+
+// dataUriToFile decodes a data: URI into a File, synchronously and without the
+// network stack. fetch() on a data: URI is the obvious alternative, but it
+// routes a string we already hold through the fetch machinery, where CSP
+// connect-src can (and in testing did) kill it with a NetworkError; atob is
+// byte-exact and has no CSP jurisdiction. Used by the composer's channel-3
+// paste harvest (see wireComposer in app.js).
+export function dataUriToFile(src) {
+  const comma = src.indexOf(",");
+  if (comma < 0) throw new Error("malformed data URI");
+  const header = src.slice(5, comma); // strip the leading "data:"
+  const payload = src.slice(comma + 1);
+  const mime = header.split(";")[0] || "application/octet-stream";
+  let bytes;
+  if (/;base64$/i.test(header)) {
+    const bin = atob(payload);
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  } else {
+    bytes = new TextEncoder().encode(decodeURIComponent(payload));
+  }
+  return new File([bytes], "pasted." + (DATA_URI_EXT[mime] || "bin"), { type: mime });
+}
