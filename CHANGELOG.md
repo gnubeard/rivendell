@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.56] - 2026-06-12
+
+### Added
+- Animated loading screen (three bouncing dots) shown while the app boots; dismissed once the first channel and its images are fully loaded, so the initial frame is always content-complete rather than a flash of partially-rendered state.
+
 ## [1.4.55] - 2026-06-12
 
 ### Fixed

@@ -900,6 +900,33 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
 .mobile-ctx-reaction-names { color: var(--text-dim); font-size: 0.9rem; }
 .mobile-ctx-no-reactions { color: var(--text-faint); font-size: 0.9rem; padding: 0.8rem 0 0; margin: 0; }
 
+/* --- initial loading screen --- */
+#loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  transition: opacity 0.3s ease;
+}
+#loading-screen.done { opacity: 0; pointer-events: none; }
+.loading-dots { display: flex; gap: 10px; align-items: center; }
+.loading-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  animation: loading-dot 1.4s ease-in-out infinite;
+}
+.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes loading-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
+  30% { opacity: 0.85; transform: translateY(-5px); }
+}
+
 @media (max-width: 720px) {
   /* The conversation takes the whole screen; the sidebar (channels/DMs/profile)
      and members panel become slide-in drawers from the left and right. */

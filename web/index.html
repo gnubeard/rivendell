@@ -448,6 +448,11 @@
   <!-- Ping toasts: brief top-of-screen alerts when a ping arrives while the tab is focused. -->
   <div id="ping-toasts" class="ping-toasts"></div>
 
+  <!-- LOADING SCREEN — covers the app shell while enterApp() seeds state and loads the first channel. -->
+  <div id="loading-screen" aria-hidden="true">
+    <div class="loading-dots"><span></span><span></span><span></span></div>
+  </div>
+
   <script type="module" src="/static/app.js?v=__RIVENDELL_VERSION__"></script>
 </body>
 </html>

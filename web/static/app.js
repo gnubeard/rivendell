@@ -250,6 +250,10 @@ function show(view) {
   for (const v of document.querySelectorAll("[data-view]")) {
     v.hidden = v.dataset.view !== view;
   }
+  // Auth views are never preceded by a loading phase — clear the overlay now so
+  // it doesn't hide the login/signup form. The app view keeps the overlay until
+  // enterApp() finishes its async work and calls dismissLoadingScreen() itself.
+  if (view !== "app") dismissLoadingScreen();
 }
 
 // --- mobile viewport height ----------------------------------------------
@@ -610,6 +614,10 @@ async function enterApp() {
     await loadChannel(state.activeChannelId);
     markActiveChannelRead();
   }
+  // Warm any images already rendered in the active channel, then fade out the
+  // loading screen so the first visible frame has content fully painted.
+  await warmViewportImages();
+  dismissLoadingScreen();
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
   initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
@@ -4941,6 +4949,32 @@ function preloadAvatars() {
     img.decoding = "async";
     img.src = url;
   }
+}
+
+// warmViewportImages prefetches images rendered in the active message list so
+// they're decoded before the loading screen is dismissed. Images with
+// loading="lazy" may not have started fetching yet (the overlay occludes layout
+// intersection), so we probe each src explicitly via new Image() to bypass lazy.
+// A 1.5 s timeout caps the wait so a slow CDN never pins the loading screen.
+async function warmViewportImages() {
+  const wrap = document.getElementById("message-list");
+  if (!wrap) return;
+  const pending = [...wrap.querySelectorAll("img[src]")]
+    .filter(img => !img.complete || !img.naturalWidth)
+    .map(img => {
+      const probe = new Image();
+      probe.src = img.src;
+      return new Promise(resolve => { probe.onload = resolve; probe.onerror = resolve; });
+    });
+  if (!pending.length) return;
+  await Promise.race([Promise.all(pending), new Promise(r => setTimeout(r, 1500))]);
+}
+
+function dismissLoadingScreen() {
+  const el = document.getElementById("loading-screen");
+  if (!el) return;
+  el.classList.add("done");
+  el.addEventListener("transitionend", () => { el.hidden = true; }, { once: true });
 }
 
 // --- voice calling -------------------------------------------------------
