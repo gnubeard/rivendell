@@ -8,7 +8,7 @@ with a vanilla-JS web client and no frontend dependencies.
 - **Frontend:** Vanilla JS, no framework, no bundler, no npm packages
 - **Database:** PostgreSQL, embedded migrations, no migration tool dependency
 
-![Rivendell chat UI](docs/screenshot.png)
+![rivendell chat UI](docs/screenshot.png)
 
 ---
 
@@ -26,7 +26,7 @@ with a vanilla-JS web client and no frontend dependencies.
 - Message permalinks — every timestamp links to that point in history
 - Voice channels and 1:1 voice calls — P2P WebRTC mesh, no media server (STUN/TURN configurable)
 - Image and file uploads — content-addressed blob store, paste/drop/attach, inline rendering
-- Inline markdown links and image embeds, with link previews for select hosts
+- Inline markdown links and image embeds; same-origin message permalinks and YouTube embeds
 - Avatars (PNG, JPEG, WebP, GIF) and per-user UI themes
 - Bot accounts with permanent Bearer tokens for scripting against the API
 - Magic-link onboarding — no email server required; admins mint single-use links
@@ -162,24 +162,29 @@ make test-go
 
 ## Nginx deployment
 
-Two things are required for WebSocket support:
+The `$connection_upgrade` map lets a single location block handle both HTTP and WebSocket
+connections — `Connection` resolves to `upgrade` for WebSocket and `close` for plain HTTP.
+No separate location block is needed.
 
 ```nginx
-server {
-    listen 443 ssl;
-    server_name chat.example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
+http {
+    # Makes Connection header dynamic: "upgrade" for WS, "close" for HTTP.
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
     }
 
-    # WebSocket — must be a separate location block.
-    location /api/ws {
-        proxy_pass         http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade    $http_upgrade;
-        proxy_set_header   Connection "upgrade";
-        proxy_read_timeout 3600s;
+    server {
+        listen 443 ssl;
+        server_name chat.example.com;
+
+        location / {
+            proxy_pass         http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header   Upgrade    $http_upgrade;
+            proxy_set_header   Connection $connection_upgrade;
+            proxy_read_timeout 3600s;
+        }
     }
 }
 ```
@@ -216,7 +221,8 @@ web/manifest.json             PWA manifest (installability; iOS push needs insta
 web/test/                     format.test.js, state.test.js, voice.test.js,
                               secret.test.js, notify.test.js, reactions.test.js,
                               ws.test.js (node:test)
-docs/                         otr.md, voice.md, video.md, web_push.md, design.md
+docs/                         otr.md, voice.md, video.md, web_push.md, design.md,
+                              composer-paste-qa.md
 ```
 
 Module path `rivendell`; Go 1.26. Imports are `rivendell/internal/...`.
