@@ -2844,6 +2844,7 @@ function wireComposer() {
     for (const node of input.querySelectorAll("img")) {
       const src = node.getAttribute("src") || "";
       const scheme = (src.split(":")[0] || "").toLowerCase();
+      if (scheme !== "data" && scheme !== "blob") node.src = ""; // cancel any pending browser load
       node.remove(); // remove first; harvest proceeds from the captured src
       if (secretActive()) continue; // images never enter a secret session
       if (scheme === "data") {
@@ -3140,7 +3141,7 @@ function wireComposer() {
         if (secretActive()) return; // images never enter a secret session
         // A non-editable div still receives drop events (unlike a disabled
         // textarea, which the browser inerts) — honor the lockout here too.
-        if (composerEl.disabled) return;
+        if (input.disabled) return;
         for (const file of files) uploadAndInsert(file);
       }
     });

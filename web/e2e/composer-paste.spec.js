@@ -165,7 +165,15 @@ test("channel 3: natively-inserted data: <img> is stripped and staged byte-ident
 
 test("channel 3: remote-src <img> is stripped, nothing staged, nothing fetched", async () => {
   const requested = [];
-  const onReq = (req) => { if (req.url().includes("composer-smuggle")) requested.push(req.url()); };
+  // Only capture JS-initiated requests (fetch/xhr) — the invariant is that OUR
+  // code never fetches it. A browser-initiated img load (resourceType "image")
+  // may fire before our input handler removes the node; that's not our fetch.
+  const onReq = (req) => {
+    if (req.url().includes("composer-smuggle") &&
+        (req.resourceType() === "fetch" || req.resourceType() === "xhr")) {
+      requested.push(req.url());
+    }
+  };
   page.on("request", onReq);
   await page.evaluate(() => {
     const el = document.querySelector("#composer-input");
@@ -176,9 +184,7 @@ test("channel 3: remote-src <img> is stripped, nothing staged, nothing fetched",
   await expect(tiles()).toHaveCount(0);
   await page.waitForTimeout(300); // give a hypothetical fetch a beat to appear
   page.off("request", onReq);
-  // The <img> may have begun loading before removal (browser-initiated, not
-  // ours) — the invariant is that OUR code never fetches it. Filter to fetch/xhr.
-  expect(requested.filter((u) => u.startsWith("http")).length).toBe(0);
+  expect(requested.length).toBe(0);
 });
 
 test("typing, Shift+Enter newlines, and Enter-to-send round-trip through the facade", async () => {
