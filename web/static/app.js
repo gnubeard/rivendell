@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -1562,9 +1562,15 @@ async function selectChannel(id) {
   const composerInput = $("#composer-input");
   composerInput.value = channelDrafts.get(id) || "";
   restoreComposerUploads(id);
-  composerInput.style.height = "auto";
-  composerInput.style.height = composerInput.scrollHeight + "px";
-  if (!window.matchMedia("(hover: none)").matches) composerInput.focus();
+  // (No JS sizing: the contenteditable composer auto-grows between its CSS
+  // min/max-height.)
+  if (!window.matchMedia("(hover: none)").matches) {
+    composerInput.focus();
+    // Caret after the restored draft — the old textarea's .value setter left
+    // it there; a freshly-focused contenteditable starts at offset 0.
+    const len = composerInput.value.length;
+    composerInput.setSelectionRange(len, len);
+  }
   // Persist the read cursor server-side using the newest loaded message.
   markActiveChannelRead();
 }
@@ -2182,7 +2188,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   if (attachBtn) attachBtn.hidden = inSecretView;
   // Reset the composer if we're not in a secret view (e.g. switching channels).
   if (!inSecretView) {
-    const inp = $("#compose-input");
+    const inp = $("#composer-input");
     if (inp && inp.disabled) { inp.disabled = false; inp.placeholder = "Message…"; }
   }
 
@@ -2226,12 +2232,12 @@ function renderMessages(forceBottom = false, holdPosition = false) {
             clearEndedSession(state.activeChannelId);
             renderMessages(true);
             renderChannelHeader(state.channels[state.activeChannelId]);
-            const inp = $("#compose-input");
+            const inp = $("#composer-input");
             if (inp) { inp.disabled = false; inp.placeholder = "Message…"; }
           },
         }, "Return to chat")));
     }
-    const inp = $("#compose-input");
+    const inp = $("#composer-input");
     if (inp) {
       inp.disabled = secretSess.phase === "ended";
       inp.placeholder = secretSess.phase === "ended" ? "Session ended" : "Message…";
@@ -2478,12 +2484,14 @@ function cancelReply() {
 
 // --- composer + message actions -----------------------------------------
 
-// attachAutocomplete wires @-mention / :emoji inline completion onto a textarea
-// and its own popup <ul>. The composer and every inline edit box share this
-// logic, each with its own popup element. Returns { handleKeydown }: the host's
-// keydown handler must defer to handleKeydown first — it returns true when an
-// open completion consumed the key (arrows navigate, Tab/Enter pick, Esc
-// dismiss), so Enter only "sends"/"saves" when no completion is showing.
+// attachAutocomplete wires @-mention / :emoji inline completion onto a
+// textarea-like field (the inline edit <textarea>s, or the composer div via
+// its upgradeComposerField facade) and its own popup <ul>. The composer and
+// every inline edit box share this logic, each with its own popup element.
+// Returns { handleKeydown }: the host's keydown handler must defer to
+// handleKeydown first — it returns true when an open completion consumed the
+// key (arrows navigate, Tab/Enter pick, Esc dismiss), so Enter only
+// "sends"/"saves" when no completion is showing.
 function attachAutocomplete(input, popup) {
   // Unified autocomplete state. `kind` is "mention" (@-trigger, items are user
   // objects) or "emoji" (:-trigger, items are { code, glyph? }); both share this
@@ -2684,8 +2692,129 @@ function attachAutocomplete(input, popup) {
   };
 }
 
+// --- contenteditable composer: textarea facade ---------------------------
+
+// The composer is a contenteditable="plaintext-only" <div>, not a <textarea>:
+// GeckoView (Firefox for Android) never delivers image clipboard content to a
+// textarea through any mechanism — no DOM event, no long-press paste for
+// image-only clips, and Gboard refuses outright because the field's input
+// connection doesn't advertise image MIME types. A plaintext-only editable
+// region receives image pastes (see the three channels in wireComposer).
+//
+// Everything else in this file — drafts, the shared autocomplete, emoji
+// insertion, the URL-wrap paste, the Enter/ArrowUp handlers — was written
+// against textarea semantics (.value / .selectionStart / .setSelectionRange).
+// upgradeComposerField grafts those exact properties onto the div so none of
+// those callers change. The content model is deliberately flat: text nodes
+// plus <br> (counted as "\n"); the composer's input handler strips anything
+// richer, so the offset math below stays exact.
+function upgradeComposerField(el) {
+  // Feature-detect: engines that predate contenteditable="plaintext-only"
+  // treat the unknown value as invalid and leave the element non-editable —
+  // a bricked composer. Fall back to full contenteditable there; the input
+  // handler's normalize pass keeps the content effectively plain.
+  if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
+  // Remembered so the `disabled` setter can restore the right mode (the
+  // feature-detect above may have downgraded plaintext-only → true).
+  const editableMode = el.contentEditable;
+
+  // The single definition of "the text": flat walk, <br> → "\n". (innerText
+  // is rendering-dependent and can't be reconciled with selection offsets;
+  // textContent drops <br> newlines entirely.)
+  const textOf = (root) => {
+    let out = "";
+    (function walk(n) {
+      for (const c of n.childNodes) {
+        if (c.nodeType === Node.TEXT_NODE) out += c.data;
+        else if (c.nodeName === "BR") out += "\n";
+        else walk(c); // fallback-mode rich nodes contribute their text
+      }
+    })(root);
+    return out;
+  };
+
+  // offsetOf: text offset of a DOM position, measured by cloning the range
+  // from the field start so <br>s in between count as one character each.
+  const offsetOf = (node, nodeOffset) => {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    try { r.setEnd(node, nodeOffset); } catch { return textOf(el).length; }
+    return textOf(r.cloneContents()).length;
+  };
+
+  // pointAt: inverse of offsetOf — the (node, offset) DOM position for a text
+  // offset, clamped to the end of the field.
+  const pointAt = (target) => {
+    let rem = target;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (n.nodeType === Node.TEXT_NODE) {
+        if (rem <= n.data.length) return { node: n, offset: rem };
+        rem -= n.data.length;
+      } else if (n.nodeName === "BR") {
+        if (rem <= 0) return { node: n.parentNode, offset: [...n.parentNode.childNodes].indexOf(n) };
+        rem -= 1;
+      }
+    }
+    return { node: el, offset: el.childNodes.length };
+  };
+
+  const selOffset = (which) => {
+    const s = el.ownerDocument.getSelection();
+    if (!s || !s.rangeCount) return textOf(el).length; // unfocused → "end", like an untouched textarea caret
+    const r = s.getRangeAt(0);
+    const node = which === "start" ? r.startContainer : r.endContainer;
+    if (!el.contains(node)) return textOf(el).length;
+    return offsetOf(node, which === "start" ? r.startOffset : r.endOffset);
+  };
+
+  el.setSelectionRange = (start, end) => {
+    const s = el.ownerDocument.getSelection();
+    if (!s) return;
+    const a = pointAt(start);
+    const b = end === start ? a : pointAt(end);
+    const r = document.createRange();
+    r.setStart(a.node, a.offset);
+    r.setEnd(b.node, b.offset);
+    s.removeAllRanges();
+    s.addRange(r);
+  };
+
+  Object.defineProperties(el, {
+    value: {
+      get() { return textOf(el); },
+      set(v) {
+        el.textContent = v; // white-space: pre-wrap renders the \n's
+        // A textarea's .value setter leaves the caret after the text; mirror
+        // that when the field is focused so callers that set-then-type work.
+        if (document.activeElement === el) el.setSelectionRange(v.length, v.length);
+      },
+    },
+    selectionStart: { get() { return selOffset("start"); } },
+    selectionEnd: { get() { return selOffset("end"); } },
+    // Textarea-vocabulary disable/placeholder, so call sites (the secret-
+    // session ended lockout) need not know this is a div. `disabled` maps to
+    // contentEditable=false + aria-disabled + a .disabled class for styling;
+    // `placeholder` maps to the data-ph attribute the :empty::before CSS
+    // placeholder reads from.
+    disabled: {
+      get() { return el.contentEditable === "false"; },
+      set(v) {
+        el.contentEditable = v ? "false" : editableMode;
+        el.setAttribute("aria-disabled", v ? "true" : "false");
+        el.classList.toggle("disabled", !!v);
+      },
+    },
+    placeholder: {
+      get() { return el.dataset.ph || ""; },
+      set(v) { el.dataset.ph = v; },
+    },
+  });
+}
+
 function wireComposer() {
   const input = $("#composer-input");
+  upgradeComposerField(input); // before anything reads .value / .selectionStart
   const popup = $("#mention-popup");
   // @-mention / :emoji inline completion, shared with the inline edit boxes.
   // The composer's keydown defers to ac.handleKeydown before its own send logic.
@@ -2693,11 +2822,49 @@ function wireComposer() {
   const TYPING_INTERVAL_MS = 1500;
   let lastTypingSent = 0;
 
-  const autoGrow = () => resizeComposerInput();
-  autoGrow(); // size the input correctly for any value the browser may have restored
+  // True while the open channel is an active OTR secret session. Images are
+  // never sent in one, so every paste channel suppresses them silently.
+  const secretActive = () => {
+    const ch = state.channels[state.activeChannelId];
+    const sess = ch && ch.is_dm ? getSession(state.activeChannelId) : null;
+    return !!(sess && sess.phase === "active");
+  };
 
   input.addEventListener("input", () => {
-    autoGrow();
+    // Channel 3 of the image-paste harvest (channels 1 and 2 are the paste and
+    // beforeinput handlers below): the browser natively inserted the pasted
+    // image as an <img> node while every event carried empty data. Capture the
+    // src, strip the node, and decode data: URIs into Files ourselves.
+    //
+    // Channel 3 depends on Gecko inserting rich content into a
+    // plaintext-only field, which is a spec violation observed on
+    // FF Android 151 (2026-06-11). If Mozilla fixes it, traffic should
+    // shift to channel 2 (beforeinput files) or this flavor regresses
+    // upstream; either way this handler degrades to a no-op. Do not
+    // "simplify" by removing channels 1 or 2.
+    for (const node of input.querySelectorAll("img")) {
+      const src = node.getAttribute("src") || "";
+      const scheme = (src.split(":")[0] || "").toLowerCase();
+      if (scheme !== "data" && scheme !== "blob") node.src = ""; // cancel any pending browser load
+      node.remove(); // remove first; harvest proceeds from the captured src
+      if (secretActive()) continue; // images never enter a secret session
+      if (scheme === "data") {
+        try { uploadAndInsert(dataUriToFile(src)); }
+        catch (err) { console.warn("composer: undecodable pasted data: image", err); }
+      } else if (scheme === "blob") {
+        canvasRecover(src);
+      }
+      // Any other scheme: stripped above, never fetched.
+    }
+    // Legacy fallback only (plaintext-only unsupported → full contenteditable):
+    // flatten any other element a rich paste smuggled in to its text.
+    for (const n of [...input.children]) {
+      if (n.nodeName !== "BR") n.replaceWith(document.createTextNode(n.textContent));
+    }
+    // Emptying a plaintext-only field can strand a lone <br>, which defeats
+    // :empty (and with it the placeholder); normalize it away.
+    if (input.innerHTML === "<br>" || input.textContent === "\n") input.innerHTML = "";
+
     if (state.activeChannelId && input.value.trim()) {
       const now = Date.now();
       if (now - lastTypingSent >= TYPING_INTERVAL_MS) {
@@ -2708,7 +2875,7 @@ function wireComposer() {
   });
 
   // --- pending image attachments ----------------------------------------
-  // Uploads are modeled as attachment tiles in a tray above the textarea rather
+  // Uploads are modeled as attachment tiles in a tray above the composer rather
   // than as a cryptic text placeholder in the composer. Each pending upload is
   // { id, objectUrl, status: "uploading"|"done", markdown }. While anything is
   // still uploading, send is blocked (see the Enter handler). On send, the
@@ -2817,17 +2984,17 @@ function wireComposer() {
     renderAttachments();
   }
 
-  // Paste handler: intercept image files from the clipboard (e.g. a screenshot),
-  // then fall through to the existing URL-wrap logic for plain-text URL pastes.
+  // Channel 1: image files on the paste event's clipboardData — the desktop
+  // path. preventDefault cancels the native insertion, so channels 2 and 3
+  // structurally cannot double-stage the same paste. Plain-text pastes fall
+  // through to the URL-wrap logic below.
   input.addEventListener("paste", async (e) => {
     const items = Array.from((e.clipboardData || window.clipboardData)?.items || []);
     const imageItems = items.filter((i) => i.kind === "file" && i.type.startsWith("image/"));
     if (imageItems.length) {
-      // Images can't be sent in a secret session — suppress silently.
-      const activeCh = state.channels[state.activeChannelId];
-      const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
-      if (secretSess && secretSess.phase === "active") { e.preventDefault(); return; }
       e.preventDefault();
+      // Images can't be sent in a secret session — suppress silently.
+      if (secretActive()) return;
       for (const it of imageItems) {
         const file = it.getAsFile();
         if (file) uploadAndInsert(file);
@@ -2846,10 +3013,44 @@ function wireComposer() {
     input.value = input.value.slice(0, start) + md + input.value.slice(end);
     const caret = start + md.length;
     input.setSelectionRange(caret, caret);
-    autoGrow();
   });
 
+  // Channel 2: Firefox on Android delivers some clipboard flavors (e.g.
+  // screenshot-copy PNGs) not on the paste event but on beforeinput, as
+  // e.dataTransfer.files. preventDefault cancels the native insertion, so
+  // channel 3 never sees this paste.
+  input.addEventListener("beforeinput", (e) => {
+    if (e.inputType !== "insertFromPaste") return;
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => /^image\//.test(f.type));
+    if (!files.length) return;
+    e.preventDefault();
+    if (secretActive()) return; // suppress, matching channel 1
+    files.forEach(uploadAndInsert);
+  });
+
+  // canvasRecover: a natively-inserted blob: <img> (channel 3) can't be read
+  // back without the network stack, so round-trip it through a canvas. Lossy
+  // (re-encodes to PNG), but observed Gecko behavior only ever inserts data:
+  // URIs — this is belt-and-braces for the blob: case.
+  function canvasRecover(src) {
+    const probe = new Image();
+    probe.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = probe.naturalWidth;
+      c.height = probe.naturalHeight;
+      c.getContext("2d").drawImage(probe, 0, 0);
+      c.toBlob((blob) => {
+        if (blob) uploadAndInsert(new File([blob], "pasted.png", { type: blob.type }));
+      }, "image/png");
+    };
+    probe.src = src;
+  }
+
   input.onkeydown = async (e) => {
+    // Locked composer (ended secret session): contentEditable=false already
+    // makes the div unfocusable, so this shouldn't fire — but a stale focus
+    // or synthetic event mustn't send into a locked field.
+    if (input.disabled) return;
     if (ac.handleKeydown(e)) return;
     // Esc on the composer cancels a pending reply (when no autocomplete is open).
     if (e.key === "Escape" && replyingToId != null && popup.hidden) {
@@ -2864,7 +3065,10 @@ function wireComposer() {
       const own = msgs.filter((m) => m.user_id === state.me.id && !m.deleted_at);
       if (own.length) { e.preventDefault(); startEdit(own[own.length - 1]); }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    // !isComposing: Enter during IME composition (Gboard, CJK input) commits
+    // the composition, it must not send — contenteditable surfaces this where
+    // the old textarea path happened to mask it.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       if (uploadsPending()) return; // an image is still uploading — don't send a half-baked message
       const text = input.value;
@@ -2875,13 +3079,11 @@ function wireComposer() {
         if (!text.trim()) return;
         input.value = "";
         lastTypingSent = 0;
-        autoGrow();
         try {
           await sendSecretMessage(state.activeChannelId, text.trim());
           renderMessages(false);
         } catch (ex) {
           input.value = text;
-          autoGrow();
           alert("Secret message failed: " + ex.message);
         }
         return;
@@ -2892,9 +3094,8 @@ function wireComposer() {
       // is enough to send.
       const content = [text.trim() ? text : "", ...done.map((u) => u.spoiler ? `||${u.markdown}||` : u.markdown)].filter(Boolean).join("\n");
       if (!content.trim()) return;
-      input.value = "";
+      input.value = ""; // the div collapses back to a single line on its own
       lastTypingSent = 0; // allow next keystroke to fire a fresh typing frame immediately
-      autoGrow(); // collapse back to a single line after sending
       const sent = pendingUploads;
       pendingUploads = [];
       renderAttachments();
@@ -2910,7 +3111,6 @@ function wireComposer() {
         renderAttachments();
         replyingToId = replyId; // restore the reply context too
         renderReplyBanner();
-        autoGrow(); // restore the box to fit the put-back text
         alert(ex.message);
       }
     }
@@ -2938,10 +3138,11 @@ function wireComposer() {
     composerEl.addEventListener("drop", (e) => {
       const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
       if (files.length) {
-        const activeCh = state.channels[state.activeChannelId];
-        const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
-        if (secretSess && secretSess.phase === "active") { e.preventDefault(); return; }
         e.preventDefault();
+        if (secretActive()) return; // images never enter a secret session
+        // A non-editable div still receives drop events (unlike a disabled
+        // textarea, which the browser inerts) — honor the lockout here too.
+        if (input.disabled) return;
         for (const file of files) uploadAndInsert(file);
       }
     });
@@ -3074,9 +3275,10 @@ function toggleEmojiPicker() {
   }
 }
 
-// insertIntoInput drops a token at the caret of a textarea, padded with spaces so
+// insertIntoInput drops a token at the caret of a textarea-like field (inline
+// edit box or the composer div), padded with spaces so
 // it reads as a standalone token, then fires a synthetic input event so the
-// target's autosize (and the composer's typing) logic runs as if it were typed.
+// target's autosize/typing logic runs as if it were typed.
 function insertIntoInput(input, token) {
   if (!input) return;
   const start = input.selectionStart ?? input.value.length;
@@ -3092,24 +3294,6 @@ function insertIntoInput(input, token) {
   input.dispatchEvent(new Event("input"));
 }
 
-// resizeComposerInput sizes the main composer textarea to fit its content.
-// Module-level (not just a wireComposer closure) so it can be re-run when the
-// composer is revealed after being display:none'd — e.g. ending a mobile video
-// call, which sets body.video-active to hide the composer. Sizing a hidden
-// textarea reads scrollHeight 0 and would write height:0px, leaving the box
-// "crushed" to a sliver once it reappears; the offsetParent guard skips that.
-function resizeComposerInput() {
-  const input = $("#composer-input");
-  if (!input || input.offsetParent === null) return; // not laid out → don't crush it
-  input.style.height = "auto";
-  // box-sizing is border-box, but scrollHeight is content+padding only (no
-  // border). Setting height = scrollHeight would leave the content box short
-  // by the vertical border, so the cursor scrolls into that 2px of slack —
-  // the "jiggle". Add the border back (offsetHeight − clientHeight) so the
-  // box fits the text exactly.
-  input.style.height = input.scrollHeight + (input.offsetHeight - input.clientHeight) + "px";
-}
-
 // autoGrowEdit sizes the inline-edit textarea to its content (capped by CSS).
 function autoGrowEdit(ta) {
   // Save and restore the message-list scroll position: setting height="auto"
@@ -3120,7 +3304,7 @@ function autoGrowEdit(ta) {
   ta.style.height = "auto";
   // Add the vertical border back: scrollHeight is content+padding only, and the
   // box is border-box, so height = scrollHeight would under-size by the border
-  // and the cursor would scroll into the slack (see autoGrow in wireComposer).
+  // and the cursor would scroll into the slack.
   ta.style.height = ta.scrollHeight + (ta.offsetHeight - ta.clientHeight) + "px";
   if (list && savedTop !== null) list.scrollTop = savedTop;
 }
@@ -5593,13 +5777,11 @@ function onSpeaking(userId, speaking) {
 }
 
 // setVideoActive toggles body.video-active (which hides the composer/message list
-// behind the video grid). When the class clears, the composer goes from
-// display:none back to visible, so re-size its textarea — any autosize that ran
-// while it was hidden left a bogus height:0px that would render it crushed.
+// behind the video grid). The composer needs no re-size on reveal: it's a
+// contenteditable div that sizes itself from content (the old textarea needed
+// a JS autosize pass here to undo a height:0px written while it was hidden).
 function setVideoActive(on) {
-  const was = document.body.classList.contains("video-active");
   document.body.classList.toggle("video-active", on);
-  if (was && !on) resizeComposerInput();
 }
 
 // appendFullscreenButton adds the corner ⛶ control that toggles fullscreen on

@@ -178,7 +178,7 @@ input, textarea, select { font-family: inherit; font-size: 14px; }
 .brand.small { font-size: 1.1rem; }
 .tagline { color: var(--text-dim); margin: 0.2rem 0 1.6rem; font-size: 0.9rem; }
 form label { display: block; margin-bottom: 0.9rem; color: var(--text-dim); font-size: 0.8rem; }
-form input, form textarea, form select, .composer textarea, .admin-create input, .admin-create select, .status-select {
+form input, form textarea, form select, #composer-input, .admin-create input, .admin-create select, .status-select {
   width: 100%;
   margin-top: 0.3rem;
   padding: 0.55rem 0.65rem;
@@ -188,7 +188,7 @@ form input, form textarea, form select, .composer textarea, .admin-create input,
   color: var(--text);
 }
 form textarea { resize: vertical; line-height: 1.4; }
-form input:focus, form textarea:focus, form select:focus, .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
+form input:focus, form textarea:focus, form select:focus, #composer-input:focus { outline: none; border-color: var(--accent-dim); }
 /* Native file inputs ship an unstyled "Browse..." button — theme it to match
    the rest of the form so it doesn't render as a bare system button. */
 input[type="file"] { padding: 0.35rem 0.5rem; }
@@ -483,19 +483,43 @@ a.channel-link:hover { background: rgba(110, 168, 254, 0.25); text-decoration: u
 .composer-reply-snippet { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
 .composer-reply-cancel { margin-left: auto; background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 0.9rem; padding: 0 0.2rem; line-height: 1; }
 .composer-reply-cancel:hover { color: var(--text); }
-/* Integer line-height + integer vertical padding so the auto-grown height
-   (height = scrollHeight, an integer) fits the text exactly — fractional values
-   (0.55rem ≈ 8.25px, 1.4×14px = 19.6px) leave 1–2px of sub-pixel slack that the
-   cursor scrolls into at the top/bottom endstops (the visible "jiggle"). */
-.composer textarea { resize: none; max-height: 180px; line-height: 20px; padding-top: 8px; padding-bottom: 8px; padding-right: 4.5rem; }
-/* The emoji + attach buttons sit on the textarea's bottom-right (Enter sends, so
+/* The composer is a contenteditable div (image paste — see index.html). It
+   auto-grows as a normal block between min/max-height; no JS sizing. Integer
+   line-height + integer vertical padding keep heights whole-pixel so the caret
+   never scrolls into sub-pixel slack (the old textarea "jiggle"). */
+#composer-input {
+  position: relative;            /* anchors the :empty placeholder below */
+  min-height: 38px;              /* single line: 20px text + 16px padding + 2px border */
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;         /* don't collapse spaces/newlines */
+  overflow-wrap: anywhere;       /* long unbroken tokens wrap, not overflow */
+  cursor: text;
+  line-height: 20px; padding-top: 8px; padding-bottom: 8px; padding-right: 4.5rem;
+}
+/* contenteditable has no placeholder attribute; paint data-ph when empty.
+   position:absolute keeps it out of flow so the caret sits at the true start
+   (in flow it would push the caret/typed text rightward). */
+#composer-input:empty::before {
+  content: attr(data-ph);
+  position: absolute;
+  pointer-events: none;
+  color: var(--text-faint);
+}
+/* Locked state (ended secret session) — the facade's `disabled` setter
+   toggles this class; :disabled can't match a contenteditable div. */
+#composer-input.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* The emoji + attach buttons sit on the composer's bottom-right (Enter sends, so
    the right edge is otherwise unused); the picker pops above like the mentions.
    Two buttons, so they're laid out side by side — emoji rightmost, attach to its
-   left — and the textarea's right padding clears both. */
+   left — and the composer's right padding clears both. */
 .emoji-btn { position: absolute; right: 1.5rem; bottom: 1.15rem; width: 30px; height: 30px; padding: 0; border: none; background: transparent; cursor: pointer; font-size: 1.1rem; line-height: 1; opacity: 0.65; }
 #attach-btn { right: 3.4rem; }
 .emoji-btn:hover { opacity: 1; }
-/* Pending-upload tray: image previews sit above the textarea. Each tile shows the
+/* Pending-upload tray: image previews sit above the composer. Each tile shows the
    image with an X to remove; a spinner overlays it until the upload resolves. */
 .composer-attachments { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0 0 0.55rem; }
 .attachment { position: relative; width: 72px; height: 72px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--bg-3); cursor: pointer; }
