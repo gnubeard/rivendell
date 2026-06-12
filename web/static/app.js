@@ -618,6 +618,7 @@ async function enterApp() {
   // loading screen so the first visible frame has content fully painted.
   await warmViewportImages();
   dismissLoadingScreen();
+  startBackgroundImageWarm(); // fire-and-forget; warms blob images across all channels
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
   initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
@@ -1558,6 +1559,7 @@ async function selectChannel(id) {
   renderVideoGrid();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
+  startBackgroundImageWarm(); // reprioritizes from the new active channel outward
   // Restore any saved draft and attachments for this channel.
   const composerInput = $("#composer-input");
   composerInput.value = channelDrafts.get(id) || "";
@@ -5152,6 +5154,59 @@ async function warmViewportImages() {
     });
   if (!pending.length) return;
   await Promise.race([Promise.all(pending), new Promise(r => setTimeout(r, 1500))]);
+}
+
+// WARM_IMAGES_PER_CHANNEL caps how many blob images are prefetched per channel
+// in the background sweep. 5 covers what's visible in roughly two viewports.
+const WARM_IMAGES_PER_CHANNEL = 5;
+
+// warmGen is incremented each time startBackgroundImageWarm is called. In-flight
+// sweeps compare against it and abort when the value diverges (channel switched).
+let warmGen = 0;
+
+// extractBlobUrls pulls up to `limit` /api/blobs/ paths from a messages array,
+// walking newest-first as returned by the API.
+function extractBlobUrls(messages, limit) {
+  const re = /!\[[^\]\n]*\]\((\/api\/blobs\/[a-f0-9]{64})\)/g;
+  const urls = [];
+  for (const msg of messages) {
+    if (urls.length >= limit) break;
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(msg.content)) !== null) {
+      urls.push(m[1]);
+      if (urls.length >= limit) break;
+    }
+  }
+  return urls;
+}
+
+// startBackgroundImageWarm walks every channel in sidebar order (skipping the
+// active one, already warmed by warmViewportImages), fetches up to 20 recent
+// messages if not cached, then warms up to WARM_IMAGES_PER_CHANNEL blob images
+// per channel one at a time. Calling it again increments warmGen, which causes
+// any in-flight sweep to abort — so channel switches naturally reprioritize.
+async function startBackgroundImageWarm() {
+  const gen = ++warmGen;
+  for (const channelId of sidebarChannelOrder()) {
+    if (gen !== warmGen) return;
+    if (channelId === state.activeChannelId) continue;
+    let msgs = state.messages[channelId];
+    if (!msgs) {
+      try { msgs = await api.messages(channelId, { limit: 20 }); }
+      catch { continue; }
+      if (gen !== warmGen) return;
+    }
+    for (const url of extractBlobUrls(msgs, WARM_IMAGES_PER_CHANNEL)) {
+      if (gen !== warmGen) return;
+      await new Promise(resolve => {
+        const img = new Image();
+        img.onload = resolve;
+        img.onerror = resolve;
+        img.src = url;
+      });
+    }
+  }
 }
 
 function dismissLoadingScreen() {
