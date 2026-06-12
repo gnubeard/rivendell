@@ -3,7 +3,7 @@
 All user-visible changes to Rivendell are documented here.
 Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
-## [Unreleased]
+## [1.4.57] - 2026-06-12
 
 ### Added
 - Image paste now works in the message composer on Firefox for Android (screenshot-copy, browser "Copy image", and Gboard clipboard-history flavors). Pasted images stage as attachments through the same upload path as the attach button.

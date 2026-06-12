@@ -2486,11 +2486,12 @@ function cancelReply() {
 
 // attachAutocomplete wires @-mention / :emoji inline completion onto a
 // textarea-like field (the inline edit <textarea>s, or the composer div via
-// its upgradeComposerField facade) and its own popup <ul>. The composer and every inline edit box share this
-// logic, each with its own popup element. Returns { handleKeydown }: the host's
-// keydown handler must defer to handleKeydown first — it returns true when an
-// open completion consumed the key (arrows navigate, Tab/Enter pick, Esc
-// dismiss), so Enter only "sends"/"saves" when no completion is showing.
+// its upgradeComposerField facade) and its own popup <ul>. The composer and
+// every inline edit box share this logic, each with its own popup element.
+// Returns { handleKeydown }: the host's keydown handler must defer to
+// handleKeydown first — it returns true when an open completion consumed the
+// key (arrows navigate, Tab/Enter pick, Esc dismiss), so Enter only
+// "sends"/"saves" when no completion is showing.
 function attachAutocomplete(input, popup) {
   // Unified autocomplete state. `kind` is "mention" (@-trigger, items are user
   // objects) or "emoji" (:-trigger, items are { code, glyph? }); both share this
