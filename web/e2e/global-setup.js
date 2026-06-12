@@ -1,4 +1,4 @@
-// e2e/global-setup.js — boot a real Rivendell server and provision two users.
+// e2e/global-setup.js — boot a real rivendell server and provision two users.
 //
 // Everything here goes through the public surface (bootstrap log line, magic
 // link, invitation API) — no SQL access, no test-only backdoors in the server.

@@ -1,4 +1,4 @@
-// sw.js — Rivendell service worker.
+// sw.js — rivendell service worker.
 //
 // Single purpose: Web Push. It renders an incoming push as an OS notification
 // (so DMs and @-mentions arrive even when the app is fully closed) and routes a
@@ -109,7 +109,7 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     (async () => {
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      // Reuse an open Rivendell tab if there is one: focus it and tell the app
+      // Reuse an open rivendell tab if there is one: focus it and tell the app
       // where to navigate (it parses the permalink hash).
       for (const c of wins) {
         if ("focus" in c) {

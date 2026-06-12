@@ -1,6 +1,6 @@
 # Web Push — offline notifications design
 
-Target: a Rivendell tab that's been **closed** — laptop asleep, phone in a
+Target: a rivendell tab that's been **closed** — laptop asleep, phone in a
 pocket — still surfaces a DM or an @-mention as an OS notification, and tapping
 it opens straight to the message. This is the "full circle" from the foreground
 notifications we already ship (`notify.js`, which only fires while a tab is
@@ -40,7 +40,7 @@ they generate **no** push — there is nothing to leak.
 
 - Push payloads are encrypted end-to-end **to the browser's push subscription**
   (RFC 8291): the push service (Google/Mozilla/Apple) relays ciphertext it can't
-  read. But the *Rivendell server* composes the plaintext, exactly as it already
+  read. But the *rivendell server* composes the plaintext, exactly as it already
   does to store and broadcast the message. Push adds no new server-side exposure
   beyond what message storage already implies.
 - VAPID (RFC 8292) authenticates *us* to the push service and lets the service

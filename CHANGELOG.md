@@ -1,6 +1,6 @@
 # Changelog
 
-All user-visible changes to Rivendell are documented here.
+All user-visible changes to rivendell are documented here.
 Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [1.4.57] - 2026-06-12
