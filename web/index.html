@@ -170,7 +170,16 @@
         </div>
         <div id="composer-reply" class="composer-reply" hidden></div>
         <div id="composer-attachments" class="composer-attachments" hidden></div>
-        <textarea id="composer-input" rows="1" placeholder="Message…"></textarea>
+        <!-- A contenteditable div, not a <textarea>: GeckoView (Firefox for
+             Android) never delivers image clipboard content to a textarea
+             through any mechanism, while a plaintext-only editable region
+             receives it (see the paste channels in wireComposer, app.js).
+             upgradeComposerField() grafts .value/.selectionStart/
+             .setSelectionRange onto it so the rest of the client keeps
+             textarea semantics. -->
+        <div id="composer-input" contenteditable="plaintext-only" role="textbox"
+             aria-multiline="true" aria-label="Message" data-ph="Message…"
+             spellcheck="true" autocapitalize="sentences" autocorrect="on"></div>
         <input id="attach-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
         <button id="attach-btn" class="emoji-btn" type="button" title="Upload image" aria-label="Upload image">📎</button>
         <button id="emoji-btn" class="emoji-btn" type="button" title="Custom emoji" aria-label="Insert custom emoji">😀</button>

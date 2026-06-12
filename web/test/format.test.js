@@ -723,3 +723,47 @@ test("extractMessagePermalinkURL returns first match when multiple permalinks pr
   );
   assert.deepEqual(r, { url: "https://chat.example.com/#c1/m10", channelId: 1, messageId: 10 });
 });
+
+// --- dataUriToFile (composer channel-3 paste harvest) ---------------------
+
+import { dataUriToFile } from "../static/format.js";
+
+// 1×1 transparent PNG — the canonical tiny fixture.
+const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("dataUriToFile: base64 PNG decodes byte-identical", async () => {
+  const f = dataUriToFile("data:image/png;base64," + PNG_B64);
+  assert.equal(f.type, "image/png");
+  assert.equal(f.name, "pasted.png");
+  const got = Buffer.from(await f.arrayBuffer());
+  assert.ok(got.equals(Buffer.from(PNG_B64, "base64")), "decoded bytes must match the source exactly");
+});
+
+test("dataUriToFile: percent-encoded (non-base64) payload", async () => {
+  const f = dataUriToFile("data:text/plain,hello%20world");
+  assert.equal(f.type, "text/plain");
+  assert.equal(f.name, "pasted.bin"); // unknown-to-the-ext-map MIME falls back to .bin
+  assert.equal(Buffer.from(await f.arrayBuffer()).toString("utf8"), "hello world");
+});
+
+test("dataUriToFile: known MIME → extension mapping", () => {
+  assert.equal(dataUriToFile("data:image/jpeg;base64,").name, "pasted.jpg");
+  assert.equal(dataUriToFile("data:image/gif;base64,").name, "pasted.gif");
+  assert.equal(dataUriToFile("data:image/webp;base64,").name, "pasted.webp");
+});
+
+test("dataUriToFile: missing MIME defaults to octet-stream", () => {
+  const f = dataUriToFile("data:;base64," + Buffer.from("x").toString("base64"));
+  assert.equal(f.type, "application/octet-stream");
+});
+
+test("dataUriToFile: malformed URI (no comma) throws", () => {
+  assert.throws(() => dataUriToFile("data:image/png;base64"));
+  assert.throws(() => dataUriToFile("not a uri at all"));
+});
+
+test("dataUriToFile: base64 marker is case-insensitive", async () => {
+  const f = dataUriToFile("data:image/png;BASE64," + PNG_B64);
+  const got = Buffer.from(await f.arrayBuffer());
+  assert.ok(got.equals(Buffer.from(PNG_B64, "base64")));
+});

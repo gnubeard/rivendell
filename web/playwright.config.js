@@ -1,15 +1,18 @@
-// playwright.config.js — e2e suite for Rivendell's WebRTC call paths.
+// playwright.config.js — e2e suite for Rivendell's browser-only paths.
 //
 // Dev-only tooling: @playwright/test is the repo's single devDependency (the
 // frontend itself keeps zero runtime dependencies; Node remains test-runner
 // only). Browsers are a separate, large download (`npx playwright install
 // chromium`, ~1.5 GB with system deps) — see `make test-e2e`.
 //
-// The suite runs two real Chromium contexts against a real server binary with
-// fake capture devices, so it exercises the genuine RTCPeerConnection
-// signaling/negotiation path (the part unit tests can't reach): happy-path DM
-// video calls, mid-call renegotiation, and offer glare under Perfect
-// Negotiation.
+// The suite runs real Chromium contexts against a real server binary, covering
+// the parts unit tests can't reach:
+//   - WebRTC call paths (two contexts, fake capture devices): happy-path DM
+//     video calls, mid-call renegotiation, and offer glare under Perfect
+//     Negotiation.
+//   - Composer paste channels (contenteditable composer): synthetic
+//     ClipboardEvent/InputEvent/DOM-insertion harvest, channel exclusivity,
+//     and byte-identical upload round-trips.
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({

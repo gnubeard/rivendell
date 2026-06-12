@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+### Added
+- Image paste now works in the message composer on Firefox for Android (screenshot-copy, browser "Copy image", and Gboard clipboard-history flavors). Pasted images stage as attachments through the same upload path as the attach button.
+
+### Changed
+- The message composer is now a `contenteditable` field instead of a `<textarea>` (required for Android image paste delivery). Typing, drafts, @-mention autocomplete, emoji insertion, Enter-to-send, Shift+Enter newlines, and URL-wrap paste behave as before; the field now auto-grows via CSS instead of JS measurement.
+
 ## [1.4.56] - 2026-06-12
 
 ### Added
