@@ -1,7 +1,7 @@
 // Package ws is a small, self-contained WebSocket (RFC 6455) server built on the
 // standard library only — no third-party websocket dependency. It supports text
 // frames, fragmentation/continuation, and the ping/pong/close control frames,
-// which is everything Rivendell's realtime layer needs. The low-level frame codec
+// which is everything rivendell's realtime layer needs. The low-level frame codec
 // (readFrame/writeFrame, acceptKey) is pure and unit-tested against the
 // examples published in RFC 6455.
 package ws

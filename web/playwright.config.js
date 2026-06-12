@@ -1,4 +1,4 @@
-// playwright.config.js — e2e suite for Rivendell's browser-only paths.
+// playwright.config.js — e2e suite for rivendell's browser-only paths.
 //
 // Dev-only tooling: @playwright/test is the repo's single devDependency (the
 // frontend itself keeps zero runtime dependencies; Node remains test-runner

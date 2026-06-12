@@ -1,6 +1,6 @@
 {
-  "name": "Rivendell",
-  "short_name": "Rivendell",
+  "name": "rivendell",
+  "short_name": "rivendell",
   "description": "A small private chat room.",
   "start_url": "/",
   "scope": "/",

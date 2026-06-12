@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-bridge — watches a private Rivendell channel and forwards each message
+# claude-bridge — watches a private rivendell channel and forwards each message
 # to Claude Code. While a job runs the originating message wears a 👍
 # reaction; on completion the reaction is removed and the result is posted as a
 # threaded reply to the originating message — which on its own pings the
@@ -18,7 +18,7 @@
 # the in-progress reaction it left behind is cleared.
 #
 # Required env:
-#   RIVENDELL_URL        Base URL of your Rivendell instance  (e.g. http://localhost:8080)
+#   RIVENDELL_URL        Base URL of your rivendell instance  (e.g. http://localhost:8080)
 #   RIVENDELL_BOT_TOKEN  Bearer token from POST /api/admin/bot-tokens
 #
 # Optional env:
@@ -60,7 +60,7 @@ STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
 WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
 RELEASE_UPDATE_CHANNEL="${RIVENDELL_RELEASE_UPDATE_CHANNEL:-}"
-MAX_RESPONSE=3800  # chars per chunk; leaves headroom under Rivendell's default 4096-byte limit
+MAX_RESPONSE=3800  # chars per chunk; leaves headroom under rivendell's default 4096-byte limit
 
 # Standing instructions prepended to every request before it reaches Claude.
 # These ride on the message itself so they apply regardless of what the project

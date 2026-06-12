@@ -1,4 +1,4 @@
-// api.js — thin wrappers over the Rivendell HTTP API. Every call is same-origin and
+// api.js — thin wrappers over the rivendell HTTP API. Every call is same-origin and
 // relies on the session cookie, so there are no tokens to manage here.
 
 async function req(method, path, body) {

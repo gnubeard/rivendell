@@ -1,4 +1,4 @@
-// voice.js — WebRTC audio calling for Rivendell.
+// voice.js — WebRTC audio calling for rivendell.
 //
 // Phases 2–3: DM calls + multi-party voice channels (full P2P mesh).
 // Phase 4: reconnection on peer failure via ICE restart (see that section below).
