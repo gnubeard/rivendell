@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.61] - 2026-06-12
+
+### Added
+- Fenced code blocks now support Perl syntax highlighting (`perl`, `pl`, `pm`).
+
 ## [1.4.60] - 2026-06-12
 
 ### Added
