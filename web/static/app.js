@@ -1301,6 +1301,8 @@ function onChMouseUp() {
   }
 }
 
+// --- channel & DM actions ----------------------------------------------------
+
 async function deleteChannel(id) {
   const ch = state.channels[id];
   if (!ch) return;
@@ -1440,6 +1442,8 @@ async function refreshActiveMembers() {
   renderMembers();
   updateLeaveBtn();
 }
+
+// --- channel selection + read state ------------------------------------------
 
 async function selectChannel(id) {
   // Picking a channel leaves the admin panel (the conversation reclaims the space).
@@ -1608,6 +1612,8 @@ async function toggleMessageRead(m) {
 function isModPlus() {
   return !!(state.me && (state.me.role === "admin" || state.me.role === "moderator"));
 }
+
+// --- channel header ----------------------------------------------------------
 
 // updateLeaveBtn syncs the leave-button visibility for the active channel.
 // Admins retain read-only bypass access to private channels they haven't
@@ -1796,6 +1802,8 @@ function beginTopicEdit() {
   };
   input.onblur = save;
 }
+
+// --- message loading, history & scrolling ------------------------------------
 
 async function loadChannel(id) {
   // Startup path calls loadChannel directly without selectChannel, so the divider
@@ -2053,6 +2061,8 @@ function scrollToBottom(wrap) {
     }, { once: true });
   });
 }
+
+// --- message rendering -------------------------------------------------------
 
 function renderTypingIndicator() {
   const el = $("#typing-indicator");
@@ -2337,6 +2347,8 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     editFocusPending = false;
   }
 }
+
+// --- replies -----------------------------------------------------------------
 
 // buildReplyQuote renders the small "↪ Author: snippet" reference shown above a
 // reply. The parent is looked up in the loaded window; if it isn't loaded (it may
@@ -3991,6 +4003,8 @@ function wireControls() {
   $("#drawer-backdrop").onclick = closeDrawers;
 }
 
+// --- app shell: drawers, swipe, idle -----------------------------------------
+
 // Drawer helpers. Only one drawer is open at a time; the backdrop shows whenever
 // either is open. No-ops visually on desktop, where both panels are permanent
 // grid columns and the toggles are hidden.
@@ -4106,6 +4120,8 @@ function wireIdleDetection() {
 
   idleTimer = setTimeout(goIdle, IDLE_MS);
 }
+
+// --- invite, channel & profile modals, user card -----------------------------
 
 // openInviteModal lists everyone and lets you add non-members to the active
 // private channel. Re-fetches the membership each open so it reflects reality.
@@ -5165,6 +5181,8 @@ function releasePtt() {
   renderCallStrip();
 }
 
+// --- voice + ring event handling ---------------------------------------------
+
 // onVoiceEvent handles incoming voice.* events from the server.
 async function onVoiceEvent(evt) {
   const p = evt.payload || {};
@@ -5292,7 +5310,7 @@ function renderRingBanner() {
 
 // ---------------------------------------------------------------------------
 // Secret chat event handling
-// ---------------------------------------------------------------------------
+// --- secret session UI -------------------------------------------------------
 
 // onSecretEvent is the callback from secret.js for all session lifecycle events.
 async function onSecretEvent(evt) {
@@ -5526,6 +5544,8 @@ async function openSafetyModal(dmChannelId, sess) {
   }
 }
 
+// --- voice state callbacks ---------------------------------------------------
+
 // onVoiceStateChange folds a fresh state push from voice.js into the UI: it
 // chimes a greet/farewell tone for each remote peer that joined/left since the
 // last push, refreshes the on-call cue set, and repaints the call strip, header,
@@ -5574,6 +5594,8 @@ function onSpeaking(userId, speaking) {
   const tile = document.querySelector(`#video-grid .video-tile[data-user-id="${userId}"]`);
   if (tile) tile.classList.toggle("speaking", speaking);
 }
+
+// --- video grid + call strip -------------------------------------------------
 
 // setVideoActive toggles body.video-active (which hides the composer/message list
 // behind the video grid). The composer needs no re-size on reveal: it's a
