@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { humanBytes, formatTime } from "../static/util.js";
+import { humanBytes, formatTime, overSizeLimit } from "../static/util.js";
 
 test("humanBytes shows whole bytes below 1 KB", () => {
   assert.equal(humanBytes(0), "0 B");
@@ -33,6 +33,22 @@ test("humanBytes rounds to a whole number once the value reaches 10", () => {
 test("humanBytes caps the unit at GB rather than going to TB", () => {
   // 2048 GB stays in GB (the unit table stops at GB).
   assert.equal(humanBytes(2048 * 1024 * 1024 * 1024), "2048 GB");
+});
+
+// ---- overSizeLimit ----
+
+test("overSizeLimit rejects a file strictly over the limit", () => {
+  assert.equal(overSizeLimit(1025, 1024), true);
+});
+
+test("overSizeLimit allows a file at or under the limit (inclusive boundary)", () => {
+  assert.equal(overSizeLimit(1024, 1024), false);
+  assert.equal(overSizeLimit(1, 1024), false);
+});
+
+test("overSizeLimit skips the check for an unknown (0/falsy) limit", () => {
+  assert.equal(overSizeLimit(999999, 0), false);
+  assert.equal(overSizeLimit(999999, undefined), false);
 });
 
 // formatTime is locale-driven (toLocaleTimeString/DateString), so we assert on

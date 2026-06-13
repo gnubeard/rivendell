@@ -75,7 +75,7 @@ import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
 import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
-import { humanBytes, formatTime } from "./util.js?v=__RIVENDELL_VERSION__";
+import { humanBytes, formatTime, overSizeLimit } from "./util.js?v=__RIVENDELL_VERSION__";
 import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
 import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
@@ -391,12 +391,12 @@ async function applyInstanceName() {
   }
 }
 
-// fileTooLarge fails fast when a chosen file exceeds the server's upload ceiling,
-// alerting the user instead of spending the upload bandwidth on a doomed POST.
-// A 0/unknown limit (instance fetch failed) skips the check — the server still
-// enforces it. Returns true if the file was rejected.
+// fileTooLarge is the DOM adapter over the pure overSizeLimit check (util.js):
+// it fails fast when a chosen file exceeds the server's upload ceiling, alerting
+// the user instead of spending the upload bandwidth on a doomed POST. Returns
+// true if the file was rejected.
 function fileTooLarge(file, limit, label) {
-  if (!limit || file.size <= limit) return false;
+  if (!overSizeLimit(file.size, limit)) return false;
   alert(`That ${label} is ${humanBytes(file.size)}, which is over the ${humanBytes(limit)} limit.`);
   return true;
 }

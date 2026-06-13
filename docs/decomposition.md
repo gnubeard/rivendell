@@ -83,7 +83,7 @@ the existing e2e (or a new one) hold the line.
 | Sidebar ordering + drag-reorder diff | `channelorder.js` | unit (12) | ✅ done |
 | Per-channel composer scratch (draft text + attachments) | `drafts.js` | unit (12) | ✅ done |
 | Composer field facade (textarea-on-div) | `composer-field.js` | e2e (composer-paste) | ✅ done |
-| Small pure helpers (`humanBytes`, `formatTime`) | `util.js` | unit (8) | ✅ done |
+| Small pure helpers (`humanBytes`, `formatTime`, `overSizeLimit`) | `util.js` | unit (11) | ✅ done |
 | Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
 | Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
 | Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
@@ -99,8 +99,6 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   gate. Deeply wired to mutable module state (`state`, `replyingToId`, `socket`),
   so per the spine it stays in app.js rather than getting a getter/setter bag;
   e2e-covered (composer-paste). Only extract further if a clean pure core appears.
-- `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
-  `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
 - **Video grid + call strip** — `renderVideoGrid`/`renderDMVideoGrid`/
   `renderGroupVideoGrid`, `videoAvatarTile`, `renderCallStrip` (~200 lines, now
   its own section). On close reading this is a wireComposer-class entanglement,

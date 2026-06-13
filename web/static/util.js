@@ -14,6 +14,15 @@ export function humanBytes(n) {
   return `${rounded} ${units[i]}`;
 }
 
+// overSizeLimit reports whether a chosen file is too big to bother uploading.
+// A 0/falsy limit (instance fetch failed) means "unknown" and skips the check —
+// the server still enforces its own ceiling. The boundary is inclusive: a file
+// exactly at the limit is allowed.
+export function overSizeLimit(size, limit) {
+  if (!limit) return false;
+  return size > limit;
+}
+
 // formatTime renders an ISO timestamp for display next to a message or in an
 // admin table. Same-day timestamps show just the time (HH:MM); older ones are
 // prefixed with the locale date. Locale-driven (toLocaleTimeString/DateString),
