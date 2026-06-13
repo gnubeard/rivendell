@@ -83,6 +83,7 @@ the existing e2e (or a new one) hold the line.
 | Composer field facade (textarea-on-div) | `composer-field.js` | e2e (composer-paste) | ✅ done |
 | Small pure helpers (`humanBytes`) | `util.js` | unit (6) | ✅ done |
 | Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
+| Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -94,9 +95,6 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 - `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
   `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.
-- **Link/embed previews** — `msgPreviewCache`/`extPreviewCache`/
-  `schedulePreviewRender`. A cache state machine (loading/pending/failed) with a
-  pure core worth testing; DOM render stays.
 - **Boot/auth flow** — `boot`, `wireLogin`, `bootSetPassword`, `bootSignup`,
   `enterApp`. Mostly DOM/network orchestration; e2e territory.
 - **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. Folds into

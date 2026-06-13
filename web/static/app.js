@@ -77,6 +77,7 @@ import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
 import { humanBytes } from "./util.js?v=__RIVENDELL_VERSION__";
 import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
+import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -104,10 +105,10 @@ const unread = createUnreadTracker();
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
 const avatarVersion = {};
-// Cache for same-origin message embed previews: messageId -> Message | "loading" | "failed".
-const msgPreviewCache = new Map();
-// Cache for external link previews: url -> {title,...} | "loading" | "pending" | "failed".
-const extPreviewCache = new Map();
+// Preview caches (state machine in previews.js): same-origin message embeds and
+// external og: link cards. Keys move unrequested → loading → resolved/pending/failed.
+const msgPreviews = createPreviewCache();
+const extPreviews = createPreviewCache();
 // Debounce token: multiple preview fetches completing close together collapse into
 // one renderMessages() call instead of one per URL.
 let _previewRenderTimer = null;
@@ -925,8 +926,6 @@ function renderMe() {
   applyTheme(me.theme);
 }
 
-// regularChannelOrder is the channel ordering with DMs excluded — DMs live in
-// their own sidebar section and are never reordered/deleted via the mod controls.
 // navigateChannels moves the selection one row up (delta -1) or down (delta +1)
 // through the sidebar order. Clamps at the ends (no wrap).
 function navigateChannels(delta) {
@@ -2613,7 +2612,7 @@ function attachAutocomplete(input, popup) {
   };
 }
 
-// --- contenteditable composer: textarea facade ---------------------------
+// --- contenteditable composer wiring (facade in composer-field.js) -------
 
 // The composer is a contenteditable="plaintext-only" <div>, not a <textarea>:
 // GeckoView (Firefox for Android) never delivers image clipboard content to a
@@ -3185,17 +3184,16 @@ function cancelEdit() {
 // the result arrives. On 202 (background fetch in progress) it retries once
 // after 2.5 s. Idempotent: a second call while already loading is a no-op.
 async function fetchExtPreview(url) {
-  if (extPreviewCache.has(url)) return;
-  extPreviewCache.set(url, "loading");
+  if (!extPreviews.begin(url)) return;
   const data = await api.getLinkPreview(url);
   if (data && data.title) {
-    extPreviewCache.set(url, data);
+    extPreviews.resolve(url, data);
   } else if (data && data._status === 202) {
-    extPreviewCache.set(url, "pending");
-    setTimeout(() => { extPreviewCache.delete(url); schedulePreviewRender(); }, 2500);
+    extPreviews.pending(url);
+    setTimeout(() => { extPreviews.forget(url); schedulePreviewRender(); }, 2500);
     return;
   } else {
-    extPreviewCache.set(url, "failed");
+    extPreviews.fail(url);
   }
   schedulePreviewRender();
 }
@@ -3227,13 +3225,12 @@ function renderExtPreviewCard(preview, url) {
 // re-render when done. Idempotent — a second call for an already-cached id is a
 // no-op.
 async function fetchMsgPreview(messageId) {
-  if (msgPreviewCache.has(messageId)) return;
-  msgPreviewCache.set(messageId, "loading");
+  if (!msgPreviews.begin(messageId)) return;
   try {
     const msg = await api.getMessage(messageId);
-    msgPreviewCache.set(messageId, msg);
+    msgPreviews.resolve(messageId, msg);
   } catch {
-    msgPreviewCache.set(messageId, "failed");
+    msgPreviews.fail(messageId);
   }
   schedulePreviewRender();
 }
@@ -3267,10 +3264,10 @@ function buildLinkPreview(content) {
   // Same-origin message permalink: render an inline embed card.
   const pl = extractMessagePermalinkURL(content, location.origin);
   if (pl) {
-    const cached = msgPreviewCache.get(pl.messageId);
-    if (!cached) { fetchMsgPreview(pl.messageId); return null; }
-    if (cached === "loading" || cached === "failed") return null;
-    return renderMsgEmbedCard(cached, pl.channelId, pl.messageId);
+    const out = msgPreviews.outcome(pl.messageId);
+    if (out === "fetch") { fetchMsgPreview(pl.messageId); return null; }
+    if (out === "wait") return null;
+    return renderMsgEmbedCard(msgPreviews.get(pl.messageId), pl.channelId, pl.messageId);
   }
 
   // YouTube embed is purely client-side — no async fetch needed.
@@ -3280,10 +3277,10 @@ function buildLinkPreview(content) {
   // External link preview (og: meta-tag card from allowlisted domains).
   const extURL = extractFirstBareURL(content);
   if (extURL) {
-    const cached = extPreviewCache.get(extURL);
-    if (!cached) { fetchExtPreview(extURL); return null; }
-    if (cached === "loading" || cached === "pending" || cached === "failed") return null;
-    return renderExtPreviewCard(cached, extURL);
+    const out = extPreviews.outcome(extURL);
+    if (out === "fetch") { fetchExtPreview(extURL); return null; }
+    if (out === "wait") return null;
+    return renderExtPreviewCard(extPreviews.get(extURL), extURL);
   }
 
   return null;
