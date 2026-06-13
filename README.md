@@ -215,15 +215,22 @@ internal/httpapi/             server.go (routes/middleware/realtime),
                               handlers.go (handler bodies)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188, stdlib only)
 web/index.html                single-page shell (login / set-password / app views)
-web/static/                   app.js, api.js, ws.js, format.js, state.js,
-                              voice.js, secret.js, notify.js, syntax.js, style.css
+web/static/                   app.js (orchestrator; being decomposed — see
+                              docs/decomposition.md), api.js, ws.js, state.js,
+                              format.js, syntax.js, voice.js, secret.js,
+                              notify.js, rtcdebug.js, style.css; modules carved
+                              out of app.js: unread.js, channelorder.js,
+                              drafts.js, composer-field.js, attachments.js,
+                              autocomplete.js, prefs.js, previews.js, util.js
 web/sw.js                     service worker (Web Push display + click routing)
 web/manifest.json             PWA manifest (installability; iOS push needs install)
-web/test/                     format.test.js, state.test.js, voice.test.js,
-                              secret.test.js, notify.test.js, reactions.test.js,
-                              ws.test.js (node:test)
-docs/                         otr.md, voice.md, video.md, web_push.md, design.md,
-                              composer-paste-qa.md
+web/test/                     node:test unit suites (one per pure JS module)
+web/e2e/                      Playwright specs (composer-paste, dm-call,
+                              group-call); dev-only, run via `make test-e2e`
+docs/                         decomposition.md (frontend module breakup),
+                              design.md, otr.md, voice.md, video.md,
+                              web_push.md, file_upload.md, composer-paste-qa.md,
+                              call-drop-investigation.md, bridge-dm-update-note.md
 ```
 
 Module path `rivendell`; Go 1.26. Imports are `rivendell/internal/...`.

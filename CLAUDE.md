@@ -25,8 +25,8 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               format.js, syntax.js, voice.js, secret.js,
                               notify.js, rtcdebug.js, style.css; modules carved
                               out of app.js: unread.js, channelorder.js,
-                              drafts.js, composer-field.js, prefs.js,
-                              previews.js, util.js
+                              drafts.js, composer-field.js, attachments.js,
+                              autocomplete.js, prefs.js, previews.js, util.js
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites (one per pure JS module)
 web/e2e/                      Playwright specs (composer-paste, dm-call,

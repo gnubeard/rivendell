@@ -1,7 +1,7 @@
 # Frontend decomposition
 
-Breaking `web/static/app.js` (the client orchestrator — ~5.9k lines and
-shrinking, from 6.1k at the start of this effort) into small, well-understood,
+Breaking `web/static/app.js` (the client orchestrator — 6.1k lines at the start
+of this effort, shrinking with each slice) into small, well-understood,
 well-tested, well-documented modules — incrementally, one cohesive chunk per
 commit, each shippable on its own.
 
