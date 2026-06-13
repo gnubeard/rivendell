@@ -428,6 +428,15 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg-embed-time { font-size: 0.75rem; color: var(--text-dim); }
 .msg-embed-body { font-size: 0.875rem; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
+/* External link preview card (og: meta-tags from allowlisted domains). */
+.link-preview { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-left: 3px solid var(--accent-dim); border-radius: var(--radius); padding: 8px 10px; margin: 0.35rem 0 0.1rem; max-width: 460px; text-decoration: none; color: inherit; background: var(--bg-2); }
+.link-preview:hover { background: var(--bg-3); }
+.link-preview-text { flex: 1; min-width: 0; }
+.link-preview-site { font-size: 0.72em; color: var(--text-dim); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-preview-title { font-weight: 600; font-size: 0.875rem; color: var(--text); word-break: break-word; }
+.link-preview-desc { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-preview-image { width: 72px; height: 72px; object-fit: cover; border-radius: calc(var(--radius) - 1px); flex-shrink: 0; }
+
 .yt-thumb { display: block; position: relative; max-width: 480px; margin: 0.4rem 0 0.1rem; border-radius: var(--radius); overflow: hidden; text-decoration: none; }
 .yt-thumb img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--bg-3); }
 .yt-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 2.5rem; color: #fff; text-shadow: 0 0 12px rgba(0,0,0,.8); background: rgba(0,0,0,.15); transition: background .15s; }

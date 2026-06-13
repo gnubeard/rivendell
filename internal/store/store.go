@@ -240,3 +240,17 @@ type PushSubscription struct {
 	P256dh   string `json:"p256dh"`
 	Auth     string `json:"auth"`
 }
+
+// LinkPreview is a cached set of og: meta-tag values for an external URL.
+// ErrorMsg is non-empty when the last fetch failed; the row is kept with a
+// longer TTL so the site isn't hammered on every message render.
+type LinkPreview struct {
+	URL         string    `json:"url"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	ImageURL    string    `json:"image_url,omitempty"`
+	SiteName    string    `json:"site_name,omitempty"`
+	ErrorMsg    string    `json:"-"`
+	FetchedAt   time.Time `json:"fetched_at"`
+	ExpiresAt   time.Time `json:"-"`
+}

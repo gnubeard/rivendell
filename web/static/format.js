@@ -277,6 +277,18 @@ export function extractMessagePermalinkURL(text, origin) {
   return null;
 }
 
+// extractFirstBareURL returns the first bare (non-markdown-linked) https:// URL
+// in text, or null. Used to locate URLs eligible for an external link preview.
+export function extractFirstBareURL(text) {
+  if (!text) return null;
+  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  let m;
+  while ((m = re.exec(String(text))) !== null) {
+    if (m[3] !== undefined) return m[3];
+  }
+  return null;
+}
+
 // extractHideURL returns the first bare URL that would generate a YouTube embed,
 // so the caller can suppress its inline text rendering. Pass origin (e.g.
 // location.origin) to also suppress message permalink URLs.

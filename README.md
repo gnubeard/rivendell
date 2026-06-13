@@ -26,7 +26,7 @@ with a vanilla-JS web client and no frontend dependencies.
 - Message permalinks — every timestamp links to that point in history
 - Voice channels and 1:1 voice calls — P2P WebRTC mesh, no media server (STUN/TURN configurable)
 - Image and file uploads — content-addressed blob store, paste/drop/attach, inline rendering
-- Inline markdown links and image embeds; same-origin message permalinks and YouTube embeds
+- Inline markdown links and image embeds; same-origin message permalinks, YouTube embeds, and og: link preview cards for allowlisted domains
 - Avatars (PNG, JPEG, WebP, GIF) and per-user UI themes
 - Bot accounts with permanent Bearer tokens for scripting against the API
 - Magic-link onboarding — no email server required; admins mint single-use links
@@ -111,6 +111,7 @@ All configuration is via environment variables. All are optional except
 | `RIVENDELL_TURN_SECRET` | _(none)_ | Shared HMAC secret for time-limited coturn (TURN) credentials. |
 | `RIVENDELL_MAX_VOICE_AUDIO` | `10` | Max participants in one group voice channel. A join past this is refused (`voice.join_denied`). |
 | `RIVENDELL_MAX_VOICE_VIDEO` | `6` | Max simultaneous cameras-on in one call. Turning a camera on past this keeps you audio-only. |
+| `RIVENDELL_LINK_PREVIEW_DOMAINS` | _(see below)_ | Comma-separated list of hostnames eligible for og: link preview cards. Subdomains are included automatically (e.g. `wikipedia.org` covers `en.wikipedia.org`). Set to `off` to disable previews entirely. Default: `github.com`, `wikipedia.org`, `cnn.com`, `bbc.com`, `bbc.co.uk`, `nytimes.com`, `theguardian.com`, `arstechnica.com`, `wired.com`, `techcrunch.com`, `twitter.com`, `x.com`, `theatlantic.com`, `apnews.com`. Setting this variable **replaces** the default list. |
 
 ---
 
@@ -242,8 +243,9 @@ The authoritative reference is [CLAUDE.md](CLAUDE.md). Key invariants worth call
 
 ## Backlog
 
-- **[XL] OMEMO-class E2E (not OTR).** Ciphertext at rest, async delivery, multi-device key sync, encrypted scrollback/search. Separate design pass — see `docs/otr.md` "Non-goals for v1.3".
+- **[XL] Screen sharing / desktop video.** Screen capture track alongside camera in group calls. Highest-priority open feature.
 - **EXIF stripping on uploaded images.** Must happen before hashing. No new deps.
+- **Ctrl-B/I inline rich text.** Low priority; may not happen.
 
 ---
 
