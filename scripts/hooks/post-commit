@@ -1,0 +1,94 @@
+#!/bin/bash
+# post-commit — deploy on develop commits; restart claude-bridge when it changes.
+#
+# Install with: make install-hooks
+#
+# This hook is environment-specific. Edit the USER-CONFIGURABLE block below
+# to match your deployment before installing.
+#
+# What it does:
+#   1. On every commit to the develop branch, if any server source changed
+#      (cmd/server, internal/, web/, Dockerfile, go.mod/sum), it builds a
+#      fresh container image and replaces the running container.
+#   2. If scripts/claude-bridge changed, it restarts the claude-bridge service
+#      so the new script takes effect immediately.
+#
+# The deploy step uses `git archive` + a build in a temp directory so the
+# working tree stays clean throughout (no "make build" that could pick up
+# unstaged changes). The container is replaced with --replace so there is
+# no downtime window between stop and start.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# USER-CONFIGURABLE — edit these before installing the hook.
+
+# Branch that triggers a deploy. Leave as "develop" for the standard flow.
+DEPLOY_BRANCH="develop"
+
+# Podman user that owns the socket / image store.
+# The build runs as this user via `sudo -u`; make sure your account has the
+# appropriate sudo rule (e.g. NOPASSWD for podman and the build directory).
+PODMAN_USER="podman"
+
+# Container name, network, and published port.
+CONTAINER_NAME="rivendell-chat"
+NETWORK="rivendell-net"
+HOST_PORT="8080"
+
+# Path to the env-file passed to `podman run --env-file`.
+# Must contain at minimum RIVENDELL_DATABASE_URL and RIVENDELL_PUBLIC_URL.
+ENV_FILE="/srv/rivendell/deploy.env"
+
+# Named volume (or bind-mount path) for the blob store.
+# Format: <host-path-or-volume>:<container-path>:Z
+BLOBS_VOLUME="/srv/rivendell/blobs:/app/blobs:Z"
+
+# Container image tag (must match whatever podman-build produces).
+IMAGE="localhost/rivendell:latest"
+
+# Systemd user service name for claude-bridge. Leave empty to disable the
+# auto-restart step entirely.
+BRIDGE_SERVICE="claude-bridge.service"
+
+# END USER-CONFIGURABLE
+# ---------------------------------------------------------------------------
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" != "$DEPLOY_BRANCH" ]; then
+  exit 0
+fi
+
+newrev=$(git rev-parse HEAD)
+echo "post-commit: $newrev on $DEPLOY_BRANCH"
+
+if git diff-tree --no-commit-id --name-only -r --root HEAD \
+  | grep -qE 'cmd/server|internal/|web/|Dockerfile|go.(mod|sum)'; then
+
+  echo "Deploying $newrev..."
+  workdir=$(mktemp -d)
+  trap 'sudo rm -rf "$workdir"' EXIT
+
+  git archive "$newrev" | tar -x -C "$workdir"
+
+  (
+    cd "$workdir"
+    sudo chown -R "$PODMAN_USER:$PODMAN_USER" "$workdir"
+    sudo -u "$PODMAN_USER" make podman-build
+    sudo -u "$PODMAN_USER" podman run -d --replace \
+      --name "$CONTAINER_NAME" \
+      --network "$NETWORK" \
+      -p "${HOST_PORT}:8080" \
+      --env-file "$ENV_FILE" \
+      -v "$BLOBS_VOLUME" \
+      "$IMAGE"
+  )
+  echo "Deploy complete."
+fi
+
+if [ -n "$BRIDGE_SERVICE" ] && \
+   git diff-tree --no-commit-id --name-only -r --root HEAD \
+     | grep -qx 'scripts/claude-bridge'; then
+  systemctl --user restart "$BRIDGE_SERVICE"
+  echo "Restarted $BRIDGE_SERVICE."
+fi

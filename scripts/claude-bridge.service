@@ -1,0 +1,33 @@
+# claude-bridge.service — systemd user unit for the rivendell claude-bridge.
+#
+# Install with: make install-service
+#
+# Before installing, create an EnvironmentFile with the required variables:
+#
+#   mkdir -p ~/.config/rivendell
+#   cat > ~/.config/rivendell/claude-bridge.env <<'EOF'
+#   RIVENDELL_URL=https://chat.example.com
+#   RIVENDELL_BOT_TOKEN=<token from the admin panel, Bot tokens tab>
+#   RIVENDELL_TEST_DATABASE_URL=postgres://chat:<pw>@localhost:55432/chat_test?sslmode=disable
+#   # Optional:
+#   # RIVENDELL_CLAUDE_CHANNEL=claude
+#   # RIVENDELL_RELEASE_UPDATE_CHANNEL=general
+#   # RIVENDELL_STATE_DIR=/home/<you>/.local/share/rivendell-bridge
+#   EOF
+#   chmod 600 ~/.config/rivendell/claude-bridge.env
+#
+# Then run: make install-service
+
+[Unit]
+Description=Rivendell Claude bridge
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/rivendell/claude-bridge.env
+ExecStart=%h/repos/rivendell/scripts/claude-bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

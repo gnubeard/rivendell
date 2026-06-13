@@ -230,6 +230,84 @@ Module path `rivendell`; Go 1.26. Imports are `rivendell/internal/...`.
 
 ---
 
+## Git hooks
+
+Two hooks live in `scripts/hooks/` and can be installed with:
+
+```sh
+make install-hooks
+```
+
+This symlinks each hook into `.git/hooks/` so they stay up-to-date when you
+pull changes to the scripts.
+
+| Hook | What it does |
+| --- | --- |
+| `pre-commit` | On `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` whenever a meaningful source file is staged (server code, web, Dockerfile, go.mod). Keeps the version constant in sync with every commit without requiring a manual edit. |
+| `post-commit` | On `develop`, builds a fresh container image and replaces the running container when server source changed. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. |
+
+The `post-commit` hook is environment-specific. Edit the `USER-CONFIGURABLE`
+block near the top of `scripts/hooks/post-commit` to set your container name,
+network, env-file path, and blob volume before installing.
+
+---
+
+## Claude bridge
+
+`scripts/claude-bridge` is a polling bot that connects a private rivendell
+channel (default: `#claude`) to Claude Code, letting you send tasks to Claude
+directly from the chat and receive threaded replies. See the script header for
+the full feature list, environment variables, and setup checklist.
+
+### Running as a systemd user service (recommended)
+
+A systemd user service keeps the bridge running in the background, starts it
+on login, and restarts it automatically on failure.
+
+**1. Create the env file:**
+
+```sh
+mkdir -p ~/.config/rivendell
+cat > ~/.config/rivendell/claude-bridge.env <<'EOF'
+RIVENDELL_URL=https://chat.example.com
+RIVENDELL_BOT_TOKEN=<token from the admin panel, Bot tokens tab>
+RIVENDELL_TEST_DATABASE_URL=postgres://chat:<pw>@localhost:55432/chat_test?sslmode=disable
+# Optional:
+# RIVENDELL_CLAUDE_CHANNEL=claude
+# RIVENDELL_RELEASE_UPDATE_CHANNEL=general
+EOF
+chmod 600 ~/.config/rivendell/claude-bridge.env
+```
+
+**2. Install and start the service:**
+
+```sh
+make install-service
+systemctl --user enable --now claude-bridge.service
+```
+
+**3. Check it:**
+
+```sh
+systemctl --user status claude-bridge.service
+journalctl --user -u claude-bridge.service -f
+```
+
+The `post-commit` hook automatically restarts the service whenever
+`scripts/claude-bridge` is updated, so new versions take effect immediately
+on the next develop commit.
+
+### Running in tmux (alternative)
+
+```sh
+export RIVENDELL_URL=https://chat.example.com
+export RIVENDELL_BOT_TOKEN=<token>
+export RIVENDELL_TEST_DATABASE_URL=postgres://...
+tmux new-session -d -s claude-bridge 'scripts/claude-bridge'
+```
+
+---
+
 ## Developer conventions
 
 The authoritative reference is [CLAUDE.md](CLAUDE.md). Key invariants worth calling out:
@@ -244,7 +322,6 @@ The authoritative reference is [CLAUDE.md](CLAUDE.md). Key invariants worth call
 ## Backlog
 
 - **[XL] Screen sharing / desktop video.** Screen capture track alongside camera in group calls. Highest-priority open feature.
-- **EXIF stripping on uploaded images.** Must happen before hashing. No new deps.
 - **Ctrl-B/I inline rich text.** Low priority; may not happen.
 
 ---

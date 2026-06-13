@@ -22,7 +22,7 @@
 #
 # Required env:
 #   RIVENDELL_URL               Base URL of your rivendell instance  (e.g. http://localhost:8080)
-#   RIVENDELL_BOT_TOKEN         Bearer token from POST /api/admin/bot-tokens
+#   RIVENDELL_BOT_TOKEN         Bearer token from the admin panel (Bot tokens tab)
 #   RIVENDELL_TEST_DATABASE_URL Postgres URL passed to Claude for running Go tests
 #
 # Optional env:
@@ -44,8 +44,8 @@
 #
 # Setup checklist:
 #   1. Create a bot user via the admin panel (e.g. username "claude-bot").
-#   2. POST /api/admin/bot-tokens {"name":"claude-bridge","user_id":<bot-user-id>}
-#      Save the returned "token" — it won't be shown again.
+#   2. In the admin panel (Bot tokens tab), create a token named "claude-bridge"
+#      for the bot user. Save the token — it won't be shown again.
 #   3. Create a private channel named "claude" and add the bot user as a member.
 #      Also add whichever human users you want to be able to send requests.
 #   4. Export RIVENDELL_URL and RIVENDELL_BOT_TOKEN, then run this script.

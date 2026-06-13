@@ -1,0 +1,42 @@
+#!/bin/bash
+# pre-commit — auto-bump the patch version on develop commits.
+#
+# Install with: make install-hooks
+set -euo pipefail
+
+DEPLOY_BRANCH="develop"
+VERSION_FILE="internal/config/config.go"
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" != "$DEPLOY_BRANCH" ]; then
+  exit 0
+fi
+
+# Only enforce version bump when meaningful source files are staged.
+if ! git diff --cached --name-only \
+     | grep -qE 'cmd/server|internal/|web/|Dockerfile|go.(mod|sum)'; then
+  exit 0
+fi
+
+# Extract Version constant value from a stream of config.go content.
+extract_version() {
+  sed -n 's/.*const Version = "\([^"]*\)".*/\1/p'
+}
+
+# Version in the last commit (empty on first commit or if file didn't exist yet).
+head_version=$(git show HEAD:"$VERSION_FILE" 2>/dev/null | extract_version || true)
+
+# Version staged for this commit.
+staged_version=$(git show :"$VERSION_FILE" 2>/dev/null | extract_version || true)
+
+if [ -z "$staged_version" ]; then
+  exit 0
+fi
+
+if [ "$head_version" = "$staged_version" ]; then
+  IFS='.' read -r major minor patch <<< "$staged_version"
+  new_version="$major.$minor.$((patch + 1))"
+  sed -i "s/const Version = \"$staged_version\"/const Version = \"$new_version\"/" "$VERSION_FILE"
+  git add "$VERSION_FILE"
+  echo "pre-commit: version auto-bumped $staged_version → $new_version"
+fi
