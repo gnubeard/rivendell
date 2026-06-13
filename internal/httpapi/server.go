@@ -51,6 +51,7 @@ type Server struct {
 	typingTimers map[typingKey]*time.Timer
 	ringMu       sync.Mutex
 	rings        map[int64]*activeRing // DM channelID → pending ring
+	inFlight     sync.Map              // URL → struct{} for in-flight link-preview fetches
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
@@ -215,6 +216,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/push/key", s.auth(s.handlePushKey))
 	mux.HandleFunc("POST /api/push/subscribe", s.auth(s.handlePushSubscribe))
 	mux.HandleFunc("POST /api/push/unsubscribe", s.auth(s.handlePushUnsubscribe))
+
+	// Link preview proxy (og: meta-tag cache).
+	mux.HandleFunc("GET /api/link-preview", s.auth(s.handleGetLinkPreview))
 
 	// Voice / WebRTC.
 	mux.HandleFunc("GET /api/voice/state", s.auth(s.handleGetVoiceState))

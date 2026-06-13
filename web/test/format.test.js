@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, replySnippet, BUILTIN_EMOJI } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, BUILTIN_EMOJI } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 test("escapes HTML to prevent XSS", () => {
@@ -766,4 +766,28 @@ test("dataUriToFile: base64 marker is case-insensitive", async () => {
   const f = dataUriToFile("data:image/png;BASE64," + PNG_B64);
   const got = Buffer.from(await f.arrayBuffer());
   assert.ok(got.equals(Buffer.from(PNG_B64, "base64")));
+});
+
+// extractFirstBareURL
+test("extractFirstBareURL returns first bare https URL", () => {
+  assert.equal(extractFirstBareURL("check https://github.com/foo"), "https://github.com/foo");
+});
+
+test("extractFirstBareURL skips markdown-linked URLs", () => {
+  assert.equal(extractFirstBareURL("[repo](https://github.com/foo)"), null);
+});
+
+test("extractFirstBareURL skips markdown link but finds subsequent bare URL", () => {
+  assert.equal(
+    extractFirstBareURL("[repo](https://github.com/foo) and https://wikipedia.org/wiki/Test"),
+    "https://wikipedia.org/wiki/Test",
+  );
+});
+
+test("extractFirstBareURL returns null for no URL", () => {
+  assert.equal(extractFirstBareURL("just some text"), null);
+});
+
+test("extractFirstBareURL also returns http:// bare URLs (server rejects non-https)", () => {
+  assert.equal(extractFirstBareURL("http://github.com/foo"), "http://github.com/foo");
 });

@@ -189,6 +189,15 @@ export const api = {
   // single message fetch (for same-origin message embed previews)
   getMessage: (id) => req("GET", `/api/messages/${id}`),
 
+  // external link preview (og: meta-tag cache). Returns preview data on 200,
+  // {_status:202} when a background fetch was started, or {_status:404} when
+  // the domain is not allowlisted or a cached error exists.
+  getLinkPreview: async (url) => {
+    const res = await fetch(`/api/link-preview?url=${encodeURIComponent(url)}`, { credentials: "same-origin" });
+    if (res.status === 200) return res.json();
+    return { _status: res.status };
+  },
+
   // bot tokens
   listBotTokens: () => req("GET", "/api/admin/bot-tokens"),
   createBotToken: (name, userId) =>

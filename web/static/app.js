@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -105,6 +105,8 @@ const manualUnread = {};
 const avatarVersion = {};
 // Cache for same-origin message embed previews: messageId -> Message | "loading" | "failed".
 const msgPreviewCache = new Map();
+// Cache for external link previews: url -> {title,...} | "loading" | "pending" | "failed".
+const extPreviewCache = new Map();
 // Debounce token: multiple preview fetches completing close together collapse into
 // one renderMessages() call instead of one per URL.
 let _previewRenderTimer = null;
@@ -2319,7 +2321,9 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const editing = m.id === editingMessageId;
     const replyQuote = editing ? null : buildReplyQuote(m);
     const preview = editing ? null : buildLinkPreview(m.content);
-    const hideUrl = preview ? extractHideURL(m.content, location.origin) : null;
+    const hideUrl = preview
+      ? (extractHideURL(m.content, location.origin) || preview._previewUrl || null)
+      : null;
     const body = editing
       ? editorFor(m)
       : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
@@ -3367,6 +3371,48 @@ function cancelEdit() {
 
 // --- link previews -------------------------------------------------------
 
+// fetchExtPreview requests a link preview for url and triggers a re-render when
+// the result arrives. On 202 (background fetch in progress) it retries once
+// after 2.5 s. Idempotent: a second call while already loading is a no-op.
+async function fetchExtPreview(url) {
+  if (extPreviewCache.has(url)) return;
+  extPreviewCache.set(url, "loading");
+  const data = await api.getLinkPreview(url);
+  if (data && data.title) {
+    extPreviewCache.set(url, data);
+  } else if (data && data._status === 202) {
+    extPreviewCache.set(url, "pending");
+    setTimeout(() => { extPreviewCache.delete(url); schedulePreviewRender(); }, 2500);
+    return;
+  } else {
+    extPreviewCache.set(url, "failed");
+  }
+  schedulePreviewRender();
+}
+
+// renderExtPreviewCard builds an og: link-preview card for an external URL.
+function renderExtPreviewCard(preview, url) {
+  const hostname = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+  const site = preview.site_name || hostname;
+  const card = el("a", {
+    class: "link-preview",
+    href: url,
+    target: "_blank",
+    rel: "noopener noreferrer",
+  });
+  card._previewUrl = url;
+  const textCol = el("div", { class: "link-preview-text" });
+  textCol.append(el("div", { class: "link-preview-site" }, site));
+  if (preview.title) textCol.append(el("div", { class: "link-preview-title" }, preview.title));
+  if (preview.description) textCol.append(el("div", { class: "link-preview-desc" }, preview.description));
+  card.append(textCol);
+  if (preview.image_url) {
+    const img = el("img", { class: "link-preview-image", src: preview.image_url, alt: "", loading: "lazy" });
+    card.append(img);
+  }
+  return card;
+}
+
 // fetchMsgPreview fetches a message for an embed preview card and triggers a
 // re-render when done. Idempotent — a second call for an already-cached id is a
 // no-op.
@@ -3404,9 +3450,9 @@ function renderMsgEmbedCard(msg, channelId, messageId) {
   return card;
 }
 
-// buildLinkPreview returns a same-origin message-embed card or a YouTube embed
-// DOM node for the first matching bare URL in content, or null if there is none
-// / not ready.
+// buildLinkPreview returns a same-origin message-embed card, a YouTube embed,
+// or an external og: link-preview card for the first matching bare URL in
+// content, or null if there is none / not ready.
 function buildLinkPreview(content) {
   // Same-origin message permalink: render an inline embed card.
   const pl = extractMessagePermalinkURL(content, location.origin);
@@ -3420,6 +3466,15 @@ function buildLinkPreview(content) {
   // YouTube embed is purely client-side — no async fetch needed.
   const ytID = extractYouTubeVideoID(content);
   if (ytID) return renderYouTubeEmbed(ytID);
+
+  // External link preview (og: meta-tag card from allowlisted domains).
+  const extURL = extractFirstBareURL(content);
+  if (extURL) {
+    const cached = extPreviewCache.get(extURL);
+    if (!cached) { fetchExtPreview(extURL); return null; }
+    if (cached === "loading" || cached === "pending" || cached === "failed") return null;
+    return renderExtPreviewCard(cached, extURL);
+  }
 
   return null;
 }

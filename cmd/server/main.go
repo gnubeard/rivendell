@@ -78,6 +78,19 @@ func main() {
 		}
 	}()
 
+	// Background link-preview cache sweeper.
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for range t.C {
+			if n, err := st.DeleteExpiredLinkPreviews(context.Background()); err != nil {
+				log.Printf("link preview sweep: %v", err)
+			} else if n > 0 {
+				log.Printf("link preview sweep: removed %d expired", n)
+			}
+		}
+	}()
+
 	hs := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv.Handler(),
