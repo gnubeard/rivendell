@@ -72,6 +72,7 @@ import {
 } from "./voice.js?v=__RIVENDELL_VERSION__";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
 import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL_VERSION__";
+import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -585,7 +586,7 @@ async function enterApp() {
   // A closed DM isn't in state.channels (the server omits it), so it can't be
   // restored as the active channel.
   const restore = saved && state.channels[saved] ? state.channels[saved].id : null;
-  const firstChannel = restore || regularChannelOrder()[0] || state.channelOrder[0];
+  const firstChannel = restore || regularChannelOrder(state)[0] || state.channelOrder[0];
   if (firstChannel) {
     state = S.setActiveChannel(state, firstChannel);
   }
@@ -902,7 +903,7 @@ async function resync() {
     }
     // The channel we were on may have been archived while we were away.
     if (state.activeChannelId && !state.channels[state.activeChannelId]) {
-      const next = regularChannelOrder()[0] || state.channelOrder[0] || null;
+      const next = regularChannelOrder(state)[0] || state.channelOrder[0] || null;
       state = S.setActiveChannel(state, next);
     }
     renderMe();
@@ -968,22 +969,10 @@ function renderMe() {
 
 // regularChannelOrder is the channel ordering with DMs excluded — DMs live in
 // their own sidebar section and are never reordered/deleted via the mod controls.
-function regularChannelOrder() {
-  return state.channelOrder.filter((id) => !state.channels[id].is_dm);
-}
-
-// sidebarChannelOrder is the full top-to-bottom visual order of the sidebar:
-// regular channels first, then DMs — matching how renderChannels()/renderDMs()
-// paint them. Used by the ctrl-arrow navigation shortcuts so "up"/"down" track
-// what the user actually sees.
-function sidebarChannelOrder() {
-  return [...regularChannelOrder(), ...state.channelOrder.filter((id) => state.channels[id].is_dm)];
-}
-
 // navigateChannels moves the selection one row up (delta -1) or down (delta +1)
 // through the sidebar order. Clamps at the ends (no wrap).
 function navigateChannels(delta) {
-  const next = S.nextChannelId(sidebarChannelOrder(), state.activeChannelId, delta);
+  const next = S.nextChannelId(sidebarChannelOrder(state), state.activeChannelId, delta);
   if (next != null) selectChannel(next);
 }
 
@@ -991,21 +980,8 @@ function navigateChannels(delta) {
 // below (delta +1) the current one in sidebar order. No-op if there's none in
 // that direction.
 function navigateUnread(delta) {
-  const next = S.nextUnreadChannelId(sidebarChannelOrder(), state.activeChannelId, state.unread, delta);
+  const next = S.nextUnreadChannelId(sidebarChannelOrder(state), state.activeChannelId, state.unread, delta);
   if (next != null) selectChannel(next);
-}
-
-// dmDisplayName resolves a DM channel to the other participant's display name,
-// falling back to the raw channel name if that user isn't loaded.
-// For a self-DM the "other" participant is the current user; we append "(you)".
-function dmDisplayName(ch) {
-  const otherId = S.otherDMParticipant(ch, state.me.id);
-  if (otherId === state.me.id) {
-    const me = state.users[state.me.id] || state.me;
-    return (me.display_name || me.username) + " (you)";
-  }
-  const other = otherId != null ? state.users[otherId] : null;
-  return other ? other.display_name : ch.name;
 }
 
 // muteToggle builds the per-row mute control. It lives in the hover controls and
@@ -1030,7 +1006,7 @@ function renderChannels() {
   // Mods can reorder by dragging a row (mouse) or long-pressing then dragging
   // (touch); the grab cursor is the affordance that replaced the ↑/↓ glyphs.
   list.classList.toggle("reorderable", isMod);
-  const order = regularChannelOrder();
+  const order = regularChannelOrder(state);
   for (let i = 0; i < order.length; i++) {
     const id = order[i];
     const ch = state.channels[id];
@@ -1076,7 +1052,7 @@ function renderDMs() {
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
-        el("span", { class: "ch-name" }, dmDisplayName(ch)),
+        el("span", { class: "ch-name" }, dmDisplayName(state, ch)),
         hasSecretReq ? el("span", { class: "secret-req-badge", title: "Secret chat request" }, "🔒") : null,
         unread ? el("span", { class: "unread-badge" }, String(unread)) : null,
         el("span", { class: "ch-controls" },
@@ -1276,14 +1252,8 @@ function endDrag(commit) {
 // state so a stray re-render before the channel.update broadcasts arrive can't
 // snap the row back; a failed PATCH reverts via resync().
 function persistChannelOrder(ids) {
-  const patches = ids
-    .map((cid, idx) => (state.channels[cid].position === idx ? null : { cid, idx }))
-    .filter(Boolean);
+  const { patches, updated } = channelReorderPatches(ids, state.channels);
   if (!patches.length) return;
-  const updated = Object.values(state.channels).map((c) => {
-    const pos = ids.indexOf(c.id);
-    return pos === -1 ? c : { ...c, position: pos };
-  });
   state = S.setChannels(state, updated);
   Promise.all(patches.map((p) => api.updateChannel(p.cid, { position: p.idx })))
     .catch((ex) => { alert(ex.message); resync(); });
@@ -1456,7 +1426,7 @@ async function closeDM(id) {
   const wasActive = id === state.activeChannelId;
   state = S.removeChannel(state, id);
   if (wasActive) {
-    const next = regularChannelOrder()[0] || state.channelOrder[0] || null;
+    const next = regularChannelOrder(state)[0] || state.channelOrder[0] || null;
     if (next != null) {
       selectChannel(next); // re-renders the DM list for us
       return;
@@ -1703,7 +1673,7 @@ function renderChannelHeader(ch) {
   const callBtn = $("#call-btn");
   const secretBtn = $("#secret-btn");
   if (ch && ch.is_dm) {
-    $("#channel-title").textContent = "@ " + dmDisplayName(ch);
+    $("#channel-title").textContent = "@ " + dmDisplayName(state, ch);
     topicEl.textContent = "";
     topicEl.classList.remove("editable", "placeholder");
     topicEl.removeAttribute("title");
@@ -3666,7 +3636,7 @@ async function openForwardModal(m) {
         const other = S.otherDMParticipant(ch, state.me.id);
         if (other == null || !canSee(other)) continue;
       }
-      const label = ch.is_dm ? dmDisplayName(ch) : "#" + ch.name;
+      const label = ch.is_dm ? dmDisplayName(state, ch) : "#" + ch.name;
       if (needle && !label.toLowerCase().includes(needle)) continue;
       list.append(el("li", { class: "invite-item", onclick: async () => {
         $("#forward-modal").hidden = true;
@@ -3869,7 +3839,7 @@ function openSearchModal() {
 // header: DMs as "@ name", private as "🔒 name", public as "# name".
 function channelLabel(ch) {
   if (!ch) return "unknown channel";
-  if (ch.is_dm) return "@ " + dmDisplayName(ch);
+  if (ch.is_dm) return "@ " + dmDisplayName(state, ch);
   return (ch.is_private ? "🔒 " : "# ") + ch.name;
 }
 
@@ -5232,7 +5202,7 @@ function extractBlobUrls(messages, limit) {
 // any in-flight sweep to abort — so channel switches naturally reprioritize.
 async function startBackgroundImageWarm() {
   const gen = ++warmGen;
-  for (const channelId of sidebarChannelOrder()) {
+  for (const channelId of sidebarChannelOrder(state)) {
     if (gen !== warmGen) return;
     if (channelId === state.activeChannelId) continue;
     let msgs = state.messages[channelId];
@@ -5582,7 +5552,7 @@ function renderRingBanner() {
   } else {
     // outgoing ring
     const ch = state.channels[channelId];
-    const otherName = ch ? dmDisplayName(ch) : "…";
+    const otherName = ch ? dmDisplayName(state, ch) : "…";
     bannerText.textContent = "Calling " + otherName + "…";
     $("#ring-accept-btn").hidden = true;
     $("#ring-decline-btn").textContent = "Cancel";
@@ -6041,7 +6011,7 @@ function renderCallStrip() {
     return;
   }
   const ch = voiceCallState.channelId !== null ? state.channels[voiceCallState.channelId] : null;
-  const label = ch ? (ch.is_dm ? "📞 " + dmDisplayName(ch) : "🔊 #" + ch.name) : "In call";
+  const label = ch ? (ch.is_dm ? "📞 " + dmDisplayName(state, ch) : "🔊 #" + ch.name) : "In call";
   $("#call-strip-label").textContent = label;
   // In PTT mode the mic is key-driven, so the mute toggle is replaced by a PTT
   // pill that lights up while you're holding the key (transmitting).
