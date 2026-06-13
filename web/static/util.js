@@ -13,3 +13,15 @@ export function humanBytes(n) {
   const rounded = val >= 10 || val === Math.floor(val) ? Math.round(val) : val.toFixed(1);
   return `${rounded} ${units[i]}`;
 }
+
+// formatTime renders an ISO timestamp for display next to a message or in an
+// admin table. Same-day timestamps show just the time (HH:MM); older ones are
+// prefixed with the locale date. Locale-driven (toLocaleTimeString/DateString),
+// so the exact punctuation is the user's environment, not a fixed format.
+export function formatTime(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return sameDay ? time : `${d.toLocaleDateString()} ${time}`;
+}

@@ -75,7 +75,7 @@ import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
 import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
-import { humanBytes } from "./util.js?v=__RIVENDELL_VERSION__";
+import { humanBytes, formatTime } from "./util.js?v=__RIVENDELL_VERSION__";
 import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
 import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
@@ -5603,14 +5603,6 @@ function renderCallStrip() {
     camBtn.hidden = true;
   }
   strip.hidden = false;
-}
-
-function formatTime(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return sameDay ? time : `${d.toLocaleDateString()} ${time}`;
 }
 
 boot();

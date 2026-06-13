@@ -83,7 +83,7 @@ the existing e2e (or a new one) hold the line.
 | Sidebar ordering + drag-reorder diff | `channelorder.js` | unit (12) | ✅ done |
 | Per-channel composer scratch (draft text + attachments) | `drafts.js` | unit (12) | ✅ done |
 | Composer field facade (textarea-on-div) | `composer-field.js` | e2e (composer-paste) | ✅ done |
-| Small pure helpers (`humanBytes`) | `util.js` | unit (6) | ✅ done |
+| Small pure helpers (`humanBytes`, `formatTime`) | `util.js` | unit (8) | ✅ done |
 | Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
 | Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
 | Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
@@ -102,9 +102,17 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 - `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
   `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
 - **Video grid + call strip** — `renderVideoGrid`/`renderDMVideoGrid`/
-  `renderGroupVideoGrid`, `videoAvatarTile`, `renderCallStrip` (~213 lines, now
-  its own section). Cohesive DOM rendering, e2e-covered by dm-call/group-call;
-  an organizational extraction (little pure core).
+  `renderGroupVideoGrid`, `videoAvatarTile`, `renderCallStrip` (~200 lines, now
+  its own section). On close reading this is a wireComposer-class entanglement,
+  not a clean widget: the renderers *write* shared mutable call state
+  (`videoViewHidden`, also touched by `selectChannel`/`renderChannelHeader`/the
+  header toggle/`onVoiceStateChange`) and *read* `voiceCallState`, `speakingIds`,
+  and the PTT flags, plus ~5 `voice.js` functions. A clean extraction would need
+  a ~12-entry deps bag including a `videoViewHidden` setter — exactly the
+  getter/setter indirection into hardened, e2e-only DOM code the spine says not
+  to add. So per our own rule it **stays in app.js** (honestly bannered and
+  findable); revisit only if a pure core emerges. (The pure `formatTime` that
+  used to sit under this banner was mis-filed and has moved to `util.js`.)
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.
 - **Boot/auth flow** — `boot`, `wireLogin`, `bootSetPassword`, `bootSignup`,
   `enterApp`. Mostly DOM/network orchestration; e2e territory.
