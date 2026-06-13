@@ -979,4 +979,5 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   .members { right: 0; transform: translateX(100%); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45); }
   body.sidebar-open .sidebar { transform: translateX(0); }
   body.members-open .members { transform: translateX(0); }
+  .link-preview-desc { -webkit-line-clamp: 10; }
 }
