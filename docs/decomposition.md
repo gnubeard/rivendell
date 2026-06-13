@@ -9,12 +9,13 @@ This is a living document. Update the status table as chunks land.
 
 ## Why
 
-`app.js` is the highest-churn file in the repo and by far the largest untested
-frontend module (`api.js`, a thin fetch wrapper, is the only other one without a
-suite). The focused modules — `format`, `state`, `voice`, `secret`, … — are each
-small and have a `web/test/*.test.js` suite. The goal is to bring `app.js` to that
-same standard without a rewrite: peel off one concern at a time, behind a
-documented seam, with the appropriate kind of test.
+`app.js` is the highest-churn file in the repo and by far the largest module
+without its own test. The focused modules — `format`, `state`, `voice`, `secret`,
+… — are each small and have a `web/test/*.test.js` suite (the DOM-carrying ones
+carved off later, like `search`/`emoji`/`channeldrag`, are covered by e2e instead;
+`api.js`, a thin fetch wrapper, is the only one with no test of either kind). The
+goal is to bring `app.js` to that same standard without a rewrite: peel off one
+concern at a time, behind a documented seam, with the appropriate kind of test.
 
 ## Test strategy — the spine
 
@@ -140,6 +141,12 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   to add. So per our own rule it **stays in app.js** (honestly bannered and
   findable); revisit only if a pure core emerges. (The pure `formatTime` that
   used to sit under this banner was mis-filed and has moved to `util.js`.)
+- **Inline message editing** — `editorFor`/`startEdit`/`cancelEdit`/`autoGrowEdit`
+  (+ `commitEdit`), the other half of the old "emoji picker" section, now under
+  its own banner. Stays in app.js: it calls `renderMessages` and owns
+  `editingMessageId`/`editDraft`/`editFocusPending`, which are read in ~11 places
+  (rendering, the Escape handler, composer wiring) — a wireComposer-class
+  entanglement, not a clean widget.
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Scouted: pure Web Audio
   scheduling against a shared `audioCtx`, no extractable pure core (the tone
   sequences are trivial data; unit-testing them is a tautology). Leave it.
@@ -152,12 +159,6 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 self-containment — each declares its own state mid-file and touches the shared
 top-of-file state block only through `state`). Each needs a fresh e2e spec first:
 
-- **Inline message editing** — `editorFor`/`startEdit`/`cancelEdit`/`autoGrowEdit`
-  (+ `commitEdit`), the other half of the old "emoji picker" section, now under
-  its own banner. Stays in app.js: it calls `renderMessages` and owns
-  `editingMessageId`/`editDraft`/`editFocusPending`, which are read in ~11 places
-  (rendering, the Escape handler, composer wiring) — a wireComposer-class
-  entanglement, not a clean widget.
 - **Presence** — owns `pendingPresence`, `PRESENCE_DEBOUNCE_MS`. The debounce +
   apply logic; the `users.status`-durable and self-exempt invariants are guarded
   by Go tests, so the e2e need only pin the dot-flicker debounce.
