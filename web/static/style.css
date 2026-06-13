@@ -429,7 +429,7 @@ html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
 .msg-embed-body { font-size: 0.875rem; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* External link preview card (og: meta-tags from allowlisted domains). */
-.link-preview { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-left: 3px solid var(--accent-dim); border-radius: var(--radius); padding: 8px 10px; margin: 0.35rem 0 0.1rem; max-width: 460px; text-decoration: none; color: inherit; background: var(--bg-2); }
+.link-preview { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-left: 3px solid var(--accent-dim); border-radius: var(--radius); padding: 8px 10px; margin: 0.35rem 0 0.1rem; max-width: min(460px, 100%); overflow: hidden; text-decoration: none; color: inherit; background: var(--bg-2); }
 .link-preview:hover { background: var(--bg-3); }
 .link-preview-text { flex: 1; min-width: 0; }
 .link-preview-site { font-size: 0.72em; color: var(--text-dim); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.66] - 2026-06-13
+
+### Fixed
+- Link preview cards no longer overflow the viewport on narrow mobile screens; the card now shrinks to fit when the screen is narrower than 460px.
+
 ## [1.4.61] - 2026-06-12
 
 ### Added
