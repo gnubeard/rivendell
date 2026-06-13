@@ -17,12 +17,13 @@
 # to kill the job currently running there. The bot confirms with a reply, and
 # the in-progress reaction it left behind is cleared.
 #
-# Usage stats: send "!usage" to get a markdown table of Claude Code token usage
-# and costs aggregated across all sessions.
+# Usage stats: send "!usage" to get a one-line summary of quota utilization
+# and reset times, pulled from the Claude API.
 #
 # Required env:
-#   RIVENDELL_URL        Base URL of your rivendell instance  (e.g. http://localhost:8080)
-#   RIVENDELL_BOT_TOKEN  Bearer token from POST /api/admin/bot-tokens
+#   RIVENDELL_URL               Base URL of your rivendell instance  (e.g. http://localhost:8080)
+#   RIVENDELL_BOT_TOKEN         Bearer token from POST /api/admin/bot-tokens
+#   RIVENDELL_TEST_DATABASE_URL Postgres URL passed to Claude for running Go tests
 #
 # Optional env:
 #   RIVENDELL_CLAUDE_CHANNEL         Channel name to watch (default: claude)
@@ -63,6 +64,7 @@ STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
 WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
 RELEASE_UPDATE_CHANNEL="${RIVENDELL_RELEASE_UPDATE_CHANNEL:-}"
+TEST_DATABASE_URL="${RIVENDELL_TEST_DATABASE_URL:?RIVENDELL_TEST_DATABASE_URL not set}"
 MAX_RESPONSE=3800  # chars per chunk; leaves headroom under rivendell's default 4096-byte limit
 
 # Standing instructions prepended to every request before it reaches Claude.
@@ -73,7 +75,7 @@ BRIDGE_PREAMBLE='Project standing instructions (injected by claude-bridge — al
 
 1. Running tests: the Go integration tests are gated on TEST_DATABASE_URL and
    SILENTLY SKIP without it. You MUST run the suite as:
-       make test TEST_DATABASE_URL='\''postgres://chat:chat_dev_pw@localhost:55432/chat_test?sslmode=disable'\''
+       make test TEST_DATABASE_URL='\'''"$TEST_DATABASE_URL"'\''
    Never report tests as run/passing/green unless you ran them with that URL set.
 
 2. Committing: when the work is complete and the full suite above is green, commit
@@ -554,84 +556,44 @@ handle_channel() {
         if is_usage_command "$content"; then
             printf '[%s msg %s user %s] usage command\n' "$mode" "$msg_id" "$user_id"
             react "$msg_id" "$WORKING_EMOJI"
-            local usage_out
-            usage_out=$(python3 - "$HOME/.claude/projects" <<'PYEOF'
-import json, os, sys, glob, collections
+            local usage_out token raw
+            token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null)
+            raw=$(curl -sf https://api.anthropic.com/api/oauth/usage \
+                -H "Authorization: Bearer $token" \
+                -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
+            usage_out=$(printf '%s' "$raw" | python3 -c "
+import json, sys
+from datetime import datetime, timezone
 
-projects_dir = sys.argv[1]
-pattern = os.path.join(projects_dir, "*", "*.jsonl")
-
-# input, output, cache_write, cache_read token counts
-totals = collections.defaultdict(lambda: [0, 0, 0, 0])
-
-for path in glob.glob(pattern):
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get("type") != "assistant":
-                    continue
-                msg = obj.get("message", {})
-                model = msg.get("model", "")
-                if not model:
-                    continue
-                usage = msg.get("usage", {})
-                t = totals[model]
-                t[0] += usage.get("input_tokens", 0)
-                t[1] += usage.get("output_tokens", 0)
-                t[2] += usage.get("cache_creation_input_tokens", 0)
-                t[3] += usage.get("cache_read_input_tokens", 0)
-    except OSError:
-        pass
-
-if not totals:
-    print("No usage data found.")
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('Could not parse usage response.')
     sys.exit(0)
 
-# Approximate pricing per million tokens: (input, output, cache_write, cache_read)
-PRICING = {
-    "claude-opus-4":    (15.00, 75.00, 18.75, 1.50),
-    "claude-opus-3-5":  (15.00, 75.00, 18.75, 1.50),
-    "claude-sonnet-4":  ( 3.00, 15.00,  3.75, 0.30),
-    "claude-sonnet-3-5":( 3.00, 15.00,  3.75, 0.30),
-    "claude-haiku-4":   ( 0.80,  4.00,  1.00, 0.08),
-    "claude-haiku-3-5": ( 0.80,  4.00,  1.00, 0.08),
-}
+parts = []
+fh = d.get('five_hour') or {}
+if fh:
+    u = fh['utilization']
+    r = datetime.fromisoformat(fh['resets_at']).astimezone(timezone.utc)
+    parts.append(f'5h: {u:.0f}% used, resets {r.strftime(\"%H:%M UTC\")}')
 
-def get_price(model):
-    for k, v in PRICING.items():
-        if k in model:
-            return v
-    return (3.00, 15.00, 3.75, 0.30)
+sd = d.get('seven_day') or {}
+if sd:
+    u = sd['utilization']
+    r = datetime.fromisoformat(sd['resets_at']).astimezone(timezone.utc)
+    parts.append(f'7-day: {u:.0f}% used, resets {r.strftime(\"%b %-d\")}')
 
-rows = []
-for model, (inp, out, cw, cr) in sorted(totals.items()):
-    pin, pout, pcw, pcr = get_price(model)
-    cost = (inp * pin + out * pout + cw * pcw + cr * pcr) / 1_000_000
-    short = model.replace("claude-", "")
-    rows.append((short, inp, out, cw, cr, cost))
+ex = d.get('extra_usage') or {}
+if ex and ex.get('is_enabled'):
+    used = ex['used_credits'] / 100
+    limit = ex['monthly_limit'] / 100
+    pct = ex['utilization']
+    parts.append(f'extra: \${used:.2f} / \${limit:.0f} ({pct:.0f}%)')
 
-print("| Model | Input | Output | Cache Write | Cache Read | Cost (USD) |")
-print("|-------|------:|-------:|------------:|-----------:|-----------:|")
-for short, inp, out, cw, cr, cost in rows:
-    print(f"| {short} | {inp:,} | {out:,} | {cw:,} | {cr:,} | ${cost:.2f} |")
-
-# Totals row
-ti = sum(r[1] for r in rows)
-to = sum(r[2] for r in rows)
-tc = sum(r[3] for r in rows)
-tr = sum(r[4] for r in rows)
-tt = sum(r[5] for r in rows)
-print(f"| **Total** | **{ti:,}** | **{to:,}** | **{tc:,}** | **{tr:,}** | **${tt:.2f}** |")
-PYEOF
-            ) || usage_out=""
-            [ -z "$usage_out" ] && usage_out="No usage data available."
+print('; '.join(parts) + '.' if parts else 'No usage data.')
+" 2>/dev/null) || usage_out=""
+            [ -z "$usage_out" ] && usage_out="Usage API unavailable."
             reply_msg "$channel_id" "$msg_id" "$usage_out" >/dev/null 2>&1 || true
             unreact "$msg_id" "$WORKING_EMOJI"
             continue
