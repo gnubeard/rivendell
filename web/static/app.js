@@ -71,6 +71,7 @@ import {
   reconcilePeers,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
+import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -88,17 +89,9 @@ let maxAvatarBytes = 0;
 // Desktop-notification opt-in (per browser). The OS permission is separate and
 // owned by the browser; this is the user's in-app preference that gates it.
 let notifEnabled = loadNotifPref();
-// Highest message id we've told the server we've read, per channel — dedupes the
-// mark-read POST so refocusing a tab doesn't spam the endpoint.
-const lastMarkedRead = {};
-// Cursor position at the moment a channel was opened — used to place the
-// "New messages" marker line and never moves until the channel is re-opened.
-const channelUnreadFrom = {};
-// Channels where the user explicitly clicked "mark unread" while viewing them.
-// While set, markActiveChannelRead is suppressed for that channel so it stays
-// unread — until the user leaves and returns (selectChannel clears the flag),
-// honoring the intent of the mark-unread action.
-const manualUnread = {};
+// Ephemeral read-tracking bookkeeping (divider cursor, mark-unread suppression,
+// mark-read POST dedupe). See unread.js for the rules; not part of `state`.
+const unread = createUnreadTracker();
 // Per-user avatar cache-bust token. The avatar URL is otherwise stable and
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
@@ -840,10 +833,10 @@ function startRealtime() {
             // You're looking right at it — keep the read cursor current.
             // If the user is scrolled up, plant the marker at the current read
             // position so they see where new messages begin when they scroll down.
-            if (!channelUnreadFrom[cid]) {
+            if (!unread.markerFor(cid)) {
               const ml = $("#message-list");
               if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > 80) {
-                channelUnreadFrom[cid] = state.lastRead[cid] || 0;
+                unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
               }
             }
             markActiveChannelRead();
@@ -1547,13 +1540,12 @@ async function selectChannel(id) {
   // show the "New messages" marker when the user actually had unread messages.
   // Setting the cursor to 0 suppresses the marker entirely for channels the
   // user was already caught up on (prevents it from popping on new arrivals).
-  const hadUnreads = !!(state.unread[id] || state.mentions[id] || manualUnread[id]);
+  const hadUnreads = !!(state.unread[id] || state.mentions[id] || unread.isManualUnread(id));
   state = S.clearUnread(state, id);
   state = S.clearMention(state, id);
-  channelUnreadFrom[id] = hadUnreads ? (state.lastRead[id] || 0) : 0;
-  // Re-opening the channel honors any earlier mark-unread (we just jumped to its
-  // marker) and lifts the suppression so the channel marks read again from here.
-  delete manualUnread[id];
+  // Place the "New messages" divider and lift any earlier mark-unread suppression
+  // (re-opening honors that mark by jumping to the divider, then marks read from here).
+  unread.openChannel(id, hadUnreads, state.lastRead[id]);
   renderChannels();
   renderDMs();
   renderNotificationTotal();
@@ -1587,7 +1579,7 @@ async function markActiveChannelRead() {
   if (!cid) return;
   // The user deliberately marked this channel unread; leave the cursor where
   // they put it. The flag is cleared when they leave and re-open the channel.
-  if (manualUnread[cid]) return;
+  if (unread.isManualUnread(cid)) return;
   const msgs = state.messages[cid] || [];
   if (!msgs.length) return;
   const newest = msgs[msgs.length - 1].id; // messages are kept sorted ascending
@@ -1598,14 +1590,14 @@ async function markActiveChannelRead() {
     renderDMs();
     renderNotificationTotal();
   }
-  if (lastMarkedRead[cid] === newest) return; // server already knows
-  lastMarkedRead[cid] = newest;
+  if (unread.alreadyMarked(cid, newest)) return; // server already knows
+  unread.recordMarked(cid, newest);
   state = S.setLastRead(state, cid, newest);
   renderMessages(); // update 👁 button labels now that cursor advanced
   try {
     await api.markRead(cid, newest);
   } catch (e) {
-    lastMarkedRead[cid] = undefined; // let a later attempt retry
+    unread.forgetMarked(cid); // let a later attempt retry
   }
 }
 
@@ -1628,8 +1620,8 @@ async function toggleMessageRead(m) {
   if (m.id > cursor) {
     // Unread → mark read: advance cursor to include this message.
     state = S.setLastRead(state, cid, m.id);
-    lastMarkedRead[cid] = m.id;
-    delete manualUnread[cid]; // an explicit mark-read cancels mark-unread suppression
+    unread.recordMarked(cid, m.id);
+    unread.clearManualUnread(cid); // an explicit mark-read cancels mark-unread suppression
     if (cid === state.activeChannelId) {
       state = S.clearUnread(state, cid);
       state = S.clearMention(state, cid);
@@ -1650,33 +1642,32 @@ async function toggleMessageRead(m) {
           dismissDivider = msgRect.top < listRect.bottom && msgRect.bottom > listRect.top;
         }
       }
-      channelUnreadFrom[cid] = dismissDivider ? 0 : m.id;
+      unread.setMarker(cid, dismissDivider ? 0 : m.id);
     }
     if (cid === state.activeChannelId) renderMessages();
     try {
       await api.markRead(cid, m.id);
     } catch (e) {
-      lastMarkedRead[cid] = undefined;
+      unread.forgetMarked(cid);
     }
   } else {
     // Read → mark unread: move cursor before this message.
     const newCursor = m.id - 1;
     state = S.setLastRead(state, cid, newCursor);
-    lastMarkedRead[cid] = undefined; // forget the dedupe so a later re-read re-POSTs
+    unread.forgetMarked(cid); // forget the dedupe so a later re-read re-POSTs
     // Suppress auto-mark-read until the user leaves and re-opens this channel,
     // and surface a sidebar badge for the now-unread messages (from others) so
     // the channel reads as unread and re-opening jumps to the "New messages"
     // marker. Counting from loaded messages matches the server's tally closely
     // enough; a reconnect re-syncs the exact figure.
-    manualUnread[cid] = true;
-    const unreadCount = (state.messages[cid] || [])
-      .filter((x) => x.id > newCursor && x.user_id !== (state.me && state.me.id)).length;
+    unread.setManualUnread(cid);
+    const unreadCount = unreadCountAfter(state.messages[cid], newCursor, state.me && state.me.id);
     state = S.setUnread(state, cid, unreadCount);
     renderChannels();
     renderDMs();
     renderNotificationTotal();
     if (cid === state.activeChannelId) {
-      channelUnreadFrom[cid] = newCursor;
+      unread.setMarker(cid, newCursor);
       renderMessages();
     }
     try {
@@ -1881,12 +1872,10 @@ function beginTopicEdit() {
 }
 
 async function loadChannel(id) {
-  // Startup path calls loadChannel directly without selectChannel, so
-  // channelUnreadFrom may not be set yet — seed it from the live cursor only
-  // when there are actual unreads (same rule as selectChannel).
-  if (channelUnreadFrom[id] === undefined) {
-    channelUnreadFrom[id] = (state.unread[id] || state.mentions[id]) ? (state.lastRead[id] || 0) : 0;
-  }
+  // Startup path calls loadChannel directly without selectChannel, so the divider
+  // may not be set yet — seed it from the live cursor only when there are actual
+  // unreads (same rule as selectChannel; idempotent).
+  unread.seedMarker(id, state.unread[id] || state.mentions[id], state.lastRead[id]);
   const ch = state.channels[id];
   renderChannelHeader(ch);
   renderSecretBanner();
@@ -2257,7 +2246,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   const canPin = isMod || !!(activeCh && activeCh.is_dm);
   // Marker: the cursor position captured when this channel was opened. Any
   // message with id > markerAt is "new since you last visited."
-  const markerAt = channelUnreadFrom[state.activeChannelId] || 0;
+  const markerAt = unread.markerFor(state.activeChannelId);
   let markerInserted = false;
   let lastUser = null;
   let lastTime = 0;
