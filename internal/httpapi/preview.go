@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -161,6 +162,64 @@ func (s *Server) domainAllowed(hostname string) bool {
 	return false
 }
 
+// fetchWikipediaSummary calls the Wikipedia REST summary API for a /wiki/ URL.
+// It is invoked by fetchPreview and must not be called for non-Wikipedia URLs.
+func fetchWikipediaSummary(ctx context.Context, rawURL string, u *url.URL) (store.LinkPreview, error) {
+	title := strings.TrimPrefix(u.Path, "/wiki/")
+	apiURL := "https://" + u.Host + "/api/rest_v1/page/summary/" + title
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return store.LinkPreview{}, err
+	}
+	req.Header.Set("User-Agent", "rivendell/1.0 (+link-preview-bot)")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := previewHTTPClient.Do(req)
+	if err != nil {
+		return store.LinkPreview{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return store.LinkPreview{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var data struct {
+		Title     string `json:"title"`
+		Extract   string `json:"extract"`
+		Thumbnail struct {
+			Source string `json:"source"`
+		} `json:"thumbnail"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&data); err != nil {
+		return store.LinkPreview{}, err
+	}
+
+	lp := store.LinkPreview{
+		URL:         rawURL,
+		Title:       data.Title,
+		Description: data.Extract,
+		SiteName:    "Wikipedia",
+		ImageURL:    data.Thumbnail.Source,
+	}
+	return lp, nil
+}
+
+// fetchPreview fetches a link preview for rawURL. Wikipedia article URLs use
+// the Wikipedia REST summary API; all other URLs use og: tag scraping.
+func fetchPreview(ctx context.Context, rawURL string) (store.LinkPreview, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return store.LinkPreview{}, err
+	}
+	if strings.HasSuffix(strings.ToLower(u.Hostname()), ".wikipedia.org") &&
+		strings.HasPrefix(u.Path, "/wiki/") && len(u.Path) > len("/wiki/") {
+		return fetchWikipediaSummary(ctx, rawURL, u)
+	}
+	return fetchOGTags(ctx, rawURL)
+}
+
 // fetchAndCache fetches og: tags for rawURL and saves the result. It uses
 // s.inFlight to deduplicate concurrent requests for the same URL.
 func (s *Server) fetchAndCache(rawURL string) {
@@ -172,7 +231,7 @@ func (s *Server) fetchAndCache(rawURL string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	lp, err := fetchOGTags(ctx, rawURL)
+	lp, err := fetchPreview(ctx, rawURL)
 	if err != nil {
 		lp = store.LinkPreview{
 			URL:       rawURL,
