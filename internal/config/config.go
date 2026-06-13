@@ -13,7 +13,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.4.62"
+const Version = "1.4.63"
 
 type Config struct {
 	Addr               string        // listen address, e.g. ":8080"
@@ -64,7 +64,6 @@ func Load() (Config, error) {
 		LinkPreviewDomains: envStringList("RIVENDELL_LINK_PREVIEW_DOMAINS", []string{
 			"github.com",
 			"wikipedia.org",
-			"reuters.com",
 			"cnn.com",
 			"bbc.com",
 			"bbc.co.uk",
