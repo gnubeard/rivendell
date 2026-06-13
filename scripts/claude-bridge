@@ -548,18 +548,89 @@ handle_channel() {
             continue
         fi
 
-        # Usage command — read Claude Code's stored usage data and reply with a
-        # markdown table. Runs synchronously (fast, read-only) so it works even
-        # while a job is in progress and doesn't occupy the channel job slot.
+        # Usage command — parse Claude Code's JSONL conversation files directly and
+        # reply with a markdown table. Runs synchronously (fast, read-only) so it
+        # works even while a job is in progress and doesn't occupy the channel job slot.
         if is_usage_command "$content"; then
             printf '[%s msg %s user %s] usage command\n' "$mode" "$msg_id" "$user_id"
             react "$msg_id" "$WORKING_EMOJI"
             local usage_out
-            usage_out=$(cd "$REPO_DIR" && timeout 60 claude --print --effort low --bare \
-                --add-dir "$HOME/.claude" \
-                --disallowed-tools "Edit,Write,Bash,Agent" -- \
-                "Read the Claude Code usage and cost data from $HOME/.claude/. Find files (JSONL in projects/ subdirectories or a dedicated usage/costs file) containing API usage records with token counts and model names. Aggregate by model across all conversations and output a markdown table with columns: Model | Input Tokens | Output Tokens | Cache Read | Cache Write | Cost (USD). Output ONLY the markdown table, no preamble or explanation." \
-                2>&1 | sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g') || usage_out=""
+            usage_out=$(python3 - "$HOME/.claude/projects" <<'PYEOF'
+import json, os, sys, glob, collections
+
+projects_dir = sys.argv[1]
+pattern = os.path.join(projects_dir, "*", "*.jsonl")
+
+# input, output, cache_write, cache_read token counts
+totals = collections.defaultdict(lambda: [0, 0, 0, 0])
+
+for path in glob.glob(pattern):
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "assistant":
+                    continue
+                msg = obj.get("message", {})
+                model = msg.get("model", "")
+                if not model:
+                    continue
+                usage = msg.get("usage", {})
+                t = totals[model]
+                t[0] += usage.get("input_tokens", 0)
+                t[1] += usage.get("output_tokens", 0)
+                t[2] += usage.get("cache_creation_input_tokens", 0)
+                t[3] += usage.get("cache_read_input_tokens", 0)
+    except OSError:
+        pass
+
+if not totals:
+    print("No usage data found.")
+    sys.exit(0)
+
+# Approximate pricing per million tokens: (input, output, cache_write, cache_read)
+PRICING = {
+    "claude-opus-4":    (15.00, 75.00, 18.75, 1.50),
+    "claude-opus-3-5":  (15.00, 75.00, 18.75, 1.50),
+    "claude-sonnet-4":  ( 3.00, 15.00,  3.75, 0.30),
+    "claude-sonnet-3-5":( 3.00, 15.00,  3.75, 0.30),
+    "claude-haiku-4":   ( 0.80,  4.00,  1.00, 0.08),
+    "claude-haiku-3-5": ( 0.80,  4.00,  1.00, 0.08),
+}
+
+def get_price(model):
+    for k, v in PRICING.items():
+        if k in model:
+            return v
+    return (3.00, 15.00, 3.75, 0.30)
+
+rows = []
+for model, (inp, out, cw, cr) in sorted(totals.items()):
+    pin, pout, pcw, pcr = get_price(model)
+    cost = (inp * pin + out * pout + cw * pcw + cr * pcr) / 1_000_000
+    short = model.replace("claude-", "")
+    rows.append((short, inp, out, cw, cr, cost))
+
+print("| Model | Input | Output | Cache Write | Cache Read | Cost (USD) |")
+print("|-------|------:|-------:|------------:|-----------:|-----------:|")
+for short, inp, out, cw, cr, cost in rows:
+    print(f"| {short} | {inp:,} | {out:,} | {cw:,} | {cr:,} | ${cost:.2f} |")
+
+# Totals row
+ti = sum(r[1] for r in rows)
+to = sum(r[2] for r in rows)
+tc = sum(r[3] for r in rows)
+tr = sum(r[4] for r in rows)
+tt = sum(r[5] for r in rows)
+print(f"| **Total** | **{ti:,}** | **{to:,}** | **{tc:,}** | **{tr:,}** | **${tt:.2f}** |")
+PYEOF
+            ) || usage_out=""
             [ -z "$usage_out" ] && usage_out="No usage data available."
             reply_msg "$channel_id" "$msg_id" "$usage_out" >/dev/null 2>&1 || true
             unreact "$msg_id" "$WORKING_EMOJI"
