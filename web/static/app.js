@@ -82,6 +82,7 @@ import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__R
 import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
 import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
 import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
+import { createChannelDrag } from "./channeldrag.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -960,7 +961,7 @@ function renderChannels() {
   // Don't repaint mid-drag: we mutate the row order in the DOM live while a mod
   // is dragging, and a rebuild from state would yank the row out from under the
   // pointer. The drop's broadcasts re-render once the drag has ended.
-  if (chDrag.active) return;
+  if (channelDrag.isActive()) return;
   const list = $("#channel-list");
   list.innerHTML = "";
   const isMod = state.me.role === "admin" || state.me.role === "moderator";
@@ -990,7 +991,7 @@ function renderChannels() {
       controls,
       voiceRow
     );
-    if (isMod) wireChannelDrag(li, id);
+    if (isMod) channelDrag.wire(li, id);
     list.append(li);
   }
 }
@@ -1146,163 +1147,17 @@ function renderAdminVisibility() {
 }
 
 // --- channel reordering (moderator+) -----------------------------------------
-// Replaces the old up/down arrow glyphs (too easy to mis-hit). Desktop: press
-// and drag a channel row with the mouse. Mobile: long-press to "unstick" the
-// row, then drag. A plain click/tap still selects the channel; a vertical
-// touch-drag before the long-press fires still scrolls the sidebar.
-const chDrag = {
-  active: false,   // a drag is engaged — the row is "unstuck" and following the pointer
-  li: null,        // the <li> being dragged
-  id: null,        // its channel id
-  lpTimer: null,   // touch long-press timer (null once fired/cancelled)
-  startX: 0,
-  startY: 0,
-};
-let chMousePending = null; // {li, id} captured on mousedown, before the move threshold
-
-// beginDrag lifts a row out of the flow so it visibly follows the pointer.
-function beginDrag(li, id) {
-  chDrag.active = true;
-  chDrag.li = li;
-  chDrag.id = id;
-  li.classList.add("dragging");
-  document.body.classList.add("ch-dragging");
-}
-
-// updateDrag relocates the dragged row among its siblings: insert it before the
-// first row whose vertical midpoint is below the pointer, else append to the end.
-function updateDrag(clientY) {
-  const li = chDrag.li;
-  if (!li) return;
-  const list = $("#channel-list");
-  let before = null;
-  for (const row of list.querySelectorAll(".channel")) {
-    if (row === li) continue;
-    const r = row.getBoundingClientRect();
-    if (clientY < r.top + r.height / 2) { before = row; break; }
-  }
-  if (before) {
-    if (before !== li.nextElementSibling) list.insertBefore(li, before);
-  } else if (li !== list.lastElementChild) {
-    list.append(li);
-  }
-}
-
-// endDrag drops the row. On commit it persists whatever order the DOM now shows;
-// otherwise (cancel) it re-renders from the authoritative state.
-function endDrag(commit) {
-  const li = chDrag.li;
-  if (li) li.classList.remove("dragging");
-  document.body.classList.remove("ch-dragging");
-  chDrag.active = false;
-  chDrag.li = null;
-  chDrag.id = null;
-  if (commit) {
-    const ids = [...$("#channel-list").querySelectorAll(".channel")]
-      .map((row) => Number(row.dataset.chId));
-    persistChannelOrder(ids);
-  } else {
-    renderChannels();
-  }
-}
-
-// persistChannelOrder renormalizes the regular channels to contiguous positions
-// and PATCHes only the ones whose stored position actually changed. Positions
-// default to 0 (channels then sort by name), so the first reorder on a fresh
-// install rewrites several. It optimistically folds the new order into local
-// state so a stray re-render before the channel.update broadcasts arrive can't
-// snap the row back; a failed PATCH reverts via resync().
-function persistChannelOrder(ids) {
-  const { patches, updated } = channelReorderPatches(ids, state.channels);
-  if (!patches.length) return;
-  state = S.setChannels(state, updated);
-  Promise.all(patches.map((p) => api.updateChannel(p.cid, { position: p.idx })))
-    .catch((ex) => { alert(ex.message); resync(); });
-}
-
-// wireChannelDrag attaches the press/long-press drag handlers to a mod's channel
-// row. Touch arms on a long-press (so taps and scrolls are unaffected); mouse
-// arms once the pointer moves past a small threshold (so plain clicks select).
-function wireChannelDrag(li, id) {
-  li.addEventListener("touchstart", (e) => {
-    if (e.touches.length !== 1 || e.target.closest(".ch-controls")) return;
-    chDrag.startX = e.touches[0].clientX;
-    chDrag.startY = e.touches[0].clientY;
-    clearTimeout(chDrag.lpTimer);
-    chDrag.lpTimer = setTimeout(() => {
-      chDrag.lpTimer = null;
-      if (!li.isConnected) return; // re-rendered out from under us
-      beginDrag(li, id);
-      if (navigator.vibrate) navigator.vibrate(15);
-    }, 450);
-  }, { passive: true });
-
-  li.addEventListener("touchmove", (e) => {
-    if (chDrag.active && chDrag.li === li) {
-      e.preventDefault(); // we own the gesture now — suppress sidebar scroll
-      updateDrag(e.touches[0].clientY);
-      return;
-    }
-    if (chDrag.lpTimer) {
-      const dx = e.touches[0].clientX - chDrag.startX;
-      const dy = e.touches[0].clientY - chDrag.startY;
-      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-        clearTimeout(chDrag.lpTimer);
-        chDrag.lpTimer = null;
-      }
-    }
-  }, { passive: false });
-
-  li.addEventListener("touchend", (e) => {
-    clearTimeout(chDrag.lpTimer);
-    chDrag.lpTimer = null;
-    if (chDrag.active && chDrag.li === li) {
-      e.preventDefault(); // suppress the trailing click that would select the row
-      endDrag(true);
-    }
-  }, { passive: false });
-
-  li.addEventListener("touchcancel", () => {
-    clearTimeout(chDrag.lpTimer);
-    chDrag.lpTimer = null;
-    if (chDrag.active && chDrag.li === li) endDrag(false);
-  });
-
-  li.addEventListener("mousedown", (e) => {
-    if (e.button !== 0 || e.target.closest(".ch-controls")) return;
-    chDrag.startX = e.clientX;
-    chDrag.startY = e.clientY;
-    chMousePending = { li, id };
-    document.addEventListener("mousemove", onChMouseMove);
-    document.addEventListener("mouseup", onChMouseUp);
-  });
-}
-
-function onChMouseMove(e) {
-  if (chDrag.active) {
-    updateDrag(e.clientY);
-    return;
-  }
-  if (!chMousePending) return;
-  if (Math.abs(e.clientX - chDrag.startX) > 5 || Math.abs(e.clientY - chDrag.startY) > 5) {
-    if (!chMousePending.li.isConnected) { chMousePending = null; return; }
-    beginDrag(chMousePending.li, chMousePending.id);
-    updateDrag(e.clientY);
-  }
-}
-
-function onChMouseUp() {
-  document.removeEventListener("mousemove", onChMouseMove);
-  document.removeEventListener("mouseup", onChMouseUp);
-  chMousePending = null;
-  if (chDrag.active) {
-    endDrag(true);
-    // Swallow the click that fires after mouseup so the drop doesn't also select.
-    const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
-    document.addEventListener("click", swallow, { capture: true, once: true });
-    setTimeout(() => document.removeEventListener("click", swallow, true), 0);
-  }
-}
+// Channel drag-reorder is its own controller (channeldrag.js); it owns the live
+// gesture and persists the dropped order (the order math lives in channelorder.js).
+// renderChannels uses channelDrag.isActive() to skip a mid-drag repaint and
+// channelDrag.wire(li, id) to arm each mod-visible row.
+const channelDrag = createChannelDrag({
+  $,
+  getState: () => state,
+  setChannels: (updated) => { state = S.setChannels(state, updated); },
+  renderChannels,
+  resync,
+});
 
 // --- channel & DM actions ----------------------------------------------------
 

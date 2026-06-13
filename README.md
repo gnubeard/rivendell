@@ -222,13 +222,13 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               out of app.js: unread.js, channelorder.js,
                               drafts.js, composer-field.js, attachments.js,
                               autocomplete.js, prefs.js, previews.js, util.js,
-                              search.js, emoji.js
+                              search.js, emoji.js, channeldrag.js
 web/sw.js                     service worker (Web Push display + click routing)
 web/manifest.json             PWA manifest (installability; iOS push needs install)
 web/test/                     node:test unit suites (one per pure JS module)
 web/e2e/                      Playwright specs (composer-paste, dm-call,
-                              group-call, search, emoji-picker); dev-only, run
-                              via `make test-e2e`
+                              group-call, search, emoji-picker, channel-reorder);
+                              dev-only, run via `make test-e2e`
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,

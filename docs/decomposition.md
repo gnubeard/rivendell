@@ -116,6 +116,7 @@ Conventions specific to this kind of module:
 | @-mention / :emoji / #channel completion widget (+ pure filters) | `autocomplete.js` | unit (14) + e2e | ✅ done |
 | Message-search modal controller (DOM-carrying feature module) | `search.js` | e2e (search, 5) | ✅ done |
 | Shared emoji popup (composer / inline-edit insert + reactions) | `emoji.js` | e2e (emoji-picker, 3) | ✅ done |
+| Moderator channel drag-reorder controller (DOM gesture) | `channeldrag.js` | e2e (channel-reorder, 1) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -157,9 +158,6 @@ top-of-file state block only through `state`). Each needs a fresh e2e spec first
   `editingMessageId`/`editDraft`/`editFocusPending`, which are read in ~11 places
   (rendering, the Escape handler, composer wiring) — a wireComposer-class
   entanglement, not a clean widget.
-- **Channel drag-reorder** — owns `chDrag`, `chMousePending`; touches `state`
-  (5×). The ordering *math* already lives in `channelorder.js`; this is the DOM
-  drag controller around it.
 - **Presence** — owns `pendingPresence`, `PRESENCE_DEBOUNCE_MS`. The debounce +
   apply logic; the `users.status`-durable and self-exempt invariants are guarded
   by Go tests, so the e2e need only pin the dot-flicker debounce.
