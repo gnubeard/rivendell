@@ -86,14 +86,18 @@ the existing e2e (or a new one) hold the line.
 | Small pure helpers (`humanBytes`) | `util.js` | unit (6) | ✅ done |
 | Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
 | Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
+| Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
 Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 
-- **Composer** — `wireComposer`, `uploadAndInsert`, attachment tray render,
-  send path. Entangled with `state`/`api`/render fns; extract after the
-  self-contained `composer-field` facade. e2e-covered (composer-paste).
+- **Composer wiring** — `wireComposer` is what's left after `composer-field.js`
+  (facade) and `attachments.js` (upload tray) were carved out: the input event
+  routing (3 paste channels, typing, the Enter send path) and the secret-session
+  gate. Deeply wired to mutable module state (`state`, `replyingToId`, `socket`),
+  so per the spine it stays in app.js rather than getting a getter/setter bag;
+  e2e-covered (composer-paste). Only extract further if a clean pure core appears.
 - `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
   `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.

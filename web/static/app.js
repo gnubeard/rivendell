@@ -78,6 +78,7 @@ import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION_
 import { humanBytes } from "./util.js?v=__RIVENDELL_VERSION__";
 import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
 import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
+import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -122,9 +123,9 @@ function schedulePreviewRender() {
 const liveDeleted = new Set();
 // Per-channel composer scratch (draft text + pending uploads). See drafts.js.
 const drafts = createDraftStore();
-// Set by wireComposer once it has closure access to pendingUploads.
-let saveComposerUploads = (_id) => {};
-let restoreComposerUploads = (_id) => {};
+// The composer's attachment-upload tray (attachments.js). Created by wireComposer
+// once the DOM exists; null until then, so channel-switch calls guard with `?.`.
+let composerTray = null;
 
 // Push-to-talk (per browser, like the notification preference). When enabled,
 // the mic stays muted in a call until you hold the bound key — see
@@ -1447,7 +1448,7 @@ async function selectChannel(id) {
   const leaving = state.activeChannelId;
   if (leaving && leaving !== id) {
     drafts.saveText(leaving, $("#composer-input").value);
-    saveComposerUploads(leaving);
+    composerTray?.stash(leaving);
   }
   // Leaving a channel abandons any inline edit or pending reply in progress.
   editingMessageId = null;
@@ -1482,7 +1483,7 @@ async function selectChannel(id) {
   // Restore any saved draft and attachments for this channel.
   const composerInput = $("#composer-input");
   composerInput.value = drafts.restoreText(id);
-  restoreComposerUploads(id);
+  composerTray?.unstash(id);
   // (No JS sizing: the contenteditable composer auto-grows between its CSS
   // min/max-height.)
   if (!window.matchMedia("(hover: none)").matches) {
@@ -2665,10 +2666,10 @@ function wireComposer() {
       node.remove(); // remove first; harvest proceeds from the captured src
       if (secretActive()) continue; // images never enter a secret session
       if (scheme === "data") {
-        try { uploadAndInsert(dataUriToFile(src)); }
+        try { composerTray.uploadAndInsert(dataUriToFile(src)); }
         catch (err) { console.warn("composer: undecodable pasted data: image", err); }
       } else if (scheme === "blob") {
-        canvasRecover(src);
+        composerTray.canvasRecover(src);
       }
       // Any other scheme: stripped above, never fetched.
     }
@@ -2690,114 +2691,17 @@ function wireComposer() {
     }
   });
 
-  // --- pending image attachments ----------------------------------------
-  // Uploads are modeled as attachment tiles in a tray above the composer rather
-  // than as a cryptic text placeholder in the composer. Each pending upload is
-  // { id, objectUrl, status: "uploading"|"done", markdown }. While anything is
-  // still uploading, send is blocked (see the Enter handler). On send, the
-  // markdown for every done attachment is appended to the message; the tray then
-  // clears. The blob reference is still grabbable — clicking a finished tile copies
-  // its `![image](url)` markdown to the clipboard so the same upload can be re-pasted
-  // (the content-addressed store dedups, so spamming an image costs nothing).
-  let pendingUploads = [];
-  let uploadSeq = 0;
-  const tray = $("#composer-attachments");
-
-  // Any upload still in flight blocks send — guards against hitting Enter early.
-  const uploadsPending = () => pendingUploads.some((u) => u.status === "uploading");
-
-  function renderAttachments() {
-    tray.innerHTML = "";
-    tray.hidden = pendingUploads.length === 0;
-    for (const u of pendingUploads) {
-      const img = el("img", { src: u.objectUrl, alt: "" });
-      const cls = "attachment" +
-        (u.status === "uploading" ? " uploading" : "") +
-        (u.spoiler ? " spoiler-marked" : "");
-      const tile = el(
-        "div",
-        { class: cls, title: u.status === "done" ? "Click to copy image link" : "Uploading…" },
-        img,
-      );
-      if (u.status === "uploading") {
-        tile.append(el("div", { class: "attachment-spinner" }));
-      } else {
-        tile.addEventListener("click", () => copyAttachmentRef(u, tile));
-        const spoilerBtn = el("button", {
-          class: "attachment-spoiler-btn" + (u.spoiler ? " active" : ""),
-          type: "button",
-          title: u.spoiler ? "Remove spoiler" : "Mark as spoiler",
-          onclick: (e) => {
-            e.stopPropagation();
-            u.spoiler = !u.spoiler;
-            tile.classList.toggle("spoiler-marked", u.spoiler);
-            spoilerBtn.classList.toggle("active", u.spoiler);
-            spoilerBtn.title = u.spoiler ? "Remove spoiler" : "Mark as spoiler";
-          },
-        }, "SPOILER");
-        tile.append(
-          spoilerBtn,
-          el("button", {
-            class: "attachment-remove",
-            type: "button",
-            title: "Remove image",
-            "aria-label": "Remove image",
-            onclick: (e) => { e.stopPropagation(); removeUpload(u.id); },
-          }, "×"),
-        );
-      }
-      tray.append(tile);
-    }
-  }
-
-  // Save/restore attachment tray state when the user switches channels, so
-  // uploads stay with the channel they belong to rather than following the user.
-  saveComposerUploads = (channelId) => {
-    drafts.saveAttachments(channelId, pendingUploads);
-    pendingUploads = [];
-    renderAttachments();
-  };
-  restoreComposerUploads = (channelId) => {
-    pendingUploads = drafts.restoreAttachments(channelId);
-    renderAttachments();
-  };
-
-  function removeUpload(id) {
-    const idx = pendingUploads.findIndex((u) => u.id === id);
-    if (idx === -1) return;
-    const [u] = pendingUploads.splice(idx, 1);
-    if (u.objectUrl) URL.revokeObjectURL(u.objectUrl);
-    renderAttachments();
-  }
-
-  async function copyAttachmentRef(u, tile) {
-    try {
-      const text = u.spoiler ? `||${u.markdown}||` : u.markdown;
-      await navigator.clipboard.writeText(text);
-      tile.classList.add("copied");
-      setTimeout(() => tile.classList.remove("copied"), 900);
-    } catch { /* clipboard blocked (insecure context); nothing useful to do */ }
-  }
-
-  // uploadAndInsert: POST a File to /api/uploads and surface it as an attachment
-  // tile. The local file is previewed immediately (object URL) so the user sees
-  // their image right away; the tile shows a spinner until the upload resolves.
-  async function uploadAndInsert(file) {
-    if (fileTooLarge(file, maxImageBytes, "image")) return;
-    const item = { id: ++uploadSeq, objectUrl: URL.createObjectURL(file), status: "uploading", markdown: "", spoiler: false };
-    pendingUploads.push(item);
-    renderAttachments();
-    try {
-      const result = await api.uploadBlob(file);
-      item.status = "done";
-      item.markdown = `![image](${result.url})`;
-    } catch (ex) {
-      removeUpload(item.id);
-      alert("Image upload failed: " + ex.message);
-      return;
-    }
-    renderAttachments();
-  }
+  // The attachment-upload tray (attachments.js): staged image tiles above the
+  // composer, uploaded in the background, their markdown appended on send. It
+  // owns the pending-uploads list + per-channel stash/unstash; the input events
+  // below (paste/drop/attach + channel-3 harvest) feed it via uploadAndInsert.
+  composerTray = createAttachmentTray({
+    tray: $("#composer-attachments"),
+    el,
+    uploadBlob: (file) => api.uploadBlob(file),
+    rejectOversized: (file) => fileTooLarge(file, maxImageBytes, "image"),
+    drafts,
+  });
 
   // Channel 1: image files on the paste event's clipboardData — the desktop
   // path. preventDefault cancels the native insertion, so channels 2 and 3
@@ -2812,7 +2716,7 @@ function wireComposer() {
       if (secretActive()) return;
       for (const it of imageItems) {
         const file = it.getAsFile();
-        if (file) uploadAndInsert(file);
+        if (file) composerTray.uploadAndInsert(file);
       }
       return;
     }
@@ -2840,26 +2744,8 @@ function wireComposer() {
     if (!files.length) return;
     e.preventDefault();
     if (secretActive()) return; // suppress, matching channel 1
-    files.forEach(uploadAndInsert);
+    files.forEach((f) => composerTray.uploadAndInsert(f));
   });
-
-  // canvasRecover: a natively-inserted blob: <img> (channel 3) can't be read
-  // back without the network stack, so round-trip it through a canvas. Lossy
-  // (re-encodes to PNG), but observed Gecko behavior only ever inserts data:
-  // URIs — this is belt-and-braces for the blob: case.
-  function canvasRecover(src) {
-    const probe = new Image();
-    probe.onload = () => {
-      const c = document.createElement("canvas");
-      c.width = probe.naturalWidth;
-      c.height = probe.naturalHeight;
-      c.getContext("2d").drawImage(probe, 0, 0);
-      c.toBlob((blob) => {
-        if (blob) uploadAndInsert(new File([blob], "pasted.png", { type: blob.type }));
-      }, "image/png");
-    };
-    probe.src = src;
-  }
 
   input.onkeydown = async (e) => {
     // Locked composer (ended secret session): contentEditable=false already
@@ -2885,7 +2771,7 @@ function wireComposer() {
     // the old textarea path happened to mask it.
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      if (uploadsPending()) return; // an image is still uploading — don't send a half-baked message
+      if (composerTray.hasUploading()) return; // an image is still uploading — don't send a half-baked message
       const text = input.value;
       // Secret session: send encrypted via WS; no attachments, replies, or API call.
       const activeCh = state.channels[state.activeChannelId];
@@ -2903,17 +2789,14 @@ function wireComposer() {
         }
         return;
       }
-      const done = pendingUploads.filter((u) => u.status === "done");
-      // Message body = the typed text followed by each attachment's image markdown,
-      // one per line. Spoiler-marked images are wrapped in ||..||. Either part alone
-      // is enough to send.
-      const content = [text.trim() ? text : "", ...done.map((u) => u.spoiler ? `||${u.markdown}||` : u.markdown)].filter(Boolean).join("\n");
+      // Message body = the typed text followed by each done attachment's image
+      // markdown (spoiler-marked ones wrapped in ||..||), one per line; either
+      // part alone is enough to send.
+      const content = composeMessageBody(text, composerTray.doneUploads());
       if (!content.trim()) return;
       input.value = ""; // the div collapses back to a single line on its own
       lastTypingSent = 0; // allow next keystroke to fire a fresh typing frame immediately
-      const sent = pendingUploads;
-      pendingUploads = [];
-      renderAttachments();
+      const sent = composerTray.takeAll();
       const replyId = replyingToId; // capture, then clear the banner optimistically
       replyingToId = null;
       renderReplyBanner();
@@ -2922,8 +2805,7 @@ function wireComposer() {
         sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
         input.value = text;
-        pendingUploads = sent; // put the attachments back so the send can be retried
-        renderAttachments();
+        composerTray.putBack(sent); // put the attachments back so the send can be retried
         replyingToId = replyId; // restore the reply context too
         renderReplyBanner();
         alert(ex.message);
@@ -2937,7 +2819,7 @@ function wireComposer() {
   if (attachBtn && attachInput) {
     attachBtn.addEventListener("click", () => attachInput.click());
     attachInput.addEventListener("change", () => {
-      for (const file of attachInput.files) uploadAndInsert(file);
+      for (const file of attachInput.files) composerTray.uploadAndInsert(file);
       attachInput.value = ""; // reset so the same file(s) can be re-selected
     });
   }
@@ -2958,7 +2840,7 @@ function wireComposer() {
         // A non-editable div still receives drop events (unlike a disabled
         // textarea, which the browser inerts) — honor the lockout here too.
         if (input.disabled) return;
-        for (const file of files) uploadAndInsert(file);
+        for (const file of files) composerTray.uploadAndInsert(file);
       }
     });
   }
