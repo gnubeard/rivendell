@@ -1,17 +1,19 @@
 # Frontend decomposition
 
-Breaking `web/static/app.js` (the ~6k-line client orchestrator) into small,
-well-understood, well-tested, well-documented modules — incrementally, one
-cohesive chunk per commit, each shippable on its own.
+Breaking `web/static/app.js` (the client orchestrator — ~5.9k lines and
+shrinking, from 6.1k at the start of this effort) into small, well-understood,
+well-tested, well-documented modules — incrementally, one cohesive chunk per
+commit, each shippable on its own.
 
 This is a living document. Update the status table as chunks land.
 
 ## Why
 
-`app.js` is the highest-churn file in the repo and was the only frontend module
-with no test coverage. Every other module (`format`, `state`, `voice`, `secret`,
-…) is small and has a `web/test/*.test.js` suite. The goal is to bring `app.js`
-to that same standard without a rewrite: peel off one concern at a time, behind a
+`app.js` is the highest-churn file in the repo and by far the largest untested
+frontend module (`api.js`, a thin fetch wrapper, is the only other one without a
+suite). The focused modules — `format`, `state`, `voice`, `secret`, … — are each
+small and have a `web/test/*.test.js` suite. The goal is to bring `app.js` to that
+same standard without a rewrite: peel off one concern at a time, behind a
 documented seam, with the appropriate kind of test.
 
 ## Test strategy — the spine

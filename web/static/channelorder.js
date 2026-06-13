@@ -1,7 +1,7 @@
-// channelorder.js — pure selectors for sidebar ordering and the drag-reorder
-// diff. These are derived views over the channel model; keeping them out of
-// app.js makes the ordering rules unit-testable. The DOM/event wiring for the
-// drag gesture itself stays in app.js (it's nothing but DOM plumbing).
+// channelorder.js — pure selectors over the channel model: sidebar ordering, DM
+// display-name resolution, and the drag-reorder position diff. These are derived
+// views; keeping them out of app.js makes the ordering rules unit-testable. The
+// DOM/event wiring for the drag gesture itself stays in app.js (pure plumbing).
 
 import { otherDMParticipant } from "./state.js?v=__RIVENDELL_VERSION__";
 

@@ -4,9 +4,10 @@
 // external og: link cards. A key is first unrequested, then "loading", then
 // resolves to either a payload, a transient retry state ("pending", external
 // only — the server returned 202 while it fetches in the background), or
-// "failed". This module owns the Map and the pure state logic so it's unit-
-// testable; app.js keeps the async fetch (api call + setTimeout retry +
-// re-render) as the thin side-effecting adapter, and the DOM card builders.
+// "failed". Each cache instance owns its Map and the pure state logic, so it's
+// unit-testable; app.js creates the two caches and keeps the async fetch (api
+// call + setTimeout retry + re-render) as the thin side-effecting adapter, plus
+// the DOM card builders.
 
 export const LOADING = "loading";
 export const PENDING = "pending";
