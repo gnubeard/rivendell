@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.4.67] - 2026-06-13
+
+### Fixed
+- Link preview description now shows up to 6 lines instead of 2, so full tweet-length text is no longer truncated on narrow mobile screens.
+
 ## [1.4.66] - 2026-06-13
 
 ### Fixed
