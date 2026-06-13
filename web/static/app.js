@@ -3452,26 +3452,34 @@ async function runSearch(reset) {
   }
 }
 
-// --- controls: status, avatar, new channel, admin, logout --------------------
+// --- control wiring: one-time event bindings, grouped by concern -------------
 
 // openLightbox shows an inline image large, centred on a dark backdrop, instead
 // of opening it in a new tab. Dismissed by the × button, Esc, or a backdrop tap
-// (wired in wireControls alongside the other .modal handlers).
+// (wired in wireModalDismissal alongside the other .modal handlers).
 function openLightbox(src) {
   if (!src) return;
   $("#lightbox-img").src = src;
   $("#lightbox").hidden = false;
 }
 
-function wireControls() {
-  // SPA permalink navigation. A pasted/markdown link to this instance points at
-  // a full URL like https://host/#c<chan>/m<msg>; with target="_blank" a click
-  // would open a fresh app load in a new tab. Instead, intercept clicks on any
-  // same-origin anchor whose hash is a permalink and route them through the
-  // in-app jumpToMessage (no reload). Delegated on document so it covers message
-  // bodies, the pins modal, and anywhere else a link is rendered. Modified
-  // clicks (new-tab/window intent) and cross-origin links fall through to the
-  // browser unchanged.
+// closeModal hides a modal and, if it's the profile modal, reverts any live
+// theme preview to the persisted value (so backdrop/Esc dismissals don't keep an
+// unsaved theme on screen). Shared by the backdrop, the × affordance, and Escape.
+function closeModal(m) {
+  m.hidden = true;
+  if (m.id === "profile-modal") applyTheme(myTheme());
+  // Drop the lightbox source so a large image stops loading / frees memory and
+  // the next open never flashes the previous picture.
+  if (m.id === "lightbox") $("#lightbox-img").src = "";
+}
+
+// wireDelegatedClicks installs the single document-level click handler that routes
+// in-app navigation off rendered content: spoiler reveal, #channel links, inline
+// image lightbox, and same-origin message permalinks (SPA jump, no reload).
+// Modified clicks (new-tab/window intent) and cross-origin links fall through to
+// the browser unchanged.
+function wireDelegatedClicks() {
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     // Spoiler reveal: clicking an unrevealed spoiler reveals it; eats the click so
@@ -3510,12 +3518,12 @@ function wireControls() {
     e.preventDefault();
     jumpToMessage(permalink.channelId, permalink.messageId);
   });
+}
 
-  $("#history-latest-btn").onclick = () => {
-    const cid = state.activeChannelId;
-    if (cid) selectChannel(cid);
-  };
-
+// wireProfileControls wires the user's own identity surface: the status picker, the
+// profile modal (opened from the name/status text), live theme preview, the
+// desktop-notification opt-in, the profile save, and the avatar uploader.
+function wireProfileControls() {
   $("#status-select").onchange = async (e) => {
     try {
       await api.setStatus(e.target.value);
@@ -3594,7 +3602,12 @@ function wireControls() {
       alert(ex.message);
     }
   };
+}
 
+// wireChannelControls wires channel-lifecycle affordances: the create-channel
+// modal + form, invite, leave, the pins button, and the moderator+ inline topic
+// editor.
+function wireChannelControls() {
   $("#new-channel-btn").onclick = openChannelModal;
   $("#channel-close").onclick = () => ($("#channel-modal").hidden = true);
   $("#channel-create-form").onsubmit = async (e) => {
@@ -3613,88 +3626,6 @@ function wireControls() {
     }
   };
 
-  $("#logout-btn").onclick = async () => {
-    try {
-      await api.logout();
-    } finally {
-      location.reload();
-    }
-  };
-
-  $("#admin-btn").onclick = openAdmin;
-  $("#admin-close").onclick = () => { $("#admin-panel").hidden = true; };
-
-  $("#about-btn").onclick = () => {
-    closeDrawers(); // on mobile, get the sidebar drawer out from behind the modal
-    $("#about-modal").hidden = false;
-  };
-
-  // Update banner: reload to pick up the newer server build, or dismiss for now.
-  $("#update-reload").onclick = () => location.reload();
-  $("#update-dismiss").onclick = () => ($("#update-banner").hidden = true);
-
-  $("#forward-close").onclick = () => ($("#forward-modal").hidden = true);
-
-  // Mobile context sheet: backdrop tap (the ::before pseudo-element catches it)
-  // closes the sheet. Clicks that reach the sheet itself (not the inner card) also
-  // close it. Sheet clicks are stopped inside by the button handlers.
-  document.getElementById("mobile-ctx").addEventListener("click", (e) => {
-    if (e.target === document.getElementById("mobile-ctx") ||
-        e.target === document.getElementById("mobile-ctx-sheet")) {
-      closeMobileCtx();
-    }
-  });
-
-  // Long-press detection on the message list for mobile. touchmove cancels if the
-  // finger drifts (scroll intent); touchend suppresses the follow-on click when a
-  // long-press was actually delivered. contextmenu fires on a long tap in some
-  // browsers — suppress it so the OS menu doesn't compete with ours.
-  {
-    let lpTimer = null, lpStartX = 0, lpStartY = 0, lpFired = false;
-    const ml = $("#message-list");
-
-    ml.addEventListener("touchstart", (e) => {
-      // Skip the inline edit box: a long-press there is the user reaching for the
-      // native text-selection handles, not the message context menu.
-      if (e.target.closest && e.target.closest(".msg-edit")) return;
-      const row = e.target.closest && e.target.closest("[data-msg-id]");
-      if (!row) return;
-      lpFired = false;
-      lpStartX = e.touches[0].clientX;
-      lpStartY = e.touches[0].clientY;
-      clearTimeout(lpTimer);
-      lpTimer = setTimeout(() => {
-        lpFired = true;
-        lpTimer = null;
-        const msgId = parseInt(row.dataset.msgId, 10);
-        const m = findMessage(msgId);
-        if (m) openMobileCtx(m);
-      }, 450);
-    }, { passive: true });
-
-    ml.addEventListener("touchmove", (e) => {
-      if (!lpTimer) return;
-      const dx = e.touches[0].clientX - lpStartX;
-      const dy = e.touches[0].clientY - lpStartY;
-      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-        clearTimeout(lpTimer);
-        lpTimer = null;
-      }
-    }, { passive: true });
-
-    ml.addEventListener("touchend", (e) => {
-      clearTimeout(lpTimer);
-      lpTimer = null;
-      if (lpFired) { e.preventDefault(); lpFired = false; }
-    }, { passive: false });
-
-    ml.addEventListener("contextmenu", (e) => {
-      // Leave the edit box's native menu alone (copy/paste/select while editing).
-      if (e.target.closest(".msg-edit")) return;
-      if (e.target.closest("[data-msg-id]")) e.preventDefault();
-    });
-  }
-
   $("#invite-btn").onclick = openInviteModal;
   $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
 
@@ -3704,7 +3635,11 @@ function wireControls() {
 
   // Moderator+ click the channel topic to edit it inline (guarded inside).
   $("#channel-topic").onclick = beginTopicEdit;
+}
 
+// wireEmojiControls wires the composer emoji picker (toggle + outside-dismiss) and
+// the moderator+ custom-emoji manager modal shared with the admin panel.
+function wireEmojiControls() {
   $("#emoji-btn").onclick = (e) => { e.stopPropagation(); toggleEmojiPicker(); };
   // Dismiss the emoji picker on any click outside it (the button toggles itself).
   document.addEventListener("click", (e) => {
@@ -3740,7 +3675,11 @@ function wireControls() {
       out.textContent = ex.message;
     }
   };
+}
 
+// wireSearchControls wires the message-search modal: open/close, debounced typing,
+// submit-to-search-now, and the "load more" pager.
+function wireSearchControls() {
   $("#search-btn").onclick = openSearchModal;
   $("#search-close").onclick = () => ($("#search-modal").hidden = true);
   // Debounce typing so each keystroke doesn't fire a query; Enter searches now.
@@ -3754,25 +3693,87 @@ function wireControls() {
     runSearch(true);
   });
   $("#search-more").onclick = () => runSearch(false);
+}
 
-  // closeModal hides a modal and, if it's the profile modal, reverts any live
-  // theme preview to the persisted value (so backdrop/Esc dismissals don't keep
-  // an unsaved theme on screen).
-  const closeModal = (m) => {
-    m.hidden = true;
-    if (m.id === "profile-modal") applyTheme(myTheme());
-    // Drop the lightbox source so a large image stops loading / frees memory and
-    // the next open never flashes the previous picture.
-    if (m.id === "lightbox") $("#lightbox-img").src = "";
-  };
+// wireMobileContextMenu wires the mobile long-press message menu: the backdrop tap
+// that closes the sheet, and long-press detection on the message list (with
+// drift-cancel and follow-on-click suppression).
+function wireMobileContextMenu() {
+  // Mobile context sheet: backdrop tap (the ::before pseudo-element catches it)
+  // closes the sheet. Clicks that reach the sheet itself (not the inner card) also
+  // close it. Sheet clicks are stopped inside by the button handlers.
+  document.getElementById("mobile-ctx").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("mobile-ctx") ||
+        e.target === document.getElementById("mobile-ctx-sheet")) {
+      closeMobileCtx();
+    }
+  });
 
+  // Long-press detection on the message list for mobile. touchmove cancels if the
+  // finger drifts (scroll intent); touchend suppresses the follow-on click when a
+  // long-press was actually delivered. contextmenu fires on a long tap in some
+  // browsers — suppress it so the OS menu doesn't compete with ours.
+  let lpTimer = null, lpStartX = 0, lpStartY = 0, lpFired = false;
+  const ml = $("#message-list");
+
+  ml.addEventListener("touchstart", (e) => {
+    // Skip the inline edit box: a long-press there is the user reaching for the
+    // native text-selection handles, not the message context menu.
+    if (e.target.closest && e.target.closest(".msg-edit")) return;
+    const row = e.target.closest && e.target.closest("[data-msg-id]");
+    if (!row) return;
+    lpFired = false;
+    lpStartX = e.touches[0].clientX;
+    lpStartY = e.touches[0].clientY;
+    clearTimeout(lpTimer);
+    lpTimer = setTimeout(() => {
+      lpFired = true;
+      lpTimer = null;
+      const msgId = parseInt(row.dataset.msgId, 10);
+      const m = findMessage(msgId);
+      if (m) openMobileCtx(m);
+    }, 450);
+  }, { passive: true });
+
+  ml.addEventListener("touchmove", (e) => {
+    if (!lpTimer) return;
+    const dx = e.touches[0].clientX - lpStartX;
+    const dy = e.touches[0].clientY - lpStartY;
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+    }
+  }, { passive: true });
+
+  ml.addEventListener("touchend", (e) => {
+    clearTimeout(lpTimer);
+    lpTimer = null;
+    if (lpFired) { e.preventDefault(); lpFired = false; }
+  }, { passive: false });
+
+  ml.addEventListener("contextmenu", (e) => {
+    // Leave the edit box's native menu alone (copy/paste/select while editing).
+    if (e.target.closest(".msg-edit")) return;
+    if (e.target.closest("[data-msg-id]")) e.preventDefault();
+  });
+}
+
+// wireModalDismissal wires the pointer affordances that close modals: a backdrop
+// click on any .modal, and the lightbox × (which sits over the image, out of the
+// backdrop's reach). Escape-to-close lives in wireGlobalKeys; both share closeModal.
+function wireModalDismissal() {
   for (const m of document.querySelectorAll(".modal"))
     m.addEventListener("click", e => { if (e.target === m) closeModal(m); });
 
   // The × is the explicit close affordance (backdrop/Esc also dismiss). It sits
   // over the image, so a direct click never reaches the backdrop handler.
   $("#lightbox-close").onclick = () => closeModal($("#lightbox"));
+}
 
+// wireGlobalKeys wires document-level keyboard shortcuts: Escape unwinds the
+// top-most open modal (then the admin panel, then an inline edit), and
+// Ctrl+Up/Down navigate the sidebar (Ctrl+Shift to jump between unread).
+function wireGlobalKeys() {
   // Desktop: Escape closes the top-most open modal (mobile dismisses by tapping the
   // backdrop). Closing just the last-opened one lets a stacked flow unwind a step.
   document.addEventListener("keydown", (e) => {
@@ -3800,12 +3801,63 @@ function wireControls() {
     if (e.shiftKey) navigateUnread(delta);
     else navigateChannels(delta);
   });
+}
 
-  // Mobile: the sidebar (channels/DMs) and members panel are slide-in drawers
-  // toggled from the header; they share one tap-to-close backdrop.
+// wireDrawerToggles wires the mobile slide-in drawers (channels/DMs sidebar and the
+// members panel) and their shared tap-to-close backdrop. No-ops visually on
+// desktop, where both panels are permanent.
+function wireDrawerToggles() {
   $("#sidebar-toggle").onclick = () => toggleDrawer("sidebar");
   $("#members-toggle").onclick = () => toggleDrawer("members");
   $("#drawer-backdrop").onclick = closeDrawers;
+}
+
+// wireGlobalButtons wires the remaining top-level chrome buttons that don't belong
+// to a feature group: jump-to-latest, logout, the admin panel open/close, the
+// About dialog, the update banner, and the forward-modal close.
+function wireGlobalButtons() {
+  $("#history-latest-btn").onclick = () => {
+    const cid = state.activeChannelId;
+    if (cid) selectChannel(cid);
+  };
+
+  $("#logout-btn").onclick = async () => {
+    try {
+      await api.logout();
+    } finally {
+      location.reload();
+    }
+  };
+
+  $("#admin-btn").onclick = openAdmin;
+  $("#admin-close").onclick = () => { $("#admin-panel").hidden = true; };
+
+  $("#about-btn").onclick = () => {
+    closeDrawers(); // on mobile, get the sidebar drawer out from behind the modal
+    $("#about-modal").hidden = false;
+  };
+
+  // Update banner: reload to pick up the newer server build, or dismiss for now.
+  $("#update-reload").onclick = () => location.reload();
+  $("#update-dismiss").onclick = () => ($("#update-banner").hidden = true);
+
+  $("#forward-close").onclick = () => ($("#forward-modal").hidden = true);
+}
+
+// wireControls installs all the one-time control/event bindings, grouped by concern
+// into the wire* helpers above. Called once at startup, before startRealtime() (see
+// CLAUDE.md), so every affordance is live before events start flowing.
+function wireControls() {
+  wireDelegatedClicks();
+  wireProfileControls();
+  wireChannelControls();
+  wireEmojiControls();
+  wireSearchControls();
+  wireMobileContextMenu();
+  wireModalDismissal();
+  wireGlobalKeys();
+  wireDrawerToggles();
+  wireGlobalButtons();
 }
 
 // --- app shell: drawers, swipe, idle -----------------------------------------
