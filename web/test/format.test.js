@@ -490,10 +490,11 @@ test("builtin emoji: BUILTIN_EMOJI export has expected entries", () => {
   assert.equal(BUILTIN_EMOJI["100"], "💯");
 });
 
-test("emoticons: :D :) :( render as glyphs", () => {
+test("emoticons: :D :) :( ;) render as glyphs", () => {
   assert.ok(formatMessage("hello :D world").includes("😁"), ":D");
   assert.ok(formatMessage("hello :) world").includes("🙂"), ":)");
   assert.ok(formatMessage("hello :( world").includes("🙁"), ":(");
+  assert.ok(formatMessage("hello ;) world").includes("😉"), ";)");
 });
 
 test("emoticons: <3 renders as heart", () => {

@@ -13,7 +13,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.4.64"
+const Version = "1.4.65"
 
 type Config struct {
 	Addr               string        // listen address, e.g. ":8080"

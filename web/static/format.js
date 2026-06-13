@@ -82,6 +82,7 @@ export function replySnippet(content, max = 80) {
 function applyEmoticons(s) {
   s = s.replace(/(?<![:\w]):D(?!\w)/g, "😁");
   s = s.replace(/(?<![:\w]):\)(?!\w)/g, "🙂");
+  s = s.replace(/(?<![:\w]);\)(?!\w)/g, "😉");
   s = s.replace(/(?<![:\w]):\((?!\w)/g, "🙁");
   s = s.replace(/&lt;3(?!\d)/g, "❤️");
   return s;
