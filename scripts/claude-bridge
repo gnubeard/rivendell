@@ -17,9 +17,13 @@
 # to kill the job currently running there. The bot confirms with a reply, and
 # the in-progress reaction it left behind is cleared.
 #
+# Usage stats: send "!usage" to get a one-line summary of quota utilization
+# and reset times, pulled from the Claude API.
+#
 # Required env:
-#   RIVENDELL_URL        Base URL of your rivendell instance  (e.g. http://localhost:8080)
-#   RIVENDELL_BOT_TOKEN  Bearer token from POST /api/admin/bot-tokens
+#   RIVENDELL_URL               Base URL of your rivendell instance  (e.g. http://localhost:8080)
+#   RIVENDELL_BOT_TOKEN         Bearer token from POST /api/admin/bot-tokens
+#   RIVENDELL_TEST_DATABASE_URL Postgres URL passed to Claude for running Go tests
 #
 # Optional env:
 #   RIVENDELL_CLAUDE_CHANNEL         Channel name to watch (default: claude)
@@ -60,6 +64,7 @@ STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
 WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
 RELEASE_UPDATE_CHANNEL="${RIVENDELL_RELEASE_UPDATE_CHANNEL:-}"
+TEST_DATABASE_URL="${RIVENDELL_TEST_DATABASE_URL:?RIVENDELL_TEST_DATABASE_URL not set}"
 MAX_RESPONSE=3800  # chars per chunk; leaves headroom under rivendell's default 4096-byte limit
 
 # Standing instructions prepended to every request before it reaches Claude.
@@ -70,7 +75,7 @@ BRIDGE_PREAMBLE='Project standing instructions (injected by claude-bridge — al
 
 1. Running tests: the Go integration tests are gated on TEST_DATABASE_URL and
    SILENTLY SKIP without it. You MUST run the suite as:
-       make test TEST_DATABASE_URL='\''postgres://chat:chat_dev_pw@localhost:55432/chat_test?sslmode=disable'\''
+       make test TEST_DATABASE_URL='\'''"$TEST_DATABASE_URL"'\''
    Never report tests as run/passing/green unless you ran them with that URL set.
 
 2. Committing: when the work is complete and the full suite above is green, commit
@@ -240,6 +245,13 @@ is_stop_command() {
         '!stop'|'!cancel'|'!interrupt') return 0 ;;
     esac
     return 1
+}
+
+# is_usage_command <content> — true if the message is a usage stats request.
+is_usage_command() {
+    local c
+    c=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    [ "$c" = "!usage" ]
 }
 
 # is_busy <channel_id> — true if a live job is registered for the channel. A
@@ -535,6 +547,55 @@ handle_channel() {
             else
                 reply_msg "$channel_id" "$msg_id" "Nothing is currently running here to interrupt." >/dev/null 2>&1 || true
             fi
+            continue
+        fi
+
+        # Usage command — parse Claude Code's JSONL conversation files directly and
+        # reply with a markdown table. Runs synchronously (fast, read-only) so it
+        # works even while a job is in progress and doesn't occupy the channel job slot.
+        if is_usage_command "$content"; then
+            printf '[%s msg %s user %s] usage command\n' "$mode" "$msg_id" "$user_id"
+            react "$msg_id" "$WORKING_EMOJI"
+            local usage_out token raw
+            token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null)
+            raw=$(curl -sf https://api.anthropic.com/api/oauth/usage \
+                -H "Authorization: Bearer $token" \
+                -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
+            usage_out=$(printf '%s' "$raw" | python3 -c "
+import json, sys
+from datetime import datetime, timezone
+
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('Could not parse usage response.')
+    sys.exit(0)
+
+parts = []
+fh = d.get('five_hour') or {}
+if fh:
+    u = fh['utilization']
+    r = datetime.fromisoformat(fh['resets_at']).astimezone(timezone.utc)
+    parts.append(f'5h: {u:.0f}% used, resets {r.strftime(\"%H:%M UTC\")}')
+
+sd = d.get('seven_day') or {}
+if sd:
+    u = sd['utilization']
+    r = datetime.fromisoformat(sd['resets_at']).astimezone(timezone.utc)
+    parts.append(f'7-day: {u:.0f}% used, resets {r.strftime(\"%b %-d\")}')
+
+ex = d.get('extra_usage') or {}
+if ex and ex.get('is_enabled'):
+    used = ex['used_credits'] / 100
+    limit = ex['monthly_limit'] / 100
+    pct = ex['utilization']
+    parts.append(f'extra: \${used:.2f} / \${limit:.0f} ({pct:.0f}%)')
+
+print('; '.join(parts) + '.' if parts else 'No usage data.')
+" 2>/dev/null) || usage_out=""
+            [ -z "$usage_out" ] && usage_out="Usage API unavailable."
+            reply_msg "$channel_id" "$msg_id" "$usage_out" >/dev/null 2>&1 || true
+            unreact "$msg_id" "$WORKING_EMOJI"
             continue
         fi
 
