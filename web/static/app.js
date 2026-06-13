@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -79,6 +79,7 @@ import { humanBytes } from "./util.js?v=__RIVENDELL_VERSION__";
 import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
 import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
+import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -2415,215 +2416,19 @@ function cancelReply() {
   renderReplyBanner();
 }
 
-// --- composer + message actions -----------------------------------------
+// --- inline autocomplete binding (widget in autocomplete.js) -----------------
 
-// attachAutocomplete wires @-mention / :emoji inline completion onto a
-// textarea-like field (the inline edit <textarea>s, or the composer div via
-// its upgradeComposerField facade) and its own popup <ul>. The composer and
-// every inline edit box share this logic, each with its own popup element.
-// Returns { handleKeydown }: the host's keydown handler must defer to
-// handleKeydown first — it returns true when an open completion consumed the
-// key (arrows navigate, Tab/Enter pick, Esc dismiss), so Enter only
-// "sends"/"saves" when no completion is showing.
-function attachAutocomplete(input, popup) {
-  // Unified autocomplete state. `kind` is "mention" (@-trigger, items are user
-  // objects) or "emoji" (:-trigger, items are { code, glyph? }); both share this
-  // one popup and the keyboard navigation. null when no completion is active.
-  let completion = null; // { kind, query: { start, partial }, items, index }
-
-  // Touch-scroll guard: distinguish a tap (no movement) from a drag-to-scroll.
-  // Tracked at the container level so it survives popup re-renders mid-scroll.
-  let popupTouchMoved = false;
-  let popupTouchOriginY = 0;
-  popup.addEventListener("touchstart", (e) => {
-    popupTouchMoved = false;
-    popupTouchOriginY = e.touches[0].clientY;
-  }, { passive: true });
-  popup.addEventListener("touchmove", (e) => {
-    if (Math.abs(e.touches[0].clientY - popupTouchOriginY) > 8) popupTouchMoved = true;
-  }, { passive: true });
-
-  function filterMentions(partial) {
-    const q = partial.toLowerCase();
-    const pos = input.selectionStart;
-    const triggerAt = pos - partial.length - 1; // index of the '@' char in input.value
-
-    // Collect usernames already @-mentioned elsewhere in the composed text.
-    const alreadyMentioned = new Set();
-    const re = /(^|[^A-Za-z0-9_/])@([A-Za-z0-9_]{2,32})/g;
-    let m;
-    while ((m = re.exec(input.value)) !== null) {
-      const atIdx = m.index + m[1].length;
-      if (atIdx !== triggerAt) alreadyMentioned.add(m[2].toLowerCase());
-    }
-
-    return Object.values(state.users)
-      .filter((u) => u.is_active !== false &&
-        u.id !== state.me?.id &&
-        !alreadyMentioned.has(u.username.toLowerCase()) &&
-        (!activeMemberIds || activeMemberIds.has(u.id)) &&
-        (u.username.toLowerCase().startsWith(q) ||
-          (u.display_name && u.display_name.toLowerCase().startsWith(q)))
-      )
-      .sort((a, b) => a.username.localeCompare(b.username))
-      .slice(0, 8);
-  }
-
-  function filterEmojis(partial) {
-    const q = partial.toLowerCase();
-    const builtins = Object.entries(BUILTIN_EMOJI)
-      .filter(([code]) => code.startsWith(q))
-      .map(([code, glyph]) => ({ code, glyph }));
-    const custom = Object.keys(state.emojis)
-      .filter((code) => code.startsWith(q))
-      .map((code) => ({ code }));
-    return [...builtins, ...custom]
-      .sort((a, b) => a.code.localeCompare(b.code))
-      .slice(0, 8);
-  }
-
-  function filterChannels(partial) {
-    const q = partial.toLowerCase();
-    return Object.values(state.channels)
-      .filter((c) => !c.is_dm && c.name.startsWith(q))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .slice(0, 8);
-  }
-
-  // Detect which trigger (if any) sits just before the caret. @-mentions take
-  // precedence over :emoji and #channel — a single caret can't satisfy both.
-  function detectCompletion() {
-    const pos = input.selectionStart;
-    const at = atQuery(input.value, pos);
-    if (at) return { kind: "mention", query: at, items: filterMentions(at.partial) };
-    const colon = colonQuery(input.value, pos);
-    if (colon) return { kind: "emoji", query: colon, items: filterEmojis(colon.partial) };
-    const hash = hashQuery(input.value, pos);
-    if (hash) return { kind: "channel", query: hash, items: filterChannels(hash.partial) };
-    return null;
-  }
-
-  function renderPopup() {
-    popup.innerHTML = "";
-    if (!completion) { popup.hidden = true; return; }
-    let activeEl = null; // the highlighted <li>, scrolled into view after layout
-    completion.items.forEach((item, i) => {
-      const active = i === completion.index ? " active" : "";
-      // Mouse: pointerdown prevents textarea blur so the item stays visible for
-      // the click. Touch: touchend fires pick only when the finger didn't drag
-      // (popupTouchMoved guards scroll intent); preventDefault stops the
-      // synthetic click that would otherwise double-pick.
-      const itemHandlers = {
-        onpointerdown: (e) => { if (e.pointerType !== "mouse") return; e.preventDefault(); pick(item); },
-        ontouchend: (e) => { if (!popupTouchMoved) { e.preventDefault(); pick(item); } },
-      };
-      let li;
-      if (completion.kind === "mention") {
-        li = el("li", {
-          class: "mention-item" + active,
-          ...itemHandlers,
-        },
-          el("span", { class: "mention-item-name" }, "@" + item.username),
-          item.display_name && item.display_name !== item.username
-            ? el("span", { class: "mention-item-display" }, item.display_name)
-            : null,
-        );
-      } else if (completion.kind === "channel") {
-        li = el("li", {
-          class: "mention-item" + active,
-          ...itemHandlers,
-        },
-          el("span", { class: "mention-item-name" }, "#" + item.name),
-        );
-      } else {
-        li = el("li", {
-          class: "mention-item" + active,
-          ...itemHandlers,
-        },
-          item.glyph
-            ? el("span", { class: "emoji-uni" }, item.glyph)
-            : el("img", { class: "emoji", src: api.emojiURL(item.code), alt: `:${item.code}:` }),
-          el("span", { class: "mention-item-name" }, `:${item.code}:`),
-        );
-      }
-      popup.append(li);
-      if (active) activeEl = li;
-    });
-    popup.hidden = completion.items.length === 0;
-    // Keep the highlighted row visible: when the list overflows its max-height,
-    // arrowing past the visible window must scroll it back into view.
-    if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
-  }
-
-  function updatePopup() {
-    const detected = detectCompletion();
-    if (!detected) {
-      completion = null;
-      popup.hidden = true;
-      return;
-    }
-    const prevIndex = completion ? completion.index : 0;
-    completion = { ...detected, index: Math.min(prevIndex, Math.max(0, detected.items.length - 1)) };
-    renderPopup();
-  }
-
-  // Insert the chosen completion, replacing from the trigger char to the caret:
-  // "@username " for a mention, ":shortcode: " for an emoji, "#name " for a channel.
-  // The synthetic input event re-runs the host's autosize (and re-checks for a
-  // follow-on trigger — there is none, the caret lands past a trailing space).
-  function pick(item) {
-    if (!completion) return;
-    const text = completion.kind === "mention" ? "@" + item.username + " "
-      : completion.kind === "channel" ? "#" + item.name + " "
-      : `:${item.code}: `;
-    const before = input.value.slice(0, completion.query.start);
-    const after = input.value.slice(input.selectionStart);
-    input.value = before + text + after;
-    const newPos = completion.query.start + text.length;
-    input.setSelectionRange(newPos, newPos);
-    completion = null;
-    popup.hidden = true;
-    input.focus();
-    input.dispatchEvent(new Event("input"));
-  }
-
-  input.addEventListener("input", updatePopup);
-
-  input.addEventListener("blur", () => {
-    // Small delay so a pointerdown on a popup item fires before we close it.
-    setTimeout(() => { popup.hidden = true; completion = null; }, 200);
+// mkAutocomplete builds an @-mention / :emoji / #channel completion widget bound
+// to the live app state, for a field + its popup <ul>. The composer and every
+// inline edit box each create one. The host's keydown must defer to the returned
+// handleKeydown first (see autocomplete.js).
+const mkAutocomplete = (input, popup) =>
+  createAutocomplete({
+    input, popup, el,
+    getState: () => state,
+    getActiveMemberIds: () => activeMemberIds,
+    emojiURL: (code) => api.emojiURL(code),
   });
-
-  return {
-    // Call from the host keydown before its own logic; true == key consumed.
-    handleKeydown(e) {
-      if (popup.hidden || !completion) return false;
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        completion.index = Math.min(completion.index + 1, completion.items.length - 1);
-        renderPopup();
-        return true;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        completion.index = Math.max(completion.index - 1, 0);
-        renderPopup();
-        return true;
-      }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-        e.preventDefault();
-        if (completion.items[completion.index]) pick(completion.items[completion.index]);
-        return true;
-      }
-      if (e.key === "Escape") {
-        popup.hidden = true;
-        completion = null;
-        return true;
-      }
-      return false;
-    },
-  };
-}
 
 // --- contenteditable composer wiring (facade in composer-field.js) -------
 
@@ -2647,7 +2452,7 @@ function wireComposer() {
   const popup = $("#mention-popup");
   // @-mention / :emoji inline completion, shared with the inline edit boxes.
   // The composer's keydown defers to ac.handleKeydown before its own send logic.
-  const ac = attachAutocomplete(input, popup);
+  const ac = mkAutocomplete(input, popup);
   const TYPING_INTERVAL_MS = 1500;
   let lastTypingSent = 0;
 
@@ -3027,7 +2832,7 @@ function editorFor(m) {
   // Own popup element (anchored to this edit box, not the composer) so @-mention
   // and :emoji completion work while editing. keydown defers to the popup first.
   const popup = el("ul", { class: "mention-popup", hidden: true });
-  const ac = attachAutocomplete(ta, popup);
+  const ac = mkAutocomplete(ta, popup);
   ta.addEventListener("input", () => { editDraft = ta.value; autoGrowEdit(ta); });
   ta.addEventListener("keydown", (e) => {
     if (ac.handleKeydown(e)) return;

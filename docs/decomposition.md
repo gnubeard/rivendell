@@ -87,6 +87,7 @@ the existing e2e (or a new one) hold the line.
 | Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
 | Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
 | Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
+| @-mention / :emoji / #channel completion widget (+ pure filters) | `autocomplete.js` | unit (14) + e2e | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -100,6 +101,10 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   e2e-covered (composer-paste). Only extract further if a clean pure core appears.
 - `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
   `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
+- **Video grid + call strip** — `renderVideoGrid`/`renderDMVideoGrid`/
+  `renderGroupVideoGrid`, `videoAvatarTile`, `renderCallStrip` (~213 lines, now
+  its own section). Cohesive DOM rendering, e2e-covered by dm-call/group-call;
+  an organizational extraction (little pure core).
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.
 - **Boot/auth flow** — `boot`, `wireLogin`, `bootSetPassword`, `bootSignup`,
   `enterApp`. Mostly DOM/network orchestration; e2e territory.
