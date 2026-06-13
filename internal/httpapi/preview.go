@@ -180,7 +180,7 @@ func (s *Server) fetchAndCache(rawURL string) {
 			ExpiresAt: time.Now().Add(6 * time.Hour),
 		}
 	} else {
-		lp.ExpiresAt = time.Now().Add(time.Hour)
+		lp.ExpiresAt = time.Now().Add(7 * 24 * time.Hour)
 	}
 	if saveErr := s.st.SaveLinkPreview(context.Background(), lp); saveErr != nil {
 		log.Printf("link preview save %s: %v", rawURL, saveErr)
