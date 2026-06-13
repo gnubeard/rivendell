@@ -115,6 +115,7 @@ Conventions specific to this kind of module:
 | Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
 | @-mention / :emoji / #channel completion widget (+ pure filters) | `autocomplete.js` | unit (14) + e2e | ✅ done |
 | Message-search modal controller (DOM-carrying feature module) | `search.js` | e2e (search, 5) | ✅ done |
+| Shared emoji popup (composer / inline-edit insert + reactions) | `emoji.js` | e2e (emoji-picker, 3) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -150,8 +151,12 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 self-containment — each declares its own state mid-file and touches the shared
 top-of-file state block only through `state`). Each needs a fresh e2e spec first:
 
-- **Emoji picker** — owns `pickerTarget`, `COMMON_EMOJI`; touches `state` (1×) +
-  `editingMessageId` (2×). Renders the picker, inserts into the composer.
+- **Inline message editing** — `editorFor`/`startEdit`/`cancelEdit`/`autoGrowEdit`
+  (+ `commitEdit`), the other half of the old "emoji picker" section, now under
+  its own banner. Stays in app.js: it calls `renderMessages` and owns
+  `editingMessageId`/`editDraft`/`editFocusPending`, which are read in ~11 places
+  (rendering, the Escape handler, composer wiring) — a wireComposer-class
+  entanglement, not a clean widget.
 - **Channel drag-reorder** — owns `chDrag`, `chMousePending`; touches `state`
   (5×). The ordering *math* already lives in `channelorder.js`; this is the DOM
   drag controller around it.

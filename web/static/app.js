@@ -81,6 +81,7 @@ import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
 import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
 import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
+import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -731,7 +732,7 @@ function startRealtime() {
         // The registry changed: re-render the open messages so :shortcode: tokens
         // start/stop rendering as images, and refresh any open emoji surfaces.
         renderMessages();
-        if (emojiPickerOpen()) renderEmojiPicker();
+        if (emojiPicker.isOpen()) emojiPicker.rerender();
         refreshEmojiManagerIfOpen();
       }
       if (evt.type === "reaction.update") {
@@ -2264,7 +2265,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const isRead = m.id <= (state.lastRead[state.activeChannelId] || 0);
     const actions = el("div", { class: "msg-actions" },
       el("button", { class: "msg-act", title: "Add reaction",
-        onclick: (e) => { e.stopPropagation(); openReactionPicker(m.id, e.currentTarget); } }, "😄"),
+        onclick: (e) => { e.stopPropagation(); emojiPicker.openForReaction(m.id, e.currentTarget); } }, "😄"),
       el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
       !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
       el("button", { class: "msg-act", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
@@ -2666,148 +2667,20 @@ function wireComposer() {
 
 // --- emoji picker ------------------------------------------------------------
 
-// The shared emoji popup serves two targets: the composer (insert a token) and a
-// message reaction. pickerTarget tracks which, set when the popup is opened.
-let pickerTarget = { mode: "insert" };
+// The emoji popup is its own controller (emoji.js): it owns the active target
+// and the floating-popup placement math. We pass it the element builder, a
+// state getter, and the hooks it routes picks through; call sites use its
+// toggle / openForReaction / openForInput / isOpen / rerender methods.
+const emojiPicker = createEmojiPicker({
+  el,
+  $,
+  getState: () => state,
+  isModPlus,
+  toggleReaction,
+  openEmojiManager,
+});
 
-// A small set of common Unicode emoji offered alongside the instance's custom
-// emoji, so reactions aren't custom-only. These are literal graphemes (no image).
-const COMMON_EMOJI = ["👍", "👎", "❤️", "😂", "😉", "😍", "🤔", "🎉", "🙌", "😮", "😢", "😡", "🙏", "🔥", "✅", "👀", "💯", "👋"];
-
-function emojiPickerOpen() {
-  const p = $("#emoji-wrap");
-  return p && !p.hidden;
-}
-
-function renderEmojiPicker() {
-  const picker = $("#emoji-picker");
-  const wrap = $("#emoji-wrap");
-  picker.innerHTML = "";
-  // Remove any manage button appended to the wrap by a previous render.
-  wrap.querySelector(".emoji-manage-btn")?.remove();
-  // Quick Unicode palette first — usable as a reaction or dropped into a message.
-  for (const ch of COMMON_EMOJI) {
-    picker.append(el("button", {
-      type: "button", class: "emoji-choice", title: ch,
-      onclick: (e) => chooseEmoji(ch, false, e),
-    }, el("span", { class: "emoji-uni" }, ch)));
-  }
-  const codes = Object.keys(state.emojis).sort();
-  if (codes.length) {
-    picker.append(el("div", { class: "emoji-sep" }));
-    for (const code of codes) {
-      picker.append(el("button", {
-        type: "button", class: "emoji-choice", title: `:${code}:`,
-        onclick: (e) => chooseEmoji(code, true, e),
-      }, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` })));
-    }
-  }
-  // Moderators+ get a ➕ footer strip below the grid that opens the custom-emoji manager.
-  if (isModPlus()) {
-    wrap.append(el("button", {
-      type: "button", class: "emoji-manage-btn", title: "Manage custom emojis",
-      onclick: (e) => { e.stopPropagation(); $("#emoji-wrap").hidden = true; openEmojiManager(); },
-    }, "➕ Manage emojis"));
-  }
-}
-
-// chooseEmoji routes a picked emoji to the popup's current target. isCustom marks a
-// custom shortcode (vs a literal Unicode glyph) — only the former is :colon:-wrapped
-// when inserted into a message; as a reaction value the bare shortcode is stored.
-// Shift-clicking keeps the picker open so multiple emoji can be inserted/reacted.
-function chooseEmoji(value, isCustom, evt) {
-  if (!evt?.shiftKey) $("#emoji-wrap").hidden = true;
-  if (pickerTarget.mode === "react") {
-    toggleReaction(pickerTarget.messageId, value);
-    return;
-  }
-  // mode "insert": the composer (no explicit input) or an inline edit box.
-  insertIntoInput(pickerTarget.input || $("#composer-input"), isCustom ? `:${value}:` : value);
-}
-
-// floatPickerAt fixes the shared #emoji-picker as a popup above (flipping below
-// if cramped) the control that opened it — used by the reaction button and the
-// inline-edit 😀 button, which live outside the composer's CSS anchor. The picker
-// must be rendered (sized) before this is called so getBoundingClientRect reads
-// real dimensions.
-function floatPickerAt(picker, anchorEl) {
-  const a = anchorEl.getBoundingClientRect();
-  const pr = picker.getBoundingClientRect();
-  let left = Math.max(8, Math.min(a.left, window.innerWidth - pr.width - 8));
-  let top = a.top - pr.height - 6;
-  if (top < 8) top = a.bottom + 6;
-  picker.style.left = left + "px";
-  picker.style.top = top + "px";
-}
-
-// floatPicker readies the shared picker as an off-screen fixed popup, renders it,
-// then places it next to anchorEl. Shared setup for the reaction + edit pickers.
-function floatPicker(anchorEl) {
-  const wrap = $("#emoji-wrap");
-  // Render off-screen first so we can measure it, then place it relative to the
-  // control (flipping below if there's no room above).
-  wrap.style.position = "fixed";
-  wrap.style.left = "-9999px";
-  wrap.style.top = "0";
-  wrap.style.right = "auto";
-  wrap.style.bottom = "auto";
-  wrap.hidden = false;
-  renderEmojiPicker();
-  floatPickerAt(wrap, anchorEl);
-}
-
-// openReactionPicker opens the shared popup in reaction mode, floated next to the
-// message control that was clicked (it otherwise lives anchored by the composer).
-function openReactionPicker(messageId, anchorEl) {
-  pickerTarget = { mode: "react", messageId };
-  floatPicker(anchorEl);
-}
-
-// openEditEmojiPicker floats the shared picker next to an inline edit box's 😀
-// button and routes picks into that textarea. Clicking the button again while it
-// is already open for the same box toggles it closed.
-function openEditEmojiPicker(input, anchorEl) {
-  const wrap = $("#emoji-wrap");
-  if (!wrap.hidden && pickerTarget.input === input) {
-    wrap.hidden = true;
-    return;
-  }
-  pickerTarget = { mode: "insert", input };
-  floatPicker(anchorEl);
-}
-
-function toggleEmojiPicker() {
-  const wrap = $("#emoji-wrap");
-  if (wrap.hidden) {
-    pickerTarget = { mode: "insert" }; // no .input ⇒ targets the composer
-    // Clear any fixed-position overrides left by a reaction pick so the popup
-    // returns to its CSS anchor above the composer.
-    wrap.style.position = wrap.style.left = wrap.style.top = wrap.style.right = wrap.style.bottom = "";
-    renderEmojiPicker();
-    wrap.hidden = false;
-  } else {
-    wrap.hidden = true;
-  }
-}
-
-// insertIntoInput drops a token at the caret of a textarea-like field (inline
-// edit box or the composer div), padded with spaces so
-// it reads as a standalone token, then fires a synthetic input event so the
-// target's autosize/typing logic runs as if it were typed.
-function insertIntoInput(input, token) {
-  if (!input) return;
-  const start = input.selectionStart ?? input.value.length;
-  const end = input.selectionEnd ?? input.value.length;
-  const before = input.value.slice(0, start);
-  const lead = before && !/\s$/.test(before) ? " " : "";
-  const insert = `${lead}${token} `;
-  input.value = before + insert + input.value.slice(end);
-  const pos = start + insert.length;
-  input.setSelectionRange(pos, pos);
-  $("#emoji-wrap").hidden = true;
-  input.focus();
-  input.dispatchEvent(new Event("input"));
-}
+// --- inline message editing --------------------------------------------------
 
 // autoGrowEdit sizes the inline-edit textarea to its content (capped by CSS).
 function autoGrowEdit(ta) {
@@ -2844,7 +2717,7 @@ function editorFor(m) {
   // picker on the same event that opens it (mirrors the composer's 😀 button).
   const emojiBtn = el("button", {
     type: "button", class: "msg-edit-emoji", title: "Insert emoji", "aria-label": "Insert emoji",
-    onclick: (e) => { e.stopPropagation(); openEditEmojiPicker(ta, emojiBtn); },
+    onclick: (e) => { e.stopPropagation(); emojiPicker.openForInput(ta, emojiBtn); },
   }, "😀");
   return el("div", { class: "msg-edit" },
     popup,
@@ -3236,7 +3109,7 @@ function showMobileCtxActions(m) {
     onclick: (e) => {
       e.stopPropagation();
       closeMobileCtx();
-      openReactionPicker(m.id, {
+      emojiPicker.openForReaction(m.id, {
         getBoundingClientRect: () => ({
           left: window.innerWidth / 2 - 119,
           right: window.innerWidth / 2 + 119,
@@ -3568,10 +3441,10 @@ function wireChannelControls() {
 // wireEmojiControls wires the composer emoji picker (toggle + outside-dismiss) and
 // the moderator+ custom-emoji manager modal shared with the admin panel.
 function wireEmojiControls() {
-  $("#emoji-btn").onclick = (e) => { e.stopPropagation(); toggleEmojiPicker(); };
+  $("#emoji-btn").onclick = (e) => { e.stopPropagation(); emojiPicker.toggle(); };
   // Dismiss the emoji picker on any click outside it (the button toggles itself).
   document.addEventListener("click", (e) => {
-    if (emojiPickerOpen() && !e.target.closest("#emoji-wrap") && !e.target.closest("#emoji-btn")) {
+    if (emojiPicker.isOpen() && !e.target.closest("#emoji-wrap") && !e.target.closest("#emoji-btn")) {
       $("#emoji-wrap").hidden = true;
     }
   });
