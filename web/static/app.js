@@ -227,7 +227,7 @@ function show(view) {
   if (view !== "app") dismissLoadingScreen();
 }
 
-// --- mobile viewport height ----------------------------------------------
+// --- mobile viewport height --------------------------------------------------
 // Pin a --app-height var to the *visual* viewport so the app fits the area not
 // covered by the on-screen keyboard. Without this, focusing the composer makes
 // the browser scroll the whole page and the header disappears off the top.
@@ -254,7 +254,7 @@ function trackViewportHeight() {
   window.addEventListener("orientationchange", set);
 }
 
-// --- notification chime ---------------------------------------------------
+// --- notification chime ------------------------------------------------------
 // A small, soft "boop" synthesized with the Web Audio API (no asset to ship).
 // Browsers require a user gesture before audio can play, so we lazily create and
 // resume the context on the first interaction.
@@ -337,7 +337,7 @@ function playTones(seq) {
 function greetTone() { playTones([{ f: 523, t: 0, d: 0.12 }, { f: 784, t: 0.1, d: 0.18 }]); }
 function farewellTone() { playTones([{ f: 784, t: 0, d: 0.12 }, { f: 523, t: 0.1, d: 0.18 }]); }
 
-// --- bootstrapping -------------------------------------------------------
+// --- bootstrapping -----------------------------------------------------------
 
 async function boot() {
   trackViewportHeight();
@@ -641,7 +641,7 @@ function onWindowFocus() {
   if (state.activeChannelId) markActiveChannelRead();
 }
 
-// --- realtime ------------------------------------------------------------
+// --- realtime ----------------------------------------------------------------
 
 function startRealtime() {
   if (socket) socket.close();
@@ -900,7 +900,7 @@ async function resync() {
   }
 }
 
-// --- rendering -----------------------------------------------------------
+// --- rendering ---------------------------------------------------------------
 
 // applyTheme paints the chosen UI theme by setting data-theme on <html>; the CSS
 // re-points its color variables for that theme (style.css). normalizeTheme
@@ -1143,7 +1143,7 @@ function renderAdminVisibility() {
   $("#new-channel-btn").hidden = !isMod;
 }
 
-// --- channel reordering (moderator+) -------------------------------------
+// --- channel reordering (moderator+) -----------------------------------------
 // Replaces the old up/down arrow glyphs (too easy to mis-hit). Desktop: press
 // and drag a channel row with the mouse. Mobile: long-press to "unstick" the
 // row, then drag. A plain click/tap still selects the channel; a vertical
@@ -2430,7 +2430,7 @@ const mkAutocomplete = (input, popup) =>
     emojiURL: (code) => api.emojiURL(code),
   });
 
-// --- contenteditable composer wiring (facade in composer-field.js) -------
+// --- contenteditable composer wiring (facade in composer-field.js) -----------
 
 // The composer is a contenteditable="plaintext-only" <div>, not a <textarea>:
 // GeckoView (Firefox for Android) never delivers image clipboard content to a
@@ -2663,7 +2663,7 @@ function wireComposer() {
   }
 }
 
-// --- emoji picker --------------------------------------------------------
+// --- emoji picker ------------------------------------------------------------
 
 // The shared emoji popup serves two targets: the composer (insert a token) and a
 // message reaction. pickerTarget tracks which, set when the popup is opened.
@@ -2877,7 +2877,7 @@ function cancelEdit() {
   }
 }
 
-// --- link previews -------------------------------------------------------
+// --- link previews -----------------------------------------------------------
 
 // fetchExtPreview requests a link preview for url and triggers a re-render when
 // the result arrives. On 202 (background fetch in progress) it retries once
@@ -3051,7 +3051,7 @@ async function togglePin(m) {
   }
 }
 
-// --- reactions -----------------------------------------------------------
+// --- reactions ---------------------------------------------------------------
 
 // findMessage locates a loaded message in the active channel by id.
 function findMessage(messageId) {
@@ -3135,7 +3135,7 @@ async function toggleReaction(messageId, emoji, knownMine) {
   }
 }
 
-// --- forward message -----------------------------------------------------
+// --- forward message ---------------------------------------------------------
 
 // forwardBody builds the text a forward sends. A CHANNEL message forwards as a
 // permalink, which renders as an embed card in the target (via
@@ -3206,7 +3206,7 @@ async function openForwardModal(m) {
   filter.focus();
 }
 
-// --- mobile long-press context menu --------------------------------------
+// --- mobile long-press context menu ------------------------------------------
 
 // openMobileCtx shows the bottom-sheet action menu for a message. Called when
 // the user long-presses a message row on a touch device.
@@ -3295,7 +3295,7 @@ function closeMobileCtx() {
   document.getElementById("mobile-ctx").hidden = true;
 }
 
-// --- pinned messages -----------------------------------------------------
+// --- pinned messages ---------------------------------------------------------
 
 async function openPinsModal() {
   if (!state.channels[state.activeChannelId]) return;
@@ -3365,7 +3365,7 @@ async function refreshPins() {
   list.append(...rows);
 }
 
-// --- message search ------------------------------------------------------
+// --- message search ----------------------------------------------------------
 
 const SEARCH_PAGE = 25;
 let searchSeq = 0;        // last-writer-wins token (the input is debounced + racy)
@@ -3452,7 +3452,7 @@ async function runSearch(reset) {
   }
 }
 
-// --- controls: status, avatar, new channel, admin, logout ---------------
+// --- controls: status, avatar, new channel, admin, logout --------------------
 
 // openLightbox shows an inline image large, centred on a dark backdrop, instead
 // of opening it in a new tab. Dismissed by the × button, Esc, or a backdrop tap
@@ -4071,7 +4071,7 @@ async function openUserCard(userId) {
   } catch (_) {}
 }
 
-// --- admin panel ---------------------------------------------------------
+// --- admin panel -------------------------------------------------------------
 
 async function refreshAdminStats() {
   const box = $("#admin-stats");
@@ -4406,7 +4406,7 @@ async function refreshAdminBotTokens() {
   box.append(table);
 }
 
-// --- helpers -------------------------------------------------------------
+// --- notifications & ring alerts ---------------------------------------------
 
 // renderNotificationTotal reflects the global "missed notifications" count (the
 // sum of pings across channels) in the sidebar badge and the page title, so it's
@@ -4514,6 +4514,8 @@ function clearRingNotification() {
   closeNotificationsByTag(RING_NOTIF_TAG);
 }
 
+// --- web push subscription ---------------------------------------------------
+
 // enablePush registers the service worker and a push subscription, then sends it
 // to the server so DMs/@-mentions arrive when the app is fully closed. Idempotent
 // and best-effort — any failure (older browser, blocked SW, denied permission)
@@ -4569,6 +4571,8 @@ function initPushRouting() {
   }
 }
 
+// --- notification & PTT settings controls ------------------------------------
+
 // renderNotifControl reflects the desktop-notification opt-in into the profile
 // modal: the checkbox shows the *effective* state (preference AND OS permission),
 // and the hint explains anything blocking it.
@@ -4605,6 +4609,8 @@ function renderPttControl() {
     ? "Your mic stays muted in a call until you hold the key. It still types normally in the message box."
     : "Off — your mic is open the whole time you're in a call.";
 }
+
+// --- presence (debounced) ----------------------------------------------------
 
 // Presence debounce: hold an incoming presence.update for PRESENCE_DEBOUNCE_MS
 // before applying it, keyed per user. A newer update for the same user replaces
@@ -4666,6 +4672,8 @@ function presenceClass(u) {
   if (u.status === "away" || u.status === "dnd") return u.status;
   return "online";
 }
+
+// --- avatars & image preloading ----------------------------------------------
 
 // avatarSrc returns the avatar URL for a user with a ?v= token so the browser
 // can cache it aggressively. avatarVersion wins (set by user.update WS events
@@ -4774,6 +4782,8 @@ async function startBackgroundImageWarm() {
   }
 }
 
+// --- loading screen ----------------------------------------------------------
+
 function dismissLoadingScreen() {
   const el = document.getElementById("loading-screen");
   if (!el) return;
@@ -4781,7 +4791,7 @@ function dismissLoadingScreen() {
   el.addEventListener("transitionend", () => { el.hidden = true; }, { once: true });
 }
 
-// --- voice calling -------------------------------------------------------
+// --- voice calling -----------------------------------------------------------
 
 function wireVoiceControls() {
   // Call strip (active call controls at the bottom of the sidebar).
@@ -4913,7 +4923,7 @@ function wireVoiceControls() {
   wirePushToTalk();
 }
 
-// --- push-to-talk --------------------------------------------------------
+// --- push-to-talk ------------------------------------------------------------
 //
 // When PTT is enabled, the mic is held muted in a call (set on join, see
 // onVoiceStateChange) and only opens while the bound key is held. We listen in
@@ -5111,242 +5121,6 @@ function renderRingBanner() {
     $("#ring-decline-btn").textContent = "Cancel";
   }
   banner.hidden = false;
-}
-
-// ---------------------------------------------------------------------------
-// Secret chat event handling
-// --- secret session UI -------------------------------------------------------
-
-// onSecretEvent is the callback from secret.js for all session lifecycle events.
-async function onSecretEvent(evt) {
-  const { dmChannelId } = evt;
-
-  if (evt.type === "secret-request") {
-    // Peer sent a secret.offer. Show the accept/decline banner.
-    secretRequestState = { dmChannelId, fromUserId: evt.fromUserId };
-    renderSecretBanner();
-    return;
-  }
-
-  if (evt.type === "session-active") {
-    secretRequestState = null;
-    renderSecretBanner();
-    renderChannelHeader(state.channels[state.activeChannelId]);
-    if (state.activeChannelId === dmChannelId) renderMessages(true);
-    // Ensure our identity key is published so future handshakes can use it.
-    // Do it here rather than at initSecret time so we don't bother if the user
-    // never uses secret chat.
-    try {
-      const myKeyB64 = await getMyPubKeyB64();
-      if (state.me && state.me.identity_key !== myKeyB64) {
-        await api.publishIdentityKey(myKeyB64);
-      }
-    } catch (e) {
-      console.warn("secret: could not publish identity key:", e && e.message);
-    }
-    return;
-  }
-
-  if (evt.type === "session-ended") {
-    if (secretRequestState && secretRequestState.dmChannelId === dmChannelId) {
-      secretRequestState = null;
-    }
-    renderSecretBanner();
-    renderChannelHeader(state.channels[state.activeChannelId]);
-    if (state.activeChannelId === dmChannelId) renderMessages(true);
-    return;
-  }
-
-  if (evt.type === "message-received") {
-    if (state.activeChannelId === dmChannelId) {
-      renderMessages(false);
-    }
-    return;
-  }
-
-  if (evt.type === "dismiss") {
-    // Another of our tabs accepted/declined; clear the banner here too.
-    if (secretRequestState && secretRequestState.dmChannelId === dmChannelId) {
-      secretRequestState = null;
-      renderSecretBanner();
-    }
-    return;
-  }
-}
-
-function renderSecretBanner() {
-  const banner = $("#secret-banner");
-  if (secretRequestState) {
-    // Incoming request from peer.
-    const { fromUserId } = secretRequestState;
-    const sender = state.users[fromUserId];
-    const name = sender ? (sender.display_name || sender.username) : "Someone";
-    $("#secret-banner-text").textContent = name + " wants to start a secret chat";
-    $("#secret-accept-btn").hidden = false;
-    $("#secret-decline-btn").textContent = "Decline";
-    banner.hidden = false;
-  } else {
-    // Outgoing offer: we sent a request and are waiting for acceptance.
-    const activeCh = state.channels[state.activeChannelId];
-    const sess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
-    if (sess && sess.phase === "offered") {
-      $("#secret-banner-text").textContent = "Secret chat request sent — waiting for the other person to accept…";
-      $("#secret-accept-btn").hidden = true;
-      $("#secret-decline-btn").textContent = "Cancel";
-      banner.hidden = false;
-    } else {
-      banner.hidden = true;
-    }
-  }
-  renderDMs();
-}
-
-// wireSecretControls attaches click handlers to secret-related UI elements.
-function wireSecretControls() {
-  // Accept button on the secret request banner.
-  $("#secret-accept-btn").addEventListener("click", async () => {
-    if (!secretRequestState) return;
-    const { dmChannelId, fromUserId } = secretRequestState;
-    const offer = getPendingOffer(dmChannelId);
-    if (!offer) return;
-    secretRequestState = null;
-    renderSecretBanner();
-    // Ensure our identity key is published before accepting.
-    try {
-      const myKeyB64 = await getMyPubKeyB64();
-      if (state.me && state.me.identity_key !== myKeyB64) {
-        await api.publishIdentityKey(myKeyB64);
-      }
-    } catch (e) {
-      console.warn("secret: could not publish identity key:", e && e.message);
-    }
-    try {
-      await ensureDMOpen(dmChannelId, fromUserId);
-      await acceptSecret(dmChannelId, fromUserId, offer);
-      selectChannel(dmChannelId);
-    } catch (e) {
-      alert("Secret chat setup failed: " + (e && e.message));
-    }
-  });
-
-  // Decline (incoming) / Cancel (outgoing) button on the secret request banner.
-  $("#secret-decline-btn").addEventListener("click", () => {
-    if (secretRequestState) {
-      // Declining an incoming request.
-      const { dmChannelId } = secretRequestState;
-      secretRequestState = null;
-      renderSecretBanner();
-      declineSecret(dmChannelId);
-      return;
-    }
-    // Canceling our own outgoing offer.
-    const activeCh = state.channels[state.activeChannelId];
-    if (!activeCh || !activeCh.is_dm) return;
-    const sess = getSession(activeCh.id);
-    if (!sess || sess.phase !== "offered") return;
-    declineSecret(activeCh.id);
-    renderSecretBanner();
-    renderChannelHeader(activeCh);
-  });
-
-  // The 🔒 button in the DM header.
-  $("#secret-btn").addEventListener("click", async () => {
-    const ch = state.channels[state.activeChannelId];
-    if (!ch || !ch.is_dm) return;
-    const sess = getSession(ch.id);
-
-    if (sess && sess.phase === "active") {
-      // Session active → show safety number modal.
-      openSafetyModal(ch.id, sess);
-      return;
-    }
-
-    // No active session → initiate one.
-    if (sess && sess.phase === "offered") return; // already pending, wait
-    if (sess && sess.phase === "ended") clearEndedSession(ch.id); // stale view — clear it first
-
-    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
-    const peer = otherId && state.users[otherId];
-    const peerKey = peer && peer.identity_key;
-
-    // Ensure our own key is published before offering.
-    try {
-      const myKeyB64 = await getMyPubKeyB64();
-      if (state.me && state.me.identity_key !== myKeyB64) {
-        await api.publishIdentityKey(myKeyB64);
-      }
-    } catch (e) {
-      console.warn("secret: could not publish identity key:", e && e.message);
-    }
-
-    try {
-      await initiateSecret(ch.id, otherId, peerKey);
-      renderSecretBanner();
-    } catch (e) {
-      alert("Secret chat: " + (e && e.message));
-    }
-  });
-
-  // Safety number modal.
-  $("#safety-close").addEventListener("click", () => { $("#safety-modal").hidden = true; });
-  $("#safety-modal").addEventListener("click", (e) => {
-    if (e.target === $("#safety-modal")) $("#safety-modal").hidden = true;
-  });
-
-  // End session button inside the safety number modal.
-  $("#safety-end-btn").addEventListener("click", () => {
-    const ch = state.channels[state.activeChannelId];
-    if (!ch || !ch.is_dm) return;
-    $("#safety-modal").hidden = true;
-    endSecret(ch.id);
-  });
-
-  // Mark-as-verified button inside the safety number modal.
-  $("#safety-verify-btn").addEventListener("click", async () => {
-    const ch = state.channels[state.activeChannelId];
-    if (!ch || !ch.is_dm) return;
-    const sess = getSession(ch.id);
-    if (!sess) return;
-    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
-    await markVerified(otherId, sess.peerIdKeyB64);
-    sess.verified = true;
-    renderChannelHeader(ch);
-    renderMessages();
-    // Update modal display.
-    const statusEl = $("#safety-status");
-    statusEl.textContent = "Verified";
-    statusEl.className = "safety-status verified";
-    $("#safety-verify-btn").hidden = true;
-  });
-}
-
-async function openSafetyModal(dmChannelId, sess) {
-  const ch = state.channels[dmChannelId];
-  const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
-  const peer = otherId && state.users[otherId];
-  const peerName = peer ? (peer.display_name || peer.username) : "them";
-  $("#safety-title").textContent = "Safety number with " + peerName;
-  $("#safety-peer-name").textContent = peerName;
-  $("#safety-number").textContent = "Computing…";
-  const modal = $("#safety-modal");
-  modal.hidden = false;
-  try {
-    const myKeyB64 = await getMyPubKeyB64();
-    const number = await computeSafetyNumber(state.me.id, myKeyB64, otherId, sess.peerIdKeyB64);
-    $("#safety-number").textContent = number;
-  } catch (e) {
-    $("#safety-number").textContent = "(unavailable)";
-  }
-  const statusEl = $("#safety-status");
-  if (sess.verified) {
-    statusEl.textContent = "Verified";
-    statusEl.className = "safety-status verified";
-    $("#safety-verify-btn").hidden = true;
-  } else {
-    statusEl.textContent = "Not verified";
-    statusEl.className = "safety-status";
-    $("#safety-verify-btn").hidden = false;
-  }
 }
 
 // --- voice state callbacks ---------------------------------------------------
@@ -5603,6 +5377,240 @@ function renderCallStrip() {
     camBtn.hidden = true;
   }
   strip.hidden = false;
+}
+
+// --- secret session UI -------------------------------------------------------
+
+// onSecretEvent is the callback from secret.js for all session lifecycle events.
+async function onSecretEvent(evt) {
+  const { dmChannelId } = evt;
+
+  if (evt.type === "secret-request") {
+    // Peer sent a secret.offer. Show the accept/decline banner.
+    secretRequestState = { dmChannelId, fromUserId: evt.fromUserId };
+    renderSecretBanner();
+    return;
+  }
+
+  if (evt.type === "session-active") {
+    secretRequestState = null;
+    renderSecretBanner();
+    renderChannelHeader(state.channels[state.activeChannelId]);
+    if (state.activeChannelId === dmChannelId) renderMessages(true);
+    // Ensure our identity key is published so future handshakes can use it.
+    // Do it here rather than at initSecret time so we don't bother if the user
+    // never uses secret chat.
+    try {
+      const myKeyB64 = await getMyPubKeyB64();
+      if (state.me && state.me.identity_key !== myKeyB64) {
+        await api.publishIdentityKey(myKeyB64);
+      }
+    } catch (e) {
+      console.warn("secret: could not publish identity key:", e && e.message);
+    }
+    return;
+  }
+
+  if (evt.type === "session-ended") {
+    if (secretRequestState && secretRequestState.dmChannelId === dmChannelId) {
+      secretRequestState = null;
+    }
+    renderSecretBanner();
+    renderChannelHeader(state.channels[state.activeChannelId]);
+    if (state.activeChannelId === dmChannelId) renderMessages(true);
+    return;
+  }
+
+  if (evt.type === "message-received") {
+    if (state.activeChannelId === dmChannelId) {
+      renderMessages(false);
+    }
+    return;
+  }
+
+  if (evt.type === "dismiss") {
+    // Another of our tabs accepted/declined; clear the banner here too.
+    if (secretRequestState && secretRequestState.dmChannelId === dmChannelId) {
+      secretRequestState = null;
+      renderSecretBanner();
+    }
+    return;
+  }
+}
+
+function renderSecretBanner() {
+  const banner = $("#secret-banner");
+  if (secretRequestState) {
+    // Incoming request from peer.
+    const { fromUserId } = secretRequestState;
+    const sender = state.users[fromUserId];
+    const name = sender ? (sender.display_name || sender.username) : "Someone";
+    $("#secret-banner-text").textContent = name + " wants to start a secret chat";
+    $("#secret-accept-btn").hidden = false;
+    $("#secret-decline-btn").textContent = "Decline";
+    banner.hidden = false;
+  } else {
+    // Outgoing offer: we sent a request and are waiting for acceptance.
+    const activeCh = state.channels[state.activeChannelId];
+    const sess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
+    if (sess && sess.phase === "offered") {
+      $("#secret-banner-text").textContent = "Secret chat request sent — waiting for the other person to accept…";
+      $("#secret-accept-btn").hidden = true;
+      $("#secret-decline-btn").textContent = "Cancel";
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  }
+  renderDMs();
+}
+
+// wireSecretControls attaches click handlers to secret-related UI elements.
+function wireSecretControls() {
+  // Accept button on the secret request banner.
+  $("#secret-accept-btn").addEventListener("click", async () => {
+    if (!secretRequestState) return;
+    const { dmChannelId, fromUserId } = secretRequestState;
+    const offer = getPendingOffer(dmChannelId);
+    if (!offer) return;
+    secretRequestState = null;
+    renderSecretBanner();
+    // Ensure our identity key is published before accepting.
+    try {
+      const myKeyB64 = await getMyPubKeyB64();
+      if (state.me && state.me.identity_key !== myKeyB64) {
+        await api.publishIdentityKey(myKeyB64);
+      }
+    } catch (e) {
+      console.warn("secret: could not publish identity key:", e && e.message);
+    }
+    try {
+      await ensureDMOpen(dmChannelId, fromUserId);
+      await acceptSecret(dmChannelId, fromUserId, offer);
+      selectChannel(dmChannelId);
+    } catch (e) {
+      alert("Secret chat setup failed: " + (e && e.message));
+    }
+  });
+
+  // Decline (incoming) / Cancel (outgoing) button on the secret request banner.
+  $("#secret-decline-btn").addEventListener("click", () => {
+    if (secretRequestState) {
+      // Declining an incoming request.
+      const { dmChannelId } = secretRequestState;
+      secretRequestState = null;
+      renderSecretBanner();
+      declineSecret(dmChannelId);
+      return;
+    }
+    // Canceling our own outgoing offer.
+    const activeCh = state.channels[state.activeChannelId];
+    if (!activeCh || !activeCh.is_dm) return;
+    const sess = getSession(activeCh.id);
+    if (!sess || sess.phase !== "offered") return;
+    declineSecret(activeCh.id);
+    renderSecretBanner();
+    renderChannelHeader(activeCh);
+  });
+
+  // The 🔒 button in the DM header.
+  $("#secret-btn").addEventListener("click", async () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    const sess = getSession(ch.id);
+
+    if (sess && sess.phase === "active") {
+      // Session active → show safety number modal.
+      openSafetyModal(ch.id, sess);
+      return;
+    }
+
+    // No active session → initiate one.
+    if (sess && sess.phase === "offered") return; // already pending, wait
+    if (sess && sess.phase === "ended") clearEndedSession(ch.id); // stale view — clear it first
+
+    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+    const peer = otherId && state.users[otherId];
+    const peerKey = peer && peer.identity_key;
+
+    // Ensure our own key is published before offering.
+    try {
+      const myKeyB64 = await getMyPubKeyB64();
+      if (state.me && state.me.identity_key !== myKeyB64) {
+        await api.publishIdentityKey(myKeyB64);
+      }
+    } catch (e) {
+      console.warn("secret: could not publish identity key:", e && e.message);
+    }
+
+    try {
+      await initiateSecret(ch.id, otherId, peerKey);
+      renderSecretBanner();
+    } catch (e) {
+      alert("Secret chat: " + (e && e.message));
+    }
+  });
+
+  // Safety number modal.
+  $("#safety-close").addEventListener("click", () => { $("#safety-modal").hidden = true; });
+  $("#safety-modal").addEventListener("click", (e) => {
+    if (e.target === $("#safety-modal")) $("#safety-modal").hidden = true;
+  });
+
+  // End session button inside the safety number modal.
+  $("#safety-end-btn").addEventListener("click", () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    $("#safety-modal").hidden = true;
+    endSecret(ch.id);
+  });
+
+  // Mark-as-verified button inside the safety number modal.
+  $("#safety-verify-btn").addEventListener("click", async () => {
+    const ch = state.channels[state.activeChannelId];
+    if (!ch || !ch.is_dm) return;
+    const sess = getSession(ch.id);
+    if (!sess) return;
+    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+    await markVerified(otherId, sess.peerIdKeyB64);
+    sess.verified = true;
+    renderChannelHeader(ch);
+    renderMessages();
+    // Update modal display.
+    const statusEl = $("#safety-status");
+    statusEl.textContent = "Verified";
+    statusEl.className = "safety-status verified";
+    $("#safety-verify-btn").hidden = true;
+  });
+}
+
+async function openSafetyModal(dmChannelId, sess) {
+  const ch = state.channels[dmChannelId];
+  const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+  const peer = otherId && state.users[otherId];
+  const peerName = peer ? (peer.display_name || peer.username) : "them";
+  $("#safety-title").textContent = "Safety number with " + peerName;
+  $("#safety-peer-name").textContent = peerName;
+  $("#safety-number").textContent = "Computing…";
+  const modal = $("#safety-modal");
+  modal.hidden = false;
+  try {
+    const myKeyB64 = await getMyPubKeyB64();
+    const number = await computeSafetyNumber(state.me.id, myKeyB64, otherId, sess.peerIdKeyB64);
+    $("#safety-number").textContent = number;
+  } catch (e) {
+    $("#safety-number").textContent = "(unavailable)";
+  }
+  const statusEl = $("#safety-status");
+  if (sess.verified) {
+    statusEl.textContent = "Verified";
+    statusEl.className = "safety-status verified";
+    $("#safety-verify-btn").hidden = true;
+  } else {
+    statusEl.textContent = "Not verified";
+    statusEl.className = "safety-status";
+    $("#safety-verify-btn").hidden = false;
+  }
 }
 
 boot();
