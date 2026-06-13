@@ -76,6 +76,7 @@ import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorder
 import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
 import { humanBytes } from "./util.js?v=__RIVENDELL_VERSION__";
+import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -90,9 +91,12 @@ let debugTelemetryFlag = false; // server-side switch (GET /api/instance) to for
 let maxImageBytes = 0;
 let maxAvatarBytes = 0;
 
+// Browser-local preferences (notifications, push-to-talk). See prefs.js; app.js
+// holds the live values, prefs handles load/persist + localStorage fail-safety.
+const prefs = createPrefs();
 // Desktop-notification opt-in (per browser). The OS permission is separate and
 // owned by the browser; this is the user's in-app preference that gates it.
-let notifEnabled = loadNotifPref();
+let notifEnabled = prefs.loadNotif();
 // Ephemeral read-tracking bookkeeping (divider cursor, mark-unread suppression,
 // mark-read POST dedupe). See unread.js for the rules; not part of `state`.
 const unread = createUnreadTracker();
@@ -121,48 +125,15 @@ const drafts = createDraftStore();
 let saveComposerUploads = (_id) => {};
 let restoreComposerUploads = (_id) => {};
 
-function loadNotifPref() {
-  try {
-    return localStorage.getItem("rivendell.notifications") === "1";
-  } catch (e) {
-    return false;
-  }
-}
-
-function saveNotifPref() {
-  try {
-    localStorage.setItem("rivendell.notifications", notifEnabled ? "1" : "0");
-  } catch (e) {
-    /* best-effort: persistence is non-fatal */
-  }
-}
-
 // Push-to-talk (per browser, like the notification preference). When enabled,
 // the mic stays muted in a call until you hold the bound key — see
 // wirePushToTalk. pttKeyCode is a layout-independent KeyboardEvent.code
 // (default backtick); pttTransmitting is true only while the key is held;
 // pttCapturing is true while the profile-modal rebind UI awaits a keypress.
-let pttEnabled = loadPttEnabled();
-let pttKeyCode = loadPttKeyCode();
+let pttEnabled = prefs.loadPttEnabled();
+let pttKeyCode = prefs.loadPttKeyCode();
 let pttTransmitting = false;
 let pttCapturing = false;
-
-function loadPttEnabled() {
-  try { return localStorage.getItem("rivendell.ptt") === "1"; } catch (e) { return false; }
-}
-
-function loadPttKeyCode() {
-  try { return localStorage.getItem("rivendell.pttKey") || "Backquote"; } catch (e) { return "Backquote"; }
-}
-
-function savePttPref() {
-  try {
-    localStorage.setItem("rivendell.ptt", pttEnabled ? "1" : "0");
-    localStorage.setItem("rivendell.pttKey", pttKeyCode);
-  } catch (e) {
-    /* best-effort: persistence is non-fatal */
-  }
-}
 // Member ids of the active channel when it's private (incl. DMs); null means
 // "show everyone" (public channels have no membership rows).
 let activeMemberIds = null;
@@ -928,16 +899,13 @@ async function resync() {
 
 // --- rendering -----------------------------------------------------------
 
-// THEMES mirrors the <select> in index.html and validThemes on the server.
-// "default" is the built-in dark look (no overrides).
-const THEMES = ["default", "light", "forest", "hotpink", "contrast", "vermillion", "cool-blue"];
-
 // applyTheme paints the chosen UI theme by setting data-theme on <html>; the CSS
-// re-points its color variables for that theme (style.css). Unknown/empty falls
-// back to the dark default so a bad value can never leave the UI unstyled.
+// re-points its color variables for that theme (style.css). normalizeTheme
+// (prefs.js) falls back to the dark default so a bad value can't leave the UI
+// unstyled. The allow-list mirrors the <select> in index.html and validThemes
+// on the server.
 function applyTheme(theme) {
-  const t = THEMES.includes(theme) ? theme : "default";
-  document.documentElement.setAttribute("data-theme", t);
+  document.documentElement.setAttribute("data-theme", normalizeTheme(theme));
 }
 
 // myTheme is the persisted theme for the current user (the source of truth the
@@ -3882,7 +3850,7 @@ function wireControls() {
         notifEnabled = false;
         disablePush();
       }
-      saveNotifPref();
+      prefs.saveNotif(notifEnabled);
       renderNotifControl();
     };
   }
@@ -4332,7 +4300,7 @@ function openProfileModal() {
   $("#profile-status-text").value = me.status_text || "";
   $("#profile-pronouns").value = me.pronouns || "";
   $("#profile-bio").value = me.bio || "";
-  $("#profile-theme").value = THEMES.includes(me.theme) ? me.theme : "default";
+  $("#profile-theme").value = normalizeTheme(me.theme);
   renderNotifControl();
   pttCapturing = false; // never reopen mid-rebind
   renderPttControl();
@@ -5266,7 +5234,7 @@ function wirePushToTalk() {
     cb.onchange = () => {
       pttEnabled = cb.checked;
       pttCapturing = false;
-      savePttPref();
+      prefs.savePtt(pttEnabled, pttKeyCode);
       // Apply immediately if we're already in a call: enabling holds the mic
       // muted at rest; disabling opens it back up.
       if (isInCall()) { pttTransmitting = false; setVoiceMuted(pttEnabled); }
@@ -5292,7 +5260,7 @@ function onPttKeyDown(e) {
   if (pttCapturing) {
     e.preventDefault();
     e.stopImmediatePropagation();
-    if (e.code !== "Escape") { pttKeyCode = e.code; savePttPref(); }
+    if (e.code !== "Escape") { pttKeyCode = e.code; prefs.savePtt(pttEnabled, pttKeyCode); }
     pttCapturing = false;
     renderPttControl();
     renderCallStrip();

@@ -67,6 +67,11 @@ the existing e2e (or a new one) hold the line.
 - **Don't move the call sites' job into the module.** Selectors take `state` and
   return values; the module does not render or fetch. DOM/network side effects
   stay in `app.js` (or the chunk's thin adapter).
+- **Inject side-effecting deps to make them unit-testable** without jsdom. A
+  factory can default to the real global and accept a fake in tests — e.g.
+  `createPrefs(storage = globalThis.localStorage)` is exercised with a Map-backed
+  stub in `node:test`. Use this for `localStorage`-style globals; it's not a
+  substitute for e2e where real browser/engine behavior is what matters.
 
 ## Status
 
@@ -77,6 +82,7 @@ the existing e2e (or a new one) hold the line.
 | Per-channel composer scratch (draft text + attachments) | `drafts.js` | unit (12) | ✅ done |
 | Composer field facade (textarea-on-div) | `composer-field.js` | e2e (composer-paste) | ✅ done |
 | Small pure helpers (`humanBytes`) | `util.js` | unit (6) | ✅ done |
+| Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -85,9 +91,6 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 - **Composer** — `wireComposer`, `uploadAndInsert`, attachment tray render,
   send path. Entangled with `state`/`api`/render fns; extract after the
   self-contained `composer-field` facade. e2e-covered (composer-paste).
-- **Theme + preferences** — `applyTheme`/`myTheme`, notif + PTT pref load/save.
-  Pure serialization core (parse/format the stored value) → drop into the now-
-  existing `util.js` and unit-test; thin localStorage/`<html>` adapter stays.
 - `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
   `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.
