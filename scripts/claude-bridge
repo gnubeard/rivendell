@@ -563,7 +563,7 @@ handle_channel() {
                 -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
             usage_out=$(printf '%s' "$raw" | python3 -c "
 import json, sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 try:
     d = json.load(sys.stdin)
@@ -571,27 +571,27 @@ except Exception:
     print('Could not parse usage response.')
     sys.exit(0)
 
-parts = []
+lines = []
 fh = d.get('five_hour') or {}
 if fh:
     u = fh['utilization']
-    r = datetime.fromisoformat(fh['resets_at']).astimezone(timezone.utc)
-    parts.append(f'5h: {u:.0f}% used, resets {r.strftime(\"%H:%M UTC\")}')
+    r = datetime.fromisoformat(fh['resets_at']).astimezone()
+    lines.append(f'- **5h:** {u:.0f}% used, resets {r.strftime(\"%H:%M %Z\")}')
 
 sd = d.get('seven_day') or {}
 if sd:
     u = sd['utilization']
-    r = datetime.fromisoformat(sd['resets_at']).astimezone(timezone.utc)
-    parts.append(f'7-day: {u:.0f}% used, resets {r.strftime(\"%b %-d\")}')
+    r = datetime.fromisoformat(sd['resets_at']).astimezone()
+    lines.append(f'- **7-day:** {u:.0f}% used, resets {r.strftime(\"%b %-d\")}')
 
 ex = d.get('extra_usage') or {}
 if ex and ex.get('is_enabled'):
     used = ex['used_credits'] / 100
     limit = ex['monthly_limit'] / 100
     pct = ex['utilization']
-    parts.append(f'extra: \${used:.2f} / \${limit:.0f} ({pct:.0f}%)')
+    lines.append(f'- **Extra:** \${used:.2f} / \${limit:.0f} ({pct:.0f}%)')
 
-print('; '.join(parts) + '.' if parts else 'No usage data.')
+print('\n'.join(lines) if lines else 'No usage data.')
 " 2>/dev/null) || usage_out=""
             [ -z "$usage_out" ] && usage_out="Usage API unavailable."
             reply_msg "$channel_id" "$msg_id" "$usage_out" >/dev/null 2>&1 || true
