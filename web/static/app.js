@@ -73,6 +73,7 @@ import {
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
 import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL_VERSION__";
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
+import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -112,10 +113,8 @@ function schedulePreviewRender() {
 // these get a "message deleted" tombstone; messages that arrive already-deleted
 // from history render as nothing, so a fresh load isn't littered with tombstones.
 const liveDeleted = new Set();
-// Composer draft text saved per channel so switching channels doesn't discard work.
-const channelDrafts = new Map(); // channelId -> string
-// Composer attachment tiles saved per channel alongside the draft text.
-const channelAttachments = new Map(); // channelId -> pendingUploads array
+// Per-channel composer scratch (draft text + pending uploads). See drafts.js.
+const drafts = createDraftStore();
 // Set by wireComposer once it has closure access to pendingUploads.
 let saveComposerUploads = (_id) => {};
 let restoreComposerUploads = (_id) => {};
@@ -1489,9 +1488,7 @@ async function selectChannel(id) {
   // Save the composer draft for the channel we're leaving.
   const leaving = state.activeChannelId;
   if (leaving && leaving !== id) {
-    const draft = $("#composer-input").value;
-    if (draft.trim()) channelDrafts.set(leaving, draft);
-    else channelDrafts.delete(leaving);
+    drafts.saveText(leaving, $("#composer-input").value);
     saveComposerUploads(leaving);
   }
   // Leaving a channel abandons any inline edit or pending reply in progress.
@@ -1526,7 +1523,7 @@ async function selectChannel(id) {
   startBackgroundImageWarm(); // reprioritizes from the new active channel outward
   // Restore any saved draft and attachments for this channel.
   const composerInput = $("#composer-input");
-  composerInput.value = channelDrafts.get(id) || "";
+  composerInput.value = drafts.restoreText(id);
   restoreComposerUploads(id);
   // (No JS sizing: the contenteditable composer auto-grows between its CSS
   // min/max-height.)
@@ -2902,13 +2899,12 @@ function wireComposer() {
   // Save/restore attachment tray state when the user switches channels, so
   // uploads stay with the channel they belong to rather than following the user.
   saveComposerUploads = (channelId) => {
-    if (pendingUploads.length) channelAttachments.set(channelId, pendingUploads);
-    else channelAttachments.delete(channelId);
+    drafts.saveAttachments(channelId, pendingUploads);
     pendingUploads = [];
     renderAttachments();
   };
   restoreComposerUploads = (channelId) => {
-    pendingUploads = channelAttachments.get(channelId) || [];
+    pendingUploads = drafts.restoreAttachments(channelId);
     renderAttachments();
   };
 
