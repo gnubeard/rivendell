@@ -80,6 +80,7 @@ import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__"
 import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
 import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
+import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -3367,90 +3368,17 @@ async function refreshPins() {
 
 // --- message search ----------------------------------------------------------
 
-const SEARCH_PAGE = 25;
-let searchSeq = 0;        // last-writer-wins token (the input is debounced + racy)
-let searchQuery = "";     // the query the current results belong to
-let searchCursor = 0;     // keyset: id of the oldest result loaded so far
-let searchDebounce = null;
-
-function openSearchModal() {
-  closeDrawers();
-  $("#search-modal").hidden = false;
-  $("#search-input").focus();
-  $("#search-input").select();
-  // Re-run for the existing query (results may be stale); a blank box just clears.
-  runSearch(true);
-}
-
-// channelLabel renders a channel's display name for a search hit, mirroring the
-// header: DMs as "@ name", private as "🔒 name", public as "# name".
-function channelLabel(ch) {
-  if (!ch) return "unknown channel";
-  if (ch.is_dm) return "@ " + dmDisplayName(state, ch);
-  return (ch.is_private ? "🔒 " : "# ") + ch.name;
-}
-
-// runSearch fetches results for the current input. reset=true starts a fresh
-// query (clears the list and cursor); reset=false appends the next older page.
-// A generation token guards against the debounced/typed calls racing — only the
-// latest fetch is allowed to touch the DOM.
-async function runSearch(reset) {
-  const q = $("#search-input").value.trim();
-  const list = $("#search-results");
-  const more = $("#search-more");
-  if (reset) {
-    searchQuery = q;
-    searchCursor = 0;
-  }
-  if (!q) {
-    searchSeq++; // cancel any in-flight fetch from a prior keystroke
-    list.innerHTML = "";
-    more.hidden = true;
-    return;
-  }
-  const seq = ++searchSeq;
-  more.hidden = true;
-  let results;
-  try {
-    results = await api.search(q, { before: searchCursor || undefined, limit: SEARCH_PAGE });
-  } catch (ex) {
-    if (seq !== searchSeq) return;
-    list.innerHTML = "";
-    list.append(el("li", { class: "notice" }, ex.message));
-    return;
-  }
-  if (seq !== searchSeq) return; // a newer search superseded us
-  // Fetch channel metadata for any result from a channel not in local state
-  // (e.g. a closed DM). Batch by unique id to avoid redundant fetches.
-  const unknownIds = [...new Set(results.map((m) => m.channel_id).filter((id) => !state.channels[id]))];
-  const fetchedChannels = {};
-  await Promise.all(unknownIds.map(async (id) => {
-    try { fetchedChannels[id] = await api.getChannel(id); } catch (_) {}
-  }));
-  if (seq !== searchSeq) return;
-  if (reset) list.innerHTML = "";
-  if (reset && !results.length) {
-    list.append(el("li", { class: "notice" }, "No messages found."));
-    return;
-  }
-  for (const m of results) {
-    const ch = state.channels[m.channel_id] || fetchedChannels[m.channel_id];
-    const author = state.users[m.user_id];
-    list.append(
-      el("li", { class: "pin-row search-row", onclick: () => { $("#search-modal").hidden = true; jumpToMessage(m.channel_id, m.id); } },
-        el("div", { class: "pin-head" },
-          el("span", { class: "search-channel" }, channelLabel(ch)),
-          el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
-          el("span", { class: "msg-time" }, formatTime(m.created_at))),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { embedImages: false, channels: state.channels, users: state.users }) }))
-    );
-  }
-  // A full page implies more may exist; advance the cursor to the oldest hit.
-  if (results.length === SEARCH_PAGE) {
-    searchCursor = results[results.length - 1].id;
-    more.hidden = false;
-  }
-}
+// The search modal is its own controller (search.js); it owns its racy state
+// (generation token, query, keyset cursor, debounce) and renders hits. We give
+// it the element builder and the navigation hooks it needs; wireSearchControls
+// binds the DOM events to its methods.
+const search = createSearch({
+  el,
+  $,
+  getState: () => state,
+  jumpToMessage,
+  closeDrawers,
+});
 
 // --- control wiring: one-time event bindings, grouped by concern -------------
 
@@ -3680,19 +3608,15 @@ function wireEmojiControls() {
 // wireSearchControls wires the message-search modal: open/close, debounced typing,
 // submit-to-search-now, and the "load more" pager.
 function wireSearchControls() {
-  $("#search-btn").onclick = openSearchModal;
+  $("#search-btn").onclick = () => search.open();
   $("#search-close").onclick = () => ($("#search-modal").hidden = true);
   // Debounce typing so each keystroke doesn't fire a query; Enter searches now.
-  $("#search-input").addEventListener("input", () => {
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => runSearch(true), 250);
-  });
+  $("#search-input").addEventListener("input", () => search.onInput());
   $("#search-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    clearTimeout(searchDebounce);
-    runSearch(true);
+    search.runNow();
   });
-  $("#search-more").onclick = () => runSearch(false);
+  $("#search-more").onclick = () => search.more();
 }
 
 // wireMobileContextMenu wires the mobile long-press message menu: the backdrop tap

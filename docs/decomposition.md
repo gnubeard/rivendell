@@ -56,6 +56,32 @@ Never rewrite hardened DOM code just to make it unit-testable. Reorganize; let
 the existing e2e (or a new one) hold the line.
 ```
 
+### Two methods, and where we are now
+
+The early slices took the **pure-core** path: a data transform or decision rule
+lifted out and exhaustively unit-tested, with a thin DOM adapter left behind
+(`unread`, `channelorder`, `drafts`, `prefs`, `previews`, `util`, the
+`autocomplete`/`attachments` filters). That well is now largely dry — what
+remains in `app.js` is overwhelmingly DOM construction and stateful
+orchestration with little extractable pure logic.
+
+So the current method is the **feature module** (the `no` branch above): lift a
+whole feature that *carries its own DOM* — it owns its state, renders itself, and
+talks to the rest of the app through a small `createX(deps)` surface — and let an
+e2e spec be the net. `search.js` is the pilot: it owns its racy state (generation
+token, query, keyset cursor, debounce), and `web/e2e/search.spec.js` (written
+*before* the extraction, run green against the old code first) pins the contract.
+Conventions specific to this kind of module:
+
+- **Pass `el`/`$` and read state through a getter.** A DOM-carrying module takes
+  the element builder and querySelector helper as deps, and `getState: () => state`
+  (not the value — `state` is reassigned on every update). Navigation/side-effect
+  hooks (`jumpToMessage`, `closeDrawers`) are passed in; already-modular helpers
+  (`formatMessage`, `formatTime`, `dmDisplayName`) are imported directly.
+- **Write the e2e first.** Prove the new spec passes against the *un-extracted*
+  code, so a later failure means the extraction regressed — not that the spec was
+  wrong.
+
 ## Module conventions
 
 - **One module = one concern.** Name it for the concern (`unread`, `channelorder`).
@@ -88,6 +114,7 @@ the existing e2e (or a new one) hold the line.
 | Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
 | Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
 | @-mention / :emoji / #channel completion widget (+ pure filters) | `autocomplete.js` | unit (14) + e2e | ✅ done |
+| Message-search modal controller (DOM-carrying feature module) | `search.js` | e2e (search, 5) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -111,8 +138,27 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   to add. So per our own rule it **stays in app.js** (honestly bannered and
   findable); revisit only if a pure core emerges. (The pure `formatTime` that
   used to sit under this banner was mis-filed and has moved to `util.js`.)
-- **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.
+- **Audio/tones** — `boop`/`playTones`/greet/farewell. Scouted: pure Web Audio
+  scheduling against a shared `audioCtx`, no extractable pure core (the tone
+  sequences are trivial data; unit-testing them is a tautology). Leave it.
 - **Boot/auth flow** — `boot`, `wireLogin`, `bootSetPassword`, `bootSignup`,
   `enterApp`. Mostly DOM/network orchestration; e2e territory.
 - **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. Folds into
   `state.applyEvent` already; the handler's routing is DOM-heavy.
+
+**Feature-module candidates** (next targets for the `search.js` method, ranked by
+self-containment — each declares its own state mid-file and touches the shared
+top-of-file state block only through `state`). Each needs a fresh e2e spec first:
+
+- **Emoji picker** — owns `pickerTarget`, `COMMON_EMOJI`; touches `state` (1×) +
+  `editingMessageId` (2×). Renders the picker, inserts into the composer.
+- **Channel drag-reorder** — owns `chDrag`, `chMousePending`; touches `state`
+  (5×). The ordering *math* already lives in `channelorder.js`; this is the DOM
+  drag controller around it.
+- **Presence** — owns `pendingPresence`, `PRESENCE_DEBOUNCE_MS`. The debounce +
+  apply logic; the `users.status`-durable and self-exempt invariants are guarded
+  by Go tests, so the e2e need only pin the dot-flicker debounce.
+- **Image preloading/warming** — owns `warmGen`, `preloadedAvatars`,
+  `WARM_IMAGES_PER_CHANNEL`. Background avatar/image warm; mostly self-contained.
+- **Link previews** — owns `_previewRenderTimer`; already leans on `previews.js`
+  for its cache state machine. The render/observe half could join it.
