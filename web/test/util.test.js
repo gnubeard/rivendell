@@ -1,0 +1,36 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { humanBytes } from "../static/util.js";
+
+test("humanBytes shows whole bytes below 1 KB", () => {
+  assert.equal(humanBytes(0), "0 B");
+  assert.equal(humanBytes(1), "1 B");
+  assert.equal(humanBytes(512), "512 B");
+  assert.equal(humanBytes(1023), "1023 B");
+});
+
+test("humanBytes promotes to KB/MB/GB at the 1024 boundaries", () => {
+  assert.equal(humanBytes(1024), "1 KB");
+  assert.equal(humanBytes(1024 * 1024), "1 MB");
+  assert.equal(humanBytes(1024 * 1024 * 1024), "1 GB");
+});
+
+test("humanBytes drops the decimal for whole-number values", () => {
+  assert.equal(humanBytes(2048), "2 KB");
+  assert.equal(humanBytes(5 * 1024 * 1024), "5 MB");
+});
+
+test("humanBytes keeps one decimal for non-whole values under 10", () => {
+  assert.equal(humanBytes(1536), "1.5 KB"); // 1.5
+  assert.equal(humanBytes(1024 * 2.5), "2.5 KB");
+});
+
+test("humanBytes rounds to a whole number once the value reaches 10", () => {
+  assert.equal(humanBytes(1024 * 10.5), "11 KB"); // ≥10 → rounded, no decimal
+  assert.equal(humanBytes(1024 * 15), "15 KB");
+});
+
+test("humanBytes caps the unit at GB rather than going to TB", () => {
+  // 2048 GB stays in GB (the unit table stops at GB).
+  assert.equal(humanBytes(2048 * 1024 * 1024 * 1024), "2048 GB");
+});

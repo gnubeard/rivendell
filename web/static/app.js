@@ -75,6 +75,7 @@ import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
 import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
+import { humanBytes } from "./util.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -414,17 +415,6 @@ async function applyInstanceName() {
   } catch {
     /* keep the default branding */
   }
-}
-
-// humanBytes renders a byte count as a compact, human-friendly size for error
-// messages (e.g. 5242880 → "5 MB").
-function humanBytes(n) {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB"];
-  let val = n / 1024, i = 0;
-  while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
-  const rounded = val >= 10 || val === Math.floor(val) ? Math.round(val) : val.toFixed(1);
-  return `${rounded} ${units[i]}`;
 }
 
 // fileTooLarge fails fast when a chosen file exceeds the server's upload ceiling,

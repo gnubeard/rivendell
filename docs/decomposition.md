@@ -76,6 +76,7 @@ the existing e2e (or a new one) hold the line.
 | Sidebar ordering + drag-reorder diff | `channelorder.js` | unit (12) | ✅ done |
 | Per-channel composer scratch (draft text + attachments) | `drafts.js` | unit (12) | ✅ done |
 | Composer field facade (textarea-on-div) | `composer-field.js` | e2e (composer-paste) | ✅ done |
+| Small pure helpers (`humanBytes`) | `util.js` | unit (6) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -85,10 +86,10 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   send path. Entangled with `state`/`api`/render fns; extract after the
   self-contained `composer-field` facade. e2e-covered (composer-paste).
 - **Theme + preferences** — `applyTheme`/`myTheme`, notif + PTT pref load/save.
-  Has a pure serialization core (parse/format the stored value) worth unit tests;
-  thin localStorage/`<html>` adapter stays.
-- **Small utils** — `humanBytes` (pure, trivially unit-testable), `fileTooLarge`
-  (pure size check + an `alert`). Candidate for a `util.js` or fold into format.
+  Pure serialization core (parse/format the stored value) → drop into the now-
+  existing `util.js` and unit-test; thin localStorage/`<html>` adapter stays.
+- `fileTooLarge` (pure size check + an `alert`) still in app.js; it imports
+  `humanBytes` from `util.js`. Could move its pure check to `util.js` later.
 - **Audio/tones** — `boop`/`playTones`/greet/farewell. Web Audio; e2e or leave.
 - **Link/embed previews** — `msgPreviewCache`/`extPreviewCache`/
   `schedulePreviewRender`. A cache state machine (loading/pending/failed) with a
