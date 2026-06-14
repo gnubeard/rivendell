@@ -5,6 +5,14 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-14
+
+### Added
+- `nature.com` is now in the default link-preview allowlist, so links to Nature articles render preview cards.
+
+### Fixed
+- Mobile long-press message menu: for non-moderator members the sheet stopped rendering partway (a script error at the Pin row), hiding Mark-read/Delete. The full action sheet now renders for everyone.
+
 ## [1.4.67] - 2026-06-13
 
 ### Fixed

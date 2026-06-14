@@ -55,6 +55,23 @@ test("presenceMatches detects whether a payload changes the displayed presence",
   assert.equal(S.presenceMatches(user, null), false);
 });
 
+test("isAdmin and canModerate gate on the role hierarchy", () => {
+  // admin > moderator > member.
+  assert.equal(S.isAdmin({ role: "admin" }), true);
+  assert.equal(S.isAdmin({ role: "moderator" }), false, "moderator is not admin");
+  assert.equal(S.isAdmin({ role: "member" }), false);
+
+  assert.equal(S.canModerate({ role: "admin" }), true, "admin can moderate");
+  assert.equal(S.canModerate({ role: "moderator" }), true);
+  assert.equal(S.canModerate({ role: "member" }), false);
+
+  // Missing user, missing role, or an unknown role → lowest privilege (member).
+  assert.equal(S.isAdmin(null), false);
+  assert.equal(S.canModerate(null), false);
+  assert.equal(S.isAdmin({}), false);
+  assert.equal(S.canModerate({ role: "guest" }), false);
+});
+
 test("channels sort by position then name", () => {
   const s = S.setChannels(S.initialState(), [
     { id: 3, name: "zeta", position: 0 },
@@ -150,6 +167,42 @@ test("applyEvent routes message.new and message.delete", () => {
   assert.equal(s.messages[7].length, 1);
   s = S.applyEvent(s, { type: "message.delete", payload: { id: 1, channel_id: 7 } });
   assert.equal(s.messages[7][0].content, "");
+});
+
+test("applyEvent message.new bumps last_message_at; message.update does not", () => {
+  let s = S.initialState();
+  s = S.applyEvent(s, { type: "channel.new", payload: { id: 7, name: "g", position: 0, last_message_at: null } });
+  s = S.applyEvent(s, { type: "message.new", payload: { id: 1, channel_id: 7, content: "hi", created_at: "2026-06-14T10:00:00Z" } });
+  assert.equal(s.channels[7].last_message_at, "2026-06-14T10:00:00Z", "message.new advances last_message_at");
+  // An edit to an existing message must not move recency.
+  s = S.applyEvent(s, { type: "message.update", payload: { id: 1, channel_id: 7, content: "edited", created_at: "2026-06-14T11:00:00Z" } });
+  assert.equal(s.channels[7].last_message_at, "2026-06-14T10:00:00Z", "message.update leaves last_message_at unchanged");
+  // A message for an unknown channel is still stored; there's just no channel to bump.
+  s = S.applyEvent(s, { type: "message.new", payload: { id: 2, channel_id: 99, content: "x", created_at: "2026-06-14T12:00:00Z" } });
+  assert.equal(s.messages[99].length, 1, "message stored even without a known channel");
+});
+
+test("applyEvent member.remove drops my channel unless I'm an admin", () => {
+  const base = () => {
+    let s = S.initialState();
+    s = S.setMe(s, { id: 1, role: "member" });
+    return S.applyEvent(s, { type: "channel.new", payload: { id: 7, name: "priv", position: 0 } });
+  };
+  // I (a member) was removed → channel dropped.
+  let s = S.applyEvent(base(), { type: "member.remove", payload: { channel_id: 7, user_id: 1 } });
+  assert.equal(s.channels[7], undefined, "member removed from own channel → dropped");
+
+  // An admin keeps bypass access → channel retained (reducer is a no-op).
+  let admin = S.setMe(base(), { id: 1, role: "admin" });
+  s = S.applyEvent(admin, { type: "member.remove", payload: { channel_id: 7, user_id: 1 } });
+  assert.equal(s, admin, "admin self-removal is a no-op in the reducer");
+  assert.ok(s.channels[7], "admin retains the channel (bypass access)");
+
+  // Someone *else* being removed is roster-only bookkeeping the handler does;
+  // the reducer leaves state untouched.
+  const before = base();
+  s = S.applyEvent(before, { type: "member.remove", payload: { channel_id: 7, user_id: 2 } });
+  assert.equal(s, before, "another user's removal is a no-op in the reducer");
 });
 
 test("applyEvent routes channel lifecycle", () => {
@@ -393,4 +446,30 @@ test("nextUnreadChannelId finds the nearest unread in a direction", () => {
   assert.equal(S.nextUnreadChannelId(order, null, unread, 1), 10, "no active, down -> first unread");
   assert.equal(S.nextUnreadChannelId(order, null, unread, -1), 40, "no active, up -> last unread");
   assert.equal(S.nextUnreadChannelId(order, 20, {}, 1), null, "nothing unread -> null");
+});
+
+test("anyVideoPresent: own camera on is enough", () => {
+  const vcs = { videoMuted: false, participants: [{ user_id: 1, video_muted: true }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), true);
+});
+
+test("anyVideoPresent: a peer's camera on counts even when ours is off", () => {
+  const vcs = { videoMuted: true, participants: [{ user_id: 1, video_muted: true }, { user_id: 2, video_muted: false }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), true);
+});
+
+test("anyVideoPresent: all cameras off -> no video", () => {
+  const vcs = { videoMuted: true, participants: [{ user_id: 1, video_muted: true }, { user_id: 2, video_muted: true }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), false);
+});
+
+test("anyVideoPresent: our own muted camera does not count as a peer's", () => {
+  // only participant is us, camera off -> nothing to show (the some() must skip self)
+  const vcs = { videoMuted: true, participants: [{ user_id: 1, video_muted: false }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), false);
+});
+
+test("anyVideoPresent: tolerates a missing participants list", () => {
+  assert.equal(S.anyVideoPresent({ videoMuted: true }, 1), false);
+  assert.equal(S.anyVideoPresent({ videoMuted: false }, 1), true);
 });

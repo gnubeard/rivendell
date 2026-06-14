@@ -1,0 +1,19 @@
+# Makefile.local.example — per-host Make overrides for the e2e suite.
+#
+# Copy to `Makefile.local` (git-ignored) and edit for your environment. The
+# Makefile `-include`s it, so these win over the tracked defaults; anything you
+# pass on the `make` command line still wins over both.
+#
+# Most setups need NOTHING here: with a local Postgres and a host `psql`, plain
+# `make test-e2e` resets the e2e DB over E2E_DATABASE_URL on its own. Fill this in
+# only when your e2e database is behind a container or a nonstandard port.
+
+# Where the disposable e2e database lives (NOT your dev DB — the suite wipes it).
+# E2E_DATABASE_URL := postgres://chat:chat_dev_pw@localhost:55432/chat_e2e?sslmode=disable
+
+# How the pre-run schema wipe reaches Postgres when there's no usable host `psql`
+# (e.g. it runs inside the container that hosts the DB). global-setup.js exports
+# the wipe SQL to this command as $E2E_RESET_SQL — keep the literal, unexpanded
+# "$E2E_RESET_SQL" here (the recipe passes it through for the shell to expand).
+# Replace <pg-container> with your container's name.
+# E2E_DB_RESET_CMD := podman exec -i -e PGPASSWORD=chat_dev_pw <pg-container> psql -U chat -d chat_e2e -v ON_ERROR_STOP=1 -c "$$E2E_RESET_SQL"

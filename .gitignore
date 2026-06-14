@@ -6,6 +6,10 @@ rivendell
 .env
 .env.local
 
+# Per-host Make overrides (e2e DB reset path, container names, ports) — untracked
+# by design; see Makefile.local.example.
+Makefile.local
+
 # sensitive credentials
 .creds
 
@@ -15,6 +19,7 @@ web/package-lock.json
 
 # Playwright e2e artifacts (suite under web/e2e)
 web/test-results/
+test-results/
 web/playwright-report/
 web/e2e/.e2e-state.json
 web/e2e/server.log

@@ -163,6 +163,18 @@ export function presenceMatches(user, payload) {
     !!user.idle === !!payload.idle;
 }
 
+// Role predicates over the rivendell hierarchy (admin > moderator > member).
+// One tested home for the role checks the UI gates on, so the string comparison
+// isn't open-coded at every call site. A missing user/role is treated as the
+// lowest privilege (member). Pure.
+export function isAdmin(user) {
+  return !!user && user.role === "admin";
+}
+
+export function canModerate(user) {
+  return !!user && (user.role === "admin" || user.role === "moderator");
+}
+
 export function setPresence(state, userId, online, status, idle = false) {
   const prev = state.users[userId];
   if (!prev) return state;
@@ -254,6 +266,17 @@ export function otherDMParticipant(channel, meId) {
   if (!ids.length) return null;
   const other = ids.find((id) => id !== meId);
   return other != null ? other : (ids[0] === meId ? meId : null);
+}
+
+// anyVideoPresent reports whether a call has any live video worth showing: our
+// own camera is on, OR some *other* participant's is. It's the single predicate
+// behind both the #video-grid show/hide (videogrid.js) and the mobile 💬/📺
+// header toggle's visibility (app.js) — the two MUST agree or you get a toggle
+// with no grid behind it (or vice versa). DM and group calls share this form: a
+// DM has exactly one other participant, so the `some(... !== meId)` reduces to
+// "is the peer's camera on". `vcs` is voice.js's voiceCallState (not `state`).
+export function anyVideoPresent(vcs, meId) {
+  return !vcs.videoMuted || (vcs.participants || []).some((p) => p.user_id !== meId && !p.video_muted);
 }
 
 // setMessages replaces the message list for a channel (used on initial load).
@@ -366,11 +389,29 @@ export function applyEvent(state, evt) {
       return upsertChannel(state, evt.payload);
     case "channel.archive":
       return removeChannel(state, evt.payload.id);
-    case "message.new":
+    case "message.new": {
+      // A new message also advances the channel's last_message_at so the DM list
+      // stays sorted by recency. Edits (message.update) must NOT bump it.
+      let s = addMessage(state, evt.payload);
+      const ch = s.channels[evt.payload.channel_id];
+      if (ch) s = upsertChannel(s, { ...ch, last_message_at: evt.payload.created_at });
+      return s;
+    }
     case "message.update":
       return addMessage(state, evt.payload);
     case "message.delete":
       return markMessageDeleted(state, evt.payload.channel_id, evt.payload.id);
+    case "member.remove": {
+      // I was removed (or left from another session). Drop the channel unless I'm
+      // an admin, who retains read-only bypass access to private channels. Removal
+      // of *other* users is roster-only bookkeeping the handler does (activeMemberIds
+      // is not part of state), so it's a no-op here.
+      const { channel_id, user_id } = evt.payload;
+      if (user_id === (state.me && state.me.id) && !isAdmin(state.me)) {
+        return removeChannel(state, channel_id);
+      }
+      return state;
+    }
     case "reaction.update":
       return setReactions(state, evt.payload.channel_id, evt.payload.message_id, evt.payload.reactions);
     case "read.update":

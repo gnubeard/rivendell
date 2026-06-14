@@ -16,16 +16,33 @@ Some choices were forced by the build environment — removing them is not a fre
 cmd/server/main.go            entrypoint; flags; first-boot bootstrap
 internal/config/config.go     env-var config (RIVENDELL_* vars)
 internal/auth/                password.go (PBKDF2), token.go (random+hash)
-internal/store/               store.go (open/migrate + structs), queries.go (all SQL)
+internal/store/               store.go (open/migrate + structs), queries.go (all SQL),
+                              migrations/ (0001..NNNN .sql, embedded + applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
 internal/httpapi/             server.go (routes/middleware), handlers.go (handler bodies)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188)
-web/static/                   app.js, api.js, ws.js, format.js, state.js,
-                              voice.js, secret.js, notify.js, syntax.js, style.css
+web/static/                   app.js (orchestrator; being decomposed — see
+                              docs/decomposition.md), api.js, ws.js, state.js,
+                              format.js, syntax.js, voice.js, secret.js,
+                              notify.js, rtcdebug.js, style.css; modules carved
+                              out of app.js: unread.js, channelorder.js,
+                              drafts.js, composer-field.js, attachments.js,
+                              autocomplete.js, prefs.js, previews.js, util.js,
+                              search.js, emoji.js, channeldrag.js, presence.js,
+                              imagewarm.js, linkpreview.js, admin.js, secretui.js,
+                              forward.js, pins.js, modals.js, mobilectx.js,
+                              videogrid.js
 web/sw.js                     service worker (Web Push)
-web/test/                     node:test suites for all pure JS modules
-docs/                         otr.md, voice.md, video.md, web_push.md,
-                              composer-paste-qa.md
+web/test/                     node:test unit suites for the pure JS modules
+                              (DOM-carrying modules are covered by e2e instead)
+web/e2e/                      Playwright specs (composer-paste, dm-call,
+                              group-call, search, emoji-picker, channel-reorder,
+                              link-previews, admin, secret-chat, forward, pins,
+                              modals, mobile-ctx, video-grid, non-admin); dev-only, run via `make test-e2e`
+docs/                         decomposition.md (frontend module breakup),
+                              design.md, otr.md, voice.md, video.md,
+                              web_push.md, file_upload.md, composer-paste-qa.md,
+                              call-drop-investigation.md, bridge-dm-update-note.md
 ```
 
 Module path `rivendell`; Go 1.26. Imports `rivendell/internal/...`.
@@ -61,6 +78,16 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - Presence debounce (~1s, `schedulePresenceUpdate`) — don't "simplify" to immediate apply. Own user is exempt.
 - `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last.
 - CSS: `[hidden] { display: none !important; }` must stay. Wire controls before `startRealtime()`.
+- Frontend ES modules import siblings with **bare relative specifiers** (`./api.js`,
+  no version suffix). Cache-busting is **path-based**: index.html loads the entry from
+  `/v/<version>/static/app.js`, and relative imports keep every sibling under that same
+  prefix, so one page load resolves each module to one URL = one instance (the
+  single-instance guarantee for stateful modules like secret.js). The server strips
+  `/v/<version>/` and serves the file raw + immutable (`handleVersionedStatic`); the
+  `<version>` value is a pure cache key (ignored on read). A bump changes the prefix ⇒
+  all module URLs change at once. Only index.html and sw.js still carry the
+  `__RIVENDELL_VERSION__` token (templated at serve time). Guarded by the
+  `TestVersioned*` / `TestIndexReferencesVersionedEntry` tests in `static_test.go`.
 
 ## Critical feature invariants (full design notes in README)
 
@@ -88,6 +115,10 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - Offerer = lower user_id. Sessions in JS memory only — never persisted.
 - No fallback to weaker crypto primitives — ever.
 - Server relays `secret.*` WS frames opaque, same DM-membership validation as voice.
+- UI/UX lives in `secretui.js` (banner, 🔒 button, safety modal); `secret.js` owns the
+  crypto/session state. Identity key is published at boot (idempotent) so any peer can be
+  offered a session — an offer needs the peer's key already published. `web/e2e/secret-chat`
+  pins offer→accept→matching safety number across two browsers.
 
 **Uploads / blobs**
 - Content type sniffed with `http.DetectContentType`, never trusts header.
@@ -98,5 +129,11 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - `invitations` table is distinct from `magic_links`. Don't merge them.
 - Account creation + invitation consumption are one transaction (`store.RedeemInvitation`).
 
-**Link preview proxy: removed.** No arbitrary-URL server-side fetch. YouTube embeds and
-message-permalink embeds are client-side only and were intentionally kept.
+**Link preview proxy: allowlist-only.** No *arbitrary-URL* server-side fetch — the proxy
+(`preview.go`, route `GET /api/link-preview`) fetches OG tags (Wikipedia via its summary
+API) only for hostnames on the allowlist: a hardcoded default set in `config.go`
+(github/wikipedia/major news orgs), overridable via `RIVENDELL_LINK_PREVIEW_DOMAINS`;
+`domainAllowed` matches subdomains too. A non-allowlisted or cache-errored URL gets a bare
+`404` (`http.NotFound`, no JSON — the allowlist isn't leaked), which `api.getLinkPreview`
+maps to a "no card" marker without throwing. An empty allowlist disables the feature.
+YouTube + message-permalink embeds are client-side only and were intentionally kept.

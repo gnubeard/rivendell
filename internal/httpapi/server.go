@@ -237,6 +237,11 @@ func (s *Server) Handler() http.Handler {
 	// Health.
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
+	// Versioned static modules (/v/<version>/…) — path-based cache-busting for
+	// the ES-module client. More specific than "GET /", so it wins for that
+	// subtree. See handleVersionedStatic.
+	mux.HandleFunc("GET /v/", s.handleVersionedStatic)
+
 	// Static web client (SPA fallback for non-/api routes).
 	mux.HandleFunc("GET /", s.handleStatic)
 
@@ -918,9 +923,52 @@ func (s *Server) handleSecretWSMessage(c *ws.Client, raw []byte, msgType string,
 // configured instance name at serve time (so non-JS scrapers see the brand).
 const instanceNamePlaceholder = "__RIVENDELL_INSTANCE__"
 
-// versionPlaceholder is replaced with the running version in index.html and
-// app.js so that a version bump busts the browser cache for all JS modules.
+// versionPlaceholder is replaced with the running version at serve time. It
+// now survives in only two templated files: index.html (the module entry's
+// `/v/<version>/…` path + the style.css cache-bust) and sw.js (a comment whose
+// bytes change so the browser re-installs the worker on a new build).
+//
+// The ES-module client is cache-busted by PATH, not by this token: the entry
+// loads from `/v/<version>/static/app.js` and every relative import stays under
+// that prefix, so one page load resolves each module to exactly one URL = one
+// instance (the single-instance guarantee for stateful modules like secret.js).
+// Module source files therefore carry no placeholder and are served raw — see
+// handleVersionedStatic. A bumped version changes the prefix => all module URLs
+// change at once => a clean cache miss.
 const versionPlaceholder = "__RIVENDELL_VERSION__"
+
+// handleVersionedStatic serves `/v/<version>/<path>` by stripping the version
+// segment and serving the underlying static file raw, with an immutable cache.
+// <version> is a pure cache key — its value is ignored, so an old in-flight page
+// importing `/v/<old>/static/api.js` still gets the current file; consistency
+// within a single page load is guaranteed because all of its imports share one
+// prefix. Stripping the prefix yields the exact path handleStatic maps to disk,
+// so this works identically in prod (`/v/X/static/app.js` → WebDir/static/app.js)
+// and in tests (`/v/X/foo.js` → WebDir/foo.js).
+func (s *Server) handleVersionedStatic(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v/")
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		http.NotFound(w, r)
+		return
+	}
+	logical := filepath.Clean(rest[slash:]) // drop the version segment, keep the path
+	full := filepath.Join(s.cfg.WebDir, logical)
+	// Prevent path traversal outside WebDir (mirrors handleStatic).
+	if !strings.HasPrefix(full, filepath.Clean(s.cfg.WebDir)) {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	// Versioned path => this exact response is immutable; a version bump changes
+	// the URL. No templating: module sources carry no placeholder.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	http.ServeFile(w, r, full)
+}
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean(r.URL.Path)
@@ -934,8 +982,11 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := filepath.Base(full)
-	// index.html and app.js are templated; all other assets are served as-is.
-	if base == "app.js" {
+	// .js served here is /sw.js (templated: its placeholder comment re-installs
+	// the worker on a new build) — and, defensively, any unversioned legacy
+	// module path, for which the rewrite is a harmless no-op. The real module
+	// entry loads via /v/<version>/ (handleVersionedStatic), not here.
+	if strings.HasSuffix(base, ".js") {
 		s.serveTemplated(w, r, full, "application/javascript; charset=utf-8")
 		return
 	}
@@ -964,12 +1015,13 @@ func (s *Server) serveTemplated(w http.ResponseWriter, r *http.Request, path, co
 		return
 	}
 	w.Header().Set("ETag", etag)
-	if filepath.Base(path) == "app.js" {
-		// URL includes the version (?v=X), so this exact response is immutable.
+	if r.URL.Query().Has("v") {
+		// Versioned URL (?v=X) — module imports always carry it, so this exact
+		// response is immutable; a version bump changes the URL.
 		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	} else {
-		// index.html URL has no version suffix; must revalidate to pick up new
-		// app.js references, but can short-circuit with a 304 via ETag.
+		// Unversioned (index.html, /sw.js) must revalidate to pick up new
+		// references, but can short-circuit with a 304 via ETag.
 		w.Header().Set("Cache-Control", "no-cache, private")
 	}
 	w.Header().Set("Content-Type", contentType)

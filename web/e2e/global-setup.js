@@ -1,17 +1,19 @@
 // e2e/global-setup.js — boot a real rivendell server and provision two users.
 //
-// Everything here goes through the public surface (bootstrap log line, magic
-// link, invitation API) — no SQL access, no test-only backdoors in the server.
-// Provisioning is idempotent: a reused e2e database short-circuits to plain
-// logins, so the suite can be re-run without wiping anything.
+// User provisioning goes through the public surface (bootstrap log line, magic
+// link, invitation API) — no test-only backdoors in the server. Each run starts
+// from a clean database (resetDatabase below drops + recreates the schema before
+// the server boots), so runs are independent and fixtures never accumulate; the
+// reset is the one bit of direct DB access, and only against the disposable e2e
+// database. (Set E2E_DB_RESET=off to reuse the DB the old way.)
 //
 // Requirements (enforced below with explicit errors):
-//   - E2E_DATABASE_URL pointing at a DISPOSABLE Postgres database. On first run
-//     it must be empty (zero admins) so the server's bootstrap path fires and
-//     prints the one-time set-password link we consume here.
+//   - E2E_DATABASE_URL pointing at a DISPOSABLE Postgres database — it is wiped at
+//     the start of every run. After the wipe the server's first-boot bootstrap
+//     fires and prints the one-time set-password link we consume here.
 //   - The server binary at RIVENDELL_E2E_BIN (default ../bin/rivendell —
 //     `make test-e2e` builds it first).
-import { spawn } from "node:child_process";
+import { spawn, execFileSync, execSync } from "node:child_process";
 import { mkdirSync, writeFileSync, createWriteStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +64,43 @@ async function mustJSON(r, what) {
   return r.json();
 }
 
+// resetDatabase wipes the e2e database to a clean schema before the server boots,
+// so every run starts fresh (the server then migrates and first-boot-bootstraps a
+// new admin). The e2e DB is disposable by contract — this is test infrastructure
+// resetting its own throwaway database, not a server backdoor. Without it the DB
+// accumulates fixtures across runs, and specs have to dodge the leftovers with
+// unique names (and still hit accumulation flakes like rows scrolling off-screen).
+//
+// How the reset reaches Postgres is the developer's environment, not the repo's:
+//   - E2E_DB_RESET_CMD — a shell command that resets the DB. The wipe SQL is
+//     exported to it as $E2E_RESET_SQL, so it only supplies the access path, e.g.
+//     a `psql` run inside whatever local container hosts the e2e database.
+//   - otherwise — a host `psql` pointed straight at E2E_DATABASE_URL.
+//   - E2E_DB_RESET=off — skip the reset and reuse the DB (the old behavior).
+function resetDatabase() {
+  if (process.env.E2E_DB_RESET === "off") {
+    console.log("e2e: E2E_DB_RESET=off — reusing the existing database (data accumulates)");
+    return;
+  }
+  const sql = "DROP SCHEMA public CASCADE; CREATE SCHEMA public;";
+  try {
+    if (process.env.E2E_DB_RESET_CMD) {
+      execSync(process.env.E2E_DB_RESET_CMD, { stdio: "pipe", env: { ...process.env, E2E_RESET_SQL: sql } });
+    } else {
+      execFileSync("psql", [process.env.E2E_DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c", sql], { stdio: "pipe" });
+    }
+    console.log("e2e: reset the database to a clean schema");
+  } catch (err) {
+    const detail = (err.stderr || err.stdout || err.message || "").toString().trim();
+    throw new Error(
+      "e2e: failed to reset the database before the run:\n" + detail + "\n" +
+      "Set E2E_DB_RESET_CMD to a command that resets your e2e database (it can run the\n" +
+      "exported $E2E_RESET_SQL), ensure a host `psql` can reach E2E_DATABASE_URL, or set\n" +
+      "E2E_DB_RESET=off to reuse the DB (specs then rely on unique fixtures).",
+    );
+  }
+}
+
 export default async function globalSetup() {
   if (!process.env.E2E_DATABASE_URL) {
     throw new Error(
@@ -71,6 +110,10 @@ export default async function globalSetup() {
     );
   }
   const bin = process.env.RIVENDELL_E2E_BIN || path.join(here, "..", "..", "bin", "rivendell");
+
+  // Start from a clean database so runs are independent (must happen before the
+  // server boots, so its first-boot bootstrap fires against the empty schema).
+  resetDatabase();
 
   mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   const log = createWriteStream(LOG_FILE);

@@ -7,6 +7,24 @@ RIVENDELL_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat?ssl
 TEST_DATABASE_URL    ?= postgres://chat:chat_dev_pw@localhost:5432/chat_test?sslmode=disable
 E2E_DATABASE_URL     ?= postgres://chat:chat_dev_pw@localhost:5432/chat_e2e?sslmode=disable
 RIVENDELL_WEB_DIR         ?= ./web
+
+# E2E browser + database-reset plumbing.
+#
+# E2E_DB_RESET_CMD — how the pre-run schema wipe reaches Postgres. Empty by
+#   default: global-setup.js then runs a host `psql` against E2E_DATABASE_URL,
+#   which is all a standard setup (local Postgres + host psql) needs. If your e2e
+#   DB lives behind a container or a nonstandard port, set this to a command that
+#   resets it — the wipe SQL arrives as $E2E_RESET_SQL — in a git-ignored
+#   Makefile.local (see Makefile.local.example). Pass E2E_DB_RESET=off to skip the
+#   wipe and reuse the DB.
+# PLAYWRIGHT_INSTALL — omits `--with-deps`, which shells out to apt-get (Debian/
+#   Ubuntu only). If a freshly downloaded browser won't launch, install the OS libs
+#   once per host out of band (Debian: `cd web && npx playwright install-deps`).
+E2E_DB_RESET_CMD     ?=
+PLAYWRIGHT_INSTALL   ?= npx playwright install chromium
+
+# Per-host overrides (container names, ports, reset command) live here, untracked.
+-include Makefile.local
 RIVENDELL_PUBLIC_URL      ?= http://localhost:8080
 IMAGE                ?= rivendell:latest
 BIN                  ?= ./bin/rivendell
@@ -59,8 +77,8 @@ test-web: ## Run frontend unit tests (Node built-in test runner)
 
 test-e2e: build ## Playwright WebRTC e2e (needs a DISPOSABLE chat_e2e db + ~1.5 GB browser download on first run)
 	cd web && npm install
-	cd web && npx playwright install --with-deps chromium
-	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) npx playwright test
+	cd web && $(PLAYWRIGHT_INSTALL)
+	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) E2E_DB_RESET_CMD='$(E2E_DB_RESET_CMD)' npx playwright test
 
 vet: ## go vet
 	go vet ./...

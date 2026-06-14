@@ -40,7 +40,11 @@ Keyset pagination: `GET …/messages?before=<id>&limit=<n>`. Client loads 50 on 
 
 ## Unread indicators
 
-`state.unread` (channelId→count). `message.new` on a non-active channel that isn't your own bumps it. Soft DM chime (Web Audio) for DMs.
+`state.unread` (channelId→count). `message.new` on a non-active channel that isn't your own bumps it. Soft DM chime (Web Audio) for DMs. The whole decision — does an incoming message raise the unread/mention badges, and does it alert (chime/notification) — is the pure `classifyIncomingMessage(state, evt, view)` in `unread.js` (the realtime handler feeds it three view booleans it reads from the DOM: `active`, `focused`, `adminPanelOpen`); it's exhaustively unit-tested (muted silences all; a focused-active channel marks read, not unread; a ping there only alerts if the admin panel is covering it). Don't re-inline that matrix into the handler.
+
+## Client state reducer (`state.applyEvent`)
+
+`state.js` is the immutable client world-model; `applyEvent(state, evt)` is the **single place** a realtime event folds into it, and is total over state-mutating events (incl. `message.new`'s `last_message_at` bump and `member.remove`'s channel drop — the realtime handler does only side effects after the fold, never its own `state = S.…` for those). Pure and unit-tested; keep new event-driven state changes here, not in the handler's if-ladder.
 
 ## Reactions (migration `0009`)
 

@@ -19,7 +19,7 @@
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="__RIVENDELL_INSTANCE__">
-  <link rel="stylesheet" href="/static/style.css?v=__RIVENDELL_VERSION__">
+  <link rel="stylesheet" href="/v/__RIVENDELL_VERSION__/static/style.css">
 </head>
 <body>
 
@@ -462,6 +462,11 @@
     <div class="loading-dots"><span></span><span></span><span></span></div>
   </div>
 
-  <script type="module" src="/static/app.js?v=__RIVENDELL_VERSION__"></script>
+  <!-- Module entry under a versioned path prefix (/v/<version>/…). The version
+       is a pure cache key: ES-module relative imports keep every sibling under
+       this same prefix, so one page load resolves each module to exactly one
+       URL = one instance, and a version bump changes every module URL at once.
+       The server strips /v/<version>/ and serves the underlying static file. -->
+  <script type="module" src="/v/__RIVENDELL_VERSION__/static/app.js"></script>
 </body>
 </html>

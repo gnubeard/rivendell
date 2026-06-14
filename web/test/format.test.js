@@ -1,7 +1,43 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, BUILTIN_EMOJI } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, BUILTIN_EMOJI } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
+
+// ---- reactionTooltip ----
+
+test("reactionTooltip: custom emoji shows its :shortcode: and reactors", () => {
+  assert.equal(
+    reactionTooltip("partyblob", "Alice, Bob", { isCustom: true, isOrphan: false, mine: false }),
+    ":partyblob: — Alice, Bob",
+  );
+});
+
+test("reactionTooltip: a builtin Unicode glyph reverse-maps to its :name: and is prefixed by the glyph", () => {
+  // BUILTIN_EMOJI maps name → glyph; the tooltip surfaces the glyph + its shortcode.
+  const glyph = BUILTIN_EMOJI.tada;
+  assert.equal(
+    reactionTooltip(glyph, "Alice", { isCustom: false, isOrphan: false, mine: false }),
+    `${glyph} :tada: — Alice`,
+  );
+});
+
+test("reactionTooltip: an unmapped Unicode glyph shows the bare glyph as its identity", () => {
+  assert.equal(
+    reactionTooltip("🦄", "Carol", { isCustom: false, isOrphan: false, mine: false }),
+    "🦄 — Carol",
+  );
+});
+
+test("reactionTooltip: an orphan adds the deleted note; mine adds the remove hint", () => {
+  assert.equal(
+    reactionTooltip("goneblob", "Alice", { isCustom: false, isOrphan: true, mine: false }),
+    ":goneblob: — Alice (emoji deleted)",
+  );
+  assert.equal(
+    reactionTooltip("goneblob", "Alice", { isCustom: false, isOrphan: true, mine: true }),
+    ":goneblob: — Alice (emoji deleted — click to remove)",
+  );
+});
 
 test("escapes HTML to prevent XSS", () => {
   const out = formatMessage('<script>alert("x")</script>');

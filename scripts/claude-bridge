@@ -114,7 +114,7 @@ done
 
 api() {
     local method="$1" path="$2"; shift 2
-    curl -sf -X "$method" \
+    curl -sf --connect-timeout 10 --max-time 30 -X "$method" \
         -H "Authorization: Bearer $RIVENDELL_BOT_TOKEN" \
         -H "Content-Type: application/json" \
         -H "User-Agent: rivendell-claude-bridge/1.0" \
@@ -557,10 +557,23 @@ handle_channel() {
             printf '[%s msg %s user %s] usage command\n' "$mode" "$msg_id" "$user_id"
             react "$msg_id" "$WORKING_EMOJI"
             local usage_out token raw
-            token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null)
-            raw=$(curl -sf https://api.anthropic.com/api/oauth/usage \
+            # `|| token=""` only stops a missing/unreadable creds file from
+            # tripping `set -e` and killing the poll loop — it does NOT mean we
+            # proceed without one. No token is a real misconfiguration, so report
+            # it plainly and bail rather than fire a doomed unauthenticated call.
+            token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null) || token=""
+            if [ -z "$token" ] || [ "$token" = "null" ]; then
+                reply_msg "$channel_id" "$msg_id" "Usage unavailable: no Claude API credentials found on the bridge host." >/dev/null 2>&1 || true
+                unreact "$msg_id" "$WORKING_EMOJI"
+                continue
+            fi
+            # On a timeout/connect failure curl now exits non-zero (it no longer
+            # hangs). Guard the assignment so that exit can't trip `set -e` and
+            # take the whole poll loop down — degrade to an empty body instead,
+            # which falls through to the "Usage API unavailable." reply below.
+            raw=$(curl -sf --connect-timeout 10 --max-time 30 https://api.anthropic.com/api/oauth/usage \
                 -H "Authorization: Bearer $token" \
-                -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
+                -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null) || raw=""
             usage_out=$(printf '%s' "$raw" | python3 -c "
 import json, sys
 from datetime import datetime

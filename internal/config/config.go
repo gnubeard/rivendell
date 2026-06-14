@@ -13,7 +13,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.4.69"
+const Version = "1.5.0"
 
 type Config struct {
 	Addr               string        // listen address, e.g. ":8080"
@@ -76,6 +76,7 @@ func Load() (Config, error) {
 			"x.com",
 			"theatlantic.com",
 			"apnews.com",
+			"nature.com",
 		}),
 	}
 	// Default the VAPID subject to the public URL (a valid `sub` per RFC 8292) so
