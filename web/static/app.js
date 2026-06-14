@@ -1567,8 +1567,16 @@ async function loadChannel(id) {
     renderMessages(false, true);
     if (!scrollToUnreadMarker()) {
       // No unread marker (channel was caught up): pin to the newest message.
-      const wrap = $("#message-list");
-      wrap.scrollTop = wrap.scrollHeight;
+      // Use scrollToBottom, not a bare scrollTop assignment: images carry no
+      // intrinsic height (CSS max-height only), so the ones near the bottom
+      // reserve ~0 space until they decode — which on the open/reload path
+      // happens *after* this pin. scrollToBottom re-pins across rAF frames and
+      // on each late <img> load (while the reader hasn't scrolled away), so the
+      // view stays glued to the newest message as those images expand instead
+      // of stranding the reader a page up. (holdPosition above kept this same
+      // re-pin from running during renderMessages and clobbering the
+      // unread-marker scroll; here, with no marker, bottom-pinning is the goal.)
+      scrollToBottom($("#message-list"));
     }
     renderTypingIndicator(); // reset indicator for the newly opened channel
   } catch (ex) {
