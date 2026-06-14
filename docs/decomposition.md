@@ -12,10 +12,15 @@ This is a living document. Update the status table as chunks land.
 `app.js` is the highest-churn file in the repo and by far the largest module
 without its own test. The focused modules — `format`, `state`, `voice`, `secret`,
 … — are each small and have a `web/test/*.test.js` suite (the DOM-carrying ones
-carved off later, like `search`/`emoji`/`channeldrag`, are covered by e2e instead;
-`api.js`, a thin fetch wrapper, is the only one with no test of either kind). The
-goal is to bring `app.js` to that same standard without a rewrite: peel off one
-concern at a time, behind a documented seam, with the appropriate kind of test.
+carved off later, like `search`/`emoji`/`channeldrag`, are covered by e2e instead).
+`api.js`, a thin fetch wrapper, was the last module with no test of either kind;
+`api.test.js` now pins its load-bearing parts — the `req()` parse/empty-body/error
+contract, the `messages`/`search` query-string assembly, `getLinkPreview`'s
+status→shape mapping, `createBotToken`'s conditional body, and the upload helpers'
+own error fallback — by stubbing global `fetch` (the URL-builder one-liners are
+left alone; testing them would just restate them). The goal is to bring `app.js`
+to that same standard without a rewrite: peel off one concern at a time, behind a
+documented seam, with the appropriate kind of test.
 
 ## Test strategy — the spine
 
