@@ -163,6 +163,18 @@ export function presenceMatches(user, payload) {
     !!user.idle === !!payload.idle;
 }
 
+// Role predicates over the rivendell hierarchy (admin > moderator > member).
+// One tested home for the role checks the UI gates on, so the string comparison
+// isn't open-coded at every call site. A missing user/role is treated as the
+// lowest privilege (member). Pure.
+export function isAdmin(user) {
+  return !!user && user.role === "admin";
+}
+
+export function canModerate(user) {
+  return !!user && (user.role === "admin" || user.role === "moderator");
+}
+
 export function setPresence(state, userId, online, status, idle = false) {
   const prev = state.users[userId];
   if (!prev) return state;

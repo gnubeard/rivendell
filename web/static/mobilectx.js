@@ -12,6 +12,8 @@
 // (openForReaction), and the message actions startReply, openForwardModal,
 // startEdit, togglePin, toggleMessageRead, deleteMessage.
 
+import { canModerate } from "./state.js?v=__RIVENDELL_VERSION__";
+
 export function createMobileCtx({
   el, $, getState, api, emojiPicker,
   startReply, openForwardModal, startEdit, togglePin, toggleMessageRead, deleteMessage,
@@ -24,7 +26,7 @@ export function createMobileCtx({
 
   function showActions(m) {
     const state = getState();
-    const isMod = state.me.role === "admin" || state.me.role === "moderator";
+    const isMod = canModerate(state.me);
     const isOwn = m.user_id === state.me.id;
     const canDelete = isOwn || isMod;
     const isDeleted = !!m.deleted_at;

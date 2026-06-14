@@ -55,6 +55,23 @@ test("presenceMatches detects whether a payload changes the displayed presence",
   assert.equal(S.presenceMatches(user, null), false);
 });
 
+test("isAdmin and canModerate gate on the role hierarchy", () => {
+  // admin > moderator > member.
+  assert.equal(S.isAdmin({ role: "admin" }), true);
+  assert.equal(S.isAdmin({ role: "moderator" }), false, "moderator is not admin");
+  assert.equal(S.isAdmin({ role: "member" }), false);
+
+  assert.equal(S.canModerate({ role: "admin" }), true, "admin can moderate");
+  assert.equal(S.canModerate({ role: "moderator" }), true);
+  assert.equal(S.canModerate({ role: "member" }), false);
+
+  // Missing user, missing role, or an unknown role → lowest privilege (member).
+  assert.equal(S.isAdmin(null), false);
+  assert.equal(S.canModerate(null), false);
+  assert.equal(S.isAdmin({}), false);
+  assert.equal(S.canModerate({ role: "guest" }), false);
+});
+
 test("channels sort by position then name", () => {
   const s = S.setChannels(S.initialState(), [
     { id: 3, name: "zeta", position: 0 },

@@ -957,7 +957,7 @@ function renderChannels() {
   if (channelDrag.isActive()) return;
   const list = $("#channel-list");
   list.innerHTML = "";
-  const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  const isMod = S.canModerate(state.me);
   // Mods can reorder by dragging a row (mouse) or long-pressing then dragging
   // (touch); the grab cursor is the affordance that replaced the ↑/↓ glyphs.
   list.classList.toggle("reorderable", isMod);
@@ -1026,8 +1026,8 @@ function renderMembers() {
   list.innerHTML = "";
   // Ordinary users don't see disabled accounts (matches the server roster);
   // admins keep seeing them so they can manage them.
-  const isAdmin = state.me.role === "admin";
-  const isMod = isAdmin || state.me.role === "moderator";
+  const isAdmin = S.isAdmin(state.me);
+  const isMod = S.canModerate(state.me);
   let users = Object.values(state.users).filter((u) => isAdmin || u.is_active !== false);
   // In a private channel/DM, restrict the panel to that channel's members.
   if (activeMemberIds) users = users.filter((u) => activeMemberIds.has(u.id));
@@ -1134,8 +1134,8 @@ async function removeMember(channelId, userId, displayName) {
 }
 
 function renderAdminVisibility() {
-  const isAdmin = state.me.role === "admin";
-  const isMod = isAdmin || state.me.role === "moderator";
+  const isAdmin = S.isAdmin(state.me);
+  const isMod = S.canModerate(state.me);
   $("#admin-btn").hidden = !isAdmin;
   $("#new-channel-btn").hidden = !isMod;
 }
@@ -1197,7 +1197,7 @@ async function toggleMute(id) {
 async function leaveActiveChannel() {
   const ch = state.channels[state.activeChannelId];
   if (!ch || !ch.is_private || ch.is_dm) return;
-  const isAdmin = state.me.role === "admin";
+  const isAdmin = S.isAdmin(state.me);
   if (!isAdmin && !confirm(`Leave #${ch.name}? You'll need an invite to rejoin.`)) return;
   try {
     await api.removeChannelMember(ch.id, state.me.id);
@@ -1460,9 +1460,11 @@ async function toggleMessageRead(m) {
   }
 }
 
-// isModPlus reports whether the current user is a moderator or admin.
+// isModPlus reports whether the current user is a moderator or admin. Thin
+// no-arg convenience over S.canModerate for the call sites (and emoji.js) that
+// gate on the live `state.me`.
 function isModPlus() {
-  return !!(state.me && (state.me.role === "admin" || state.me.role === "moderator"));
+  return S.canModerate(state.me);
 }
 
 // --- channel header ----------------------------------------------------------
@@ -1473,7 +1475,7 @@ function isModPlus() {
 function updateLeaveBtn() {
   const ch = state.channels[state.activeChannelId];
   const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
-  const adminNonMember = !!(state.me && state.me.role === "admin" && activeMemberIds && !activeMemberIds.has(state.me.id));
+  const adminNonMember = S.isAdmin(state.me) && !!(activeMemberIds && !activeMemberIds.has(state.me.id));
   $("#leave-btn").hidden = !realPrivate || adminNonMember;
 }
 
@@ -2028,7 +2030,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     return;
   }
   const msgs = state.messages[state.activeChannelId] || [];
-  const isMod = state.me.role === "admin" || state.me.role === "moderator";
+  const isMod = S.canModerate(state.me);
   // In a DM, either participant may pin (mirrors the server rule); elsewhere
   // pinning is moderator+.
   const canPin = isMod || !!(activeCh && activeCh.is_dm);
