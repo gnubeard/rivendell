@@ -273,7 +273,10 @@ internal/store/               store.go (open/migrate + domain structs),
                               migrations/0001…NNNN.sql (embedded; applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
 internal/httpapi/             server.go (routes/middleware/realtime),
-                              handlers.go (handler bodies)
+                              handlers.go (core: health/instance/voice-state
+                              reads/WS upgrade), handlers_<domain>.go (handler
+                              bodies split by domain: auth, users, channels,
+                              messages, reactions, pins, emoji, admin, blobs, push)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188, stdlib only)
 web/index.html                single-page shell (login / set-password / app views)
 web/static/                   app.js (orchestrator; being decomposed — see
