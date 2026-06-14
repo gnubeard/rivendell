@@ -207,4 +207,9 @@ module. Done so far: the realtime handler named out (above); `renderMessages` sp
 into `renderSecretView` + `messageRow` + `messageActions`; the sidebar-row class
 string deduped into `channelRowClass`; the roster presence word lifted to a pure,
 unit-tested `presenceLabel` in `presence.js`; and the fire-and-alert API calls that
-don't self-recover routed through the shared `guard()` helper.
+don't self-recover routed through the shared `guard()` helper. A later pass split
+`renderChannelHeader` into `renderDMHeader` / `renderRegularHeader` (collapsing the
+triplicated mobile video/chat-toggle label into `applyHeaderCamLabel`), deduped the
+video-grid show/hide teardown into `showVideoGrid` / `hideVideoGrid`, and lifted the
+reaction-pill tooltip string to a pure, unit-tested `reactionTooltip` in `format.js`
+(the `isCustom`/`isOrphan`/`mine` computation stays in `reactionsRow`).

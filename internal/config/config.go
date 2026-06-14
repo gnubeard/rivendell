@@ -13,7 +13,7 @@ import (
 
 // Version is the running build's semantic version. It's surfaced via
 // GET /api/instance and the About dialog. Bump it on each release.
-const Version = "1.4.69-refactor-appjs.44"
+const Version = "1.4.69-refactor-appjs.45"
 
 type Config struct {
 	Addr               string        // listen address, e.g. ":8080"

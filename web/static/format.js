@@ -337,6 +337,31 @@ export const BUILTIN_EMOJI = {
   wave: "👋",
 };
 
+// Reverse of BUILTIN_EMOJI (glyph → shortcode name), so a Unicode reaction can
+// surface its `:shortcode:` in the hover tooltip alongside the reactor names.
+const BUILTIN_GLYPH_TO_NAME = Object.fromEntries(
+  Object.entries(BUILTIN_EMOJI).map(([name, glyph]) => [glyph, name]),
+);
+
+// reactionTooltip builds the hover-title string for one reaction pill: the emoji's
+// identity, an em-dash, the reactor names, and an "(emoji deleted…)" note for
+// orphans. The identity is the `:shortcode:` where one exists — custom/orphan
+// reactions store the bare code; builtin glyphs reverse-map to theirs and are
+// prefixed by the glyph; an unmapped Unicode glyph is shown as-is. Pure; the
+// caller computes isCustom/isOrphan/mine from app state. Unit-tested in
+// web/test/format.test.js.
+export function reactionTooltip(emoji, names, { isCustom, isOrphan, mine }) {
+  const code = isCustom || isOrphan
+    ? `:${emoji}:`
+    : BUILTIN_GLYPH_TO_NAME[emoji]
+      ? `:${BUILTIN_GLYPH_TO_NAME[emoji]}:`
+      : null;
+  const ident = isCustom || isOrphan ? code : code ? `${emoji} ${code}` : emoji;
+  return isOrphan
+    ? `${ident} — ${names} (emoji deleted${mine ? " — click to remove" : ""})`
+    : `${ident} — ${names}`;
+}
+
 // hasEmoji checks the caller-supplied registry, accepting either a Set of
 // shortcodes or a plain object keyed by shortcode (truthy value = known).
 function hasEmoji(emojis, name) {

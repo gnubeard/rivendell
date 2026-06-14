@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -1467,98 +1467,116 @@ function updateLeaveBtn() {
 // renderChannelHeader paints the active channel's title + topic into the header.
 // For a real channel (not a DM) a moderator+ may click the topic to edit it inline;
 // the span advertises that and shows a prompt to add one when the topic is empty.
+// applyHeaderCamLabel sets the mobile video/chat toggle button's glyph + title
+// from videoViewHidden — 📺/"Show video" while chat is showing, 💬/"Show chat"
+// while video is. Single source of truth for that mapping (both header branches
+// and the button's own click handler in wireVoiceControls route through it).
+function applyHeaderCamLabel(btn) {
+  btn.textContent = videoViewHidden ? "📺" : "💬";
+  btn.title = videoViewHidden ? "Show video" : "Show chat";
+}
+
+// renderChannelHeader repaints the top bar for the active channel. DMs and regular
+// channels share almost nothing up there (DM: presence dot, call/secret buttons,
+// partner-volume; regular: join-voice button, editable topic), so each has its own
+// builder; this just dispatches. A null ch (nothing selected) is the regular path.
 function renderChannelHeader(ch) {
+  if (ch && ch.is_dm) { renderDMHeader(ch); return; }
+  renderRegularHeader(ch);
+}
+
+function renderDMHeader(ch) {
   const topicEl = $("#channel-topic");
-  const dmDot = $("#channel-dm-dot");
-  const dmCall = $("#channel-dm-call");
   const callBtn = $("#call-btn");
   const secretBtn = $("#secret-btn");
-  if (ch && ch.is_dm) {
-    $("#channel-title").textContent = "@ " + dmDisplayName(state, ch);
-    topicEl.textContent = "";
-    topicEl.classList.remove("editable", "placeholder");
-    topicEl.removeAttribute("title");
-    const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
-    const other = otherId && state.users[otherId];
-    dmDot.className = `dot ${other ? presenceClass(other) : "offline"}`;
-    dmDot.hidden = false;
-    // On-call cue: the member roster (which carries the 🔊 cue elsewhere) is
-    // hidden in DM view, so surface "the other person is connected to this call"
-    // here in the header — the analog of the DM presence dot for call state.
-    const otherOnCall = !!(voiceCallState.inCall && voiceCallState.channelId === ch.id
-      && otherId && callParticipantIds.has(otherId));
-    dmCall.hidden = !otherOnCall;
-    // Clicking the 🔊 reveals a slider for the partner's playout volume. It only
-    // makes sense while they're on the call (their <audio> element — the thing
-    // .volume drives — exists only then), so bind/collapse it to that lifecycle.
-    const dmVol = $("#dm-volume");
-    if (otherOnCall) {
-      if (dmVolumeChannelId !== ch.id) { dmVolumeChannelId = ch.id; dmVolumeOpen = false; }
-      const v = getVolumeForUser(otherId);
-      dmVol.value = String(v);
-      dmVol.title = `Volume — ${Math.round(v * 100)}%`;
-      dmVol.hidden = !dmVolumeOpen;
+  $("#channel-title").textContent = "@ " + dmDisplayName(state, ch);
+  topicEl.textContent = "";
+  topicEl.classList.remove("editable", "placeholder");
+  topicEl.removeAttribute("title");
+  const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
+  const other = otherId && state.users[otherId];
+  const dmDot = $("#channel-dm-dot");
+  dmDot.className = `dot ${other ? presenceClass(other) : "offline"}`;
+  dmDot.hidden = false;
+  // On-call cue: the member roster (which carries the 🔊 cue elsewhere) is
+  // hidden in DM view, so surface "the other person is connected to this call"
+  // here in the header — the analog of the DM presence dot for call state.
+  const otherOnCall = !!(voiceCallState.inCall && voiceCallState.channelId === ch.id
+    && otherId && callParticipantIds.has(otherId));
+  $("#channel-dm-call").hidden = !otherOnCall;
+  // Clicking the 🔊 reveals a slider for the partner's playout volume. It only
+  // makes sense while they're on the call (their <audio> element — the thing
+  // .volume drives — exists only then), so bind/collapse it to that lifecycle.
+  const dmVol = $("#dm-volume");
+  if (otherOnCall) {
+    if (dmVolumeChannelId !== ch.id) { dmVolumeChannelId = ch.id; dmVolumeOpen = false; }
+    const v = getVolumeForUser(otherId);
+    dmVol.value = String(v);
+    dmVol.title = `Volume — ${Math.round(v * 100)}%`;
+    dmVol.hidden = !dmVolumeOpen;
+  } else {
+    dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
+  }
+  // Self-DM scratch pad: calling yourself or starting a secret session with
+  // yourself makes no sense — hide both buttons.
+  const isSelfDM = otherId === (state.me && state.me.id);
+  if (isSelfDM) {
+    callBtn.hidden = true;
+    secretBtn.hidden = true;
+  } else {
+    // Show/update the call button for DM channels.
+    if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
+      callBtn.textContent = "✅";
+      callBtn.title = "Answer call";
+    } else if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
+      callBtn.textContent = "📵";
+      callBtn.title = "Cancel call";
+    } else if (isInCall() && voiceCallState.channelId === ch.id) {
+      callBtn.textContent = "📵";
+      callBtn.title = "Leave call";
     } else {
-      dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
+      callBtn.textContent = "📞";
+      callBtn.title = "Start voice call";
     }
-    // Self-DM scratch pad: calling yourself or starting a secret session with
-    // yourself makes no sense — hide both buttons.
-    const isSelfDM = otherId === (state.me && state.me.id);
-    if (isSelfDM) {
-      callBtn.hidden = true;
-      secretBtn.hidden = true;
+    callBtn.hidden = false;
+    // Secret chat button: visible on DMs if browser supports WebCrypto.
+    const supported = secretBtn.dataset.supported !== "0";
+    const sess = getSession(ch.id);
+    secretBtn.className = "icon-btn" + ((sess && sess.phase === "active") ? " secret-btn-active" : "");
+    if (sess && sess.phase === "active") {
+      secretBtn.textContent = "🔒";
+      secretBtn.title = sess.verified ? "Secret session — verified (click to view safety number)" : "Secret session — unverified (click to view safety number)";
+      secretBtn.classList.add(sess.verified ? "secret-btn-verified" : "secret-btn-unverified");
     } else {
-      // Show/update the call button for DM channels.
-      if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
-        callBtn.textContent = "✅";
-        callBtn.title = "Answer call";
-      } else if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
-        callBtn.textContent = "📵";
-        callBtn.title = "Cancel call";
-      } else if (isInCall() && voiceCallState.channelId === ch.id) {
-        callBtn.textContent = "📵";
-        callBtn.title = "Leave call";
-      } else {
-        callBtn.textContent = "📞";
-        callBtn.title = "Start voice call";
-      }
-      callBtn.hidden = false;
-      // Secret chat button: visible on DMs if browser supports WebCrypto.
-      const supported = secretBtn.dataset.supported !== "0";
-      const sess = getSession(ch.id);
-      secretBtn.className = "icon-btn" + ((sess && sess.phase === "active") ? " secret-btn-active" : "");
-      if (sess && sess.phase === "active") {
-        secretBtn.textContent = "🔒";
-        secretBtn.title = sess.verified ? "Secret session — verified (click to view safety number)" : "Secret session — unverified (click to view safety number)";
-        secretBtn.classList.add(sess.verified ? "secret-btn-verified" : "secret-btn-unverified");
-      } else {
-        secretBtn.textContent = "🔒";
-        secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
-      }
-      secretBtn.hidden = !supported;
+      secretBtn.textContent = "🔒";
+      secretBtn.title = supported ? "Start secret chat" : "Secret chat needs a current browser (Ed25519/X25519 WebCrypto)";
     }
-    // Video/chat toggle: mobile-only (CSS hides on desktop). During a DM video
-    // call, 💬 lets the user switch to chat; 📺 returns them to the video view.
-    const headerCamBtn = $("#header-camera-btn");
-    if (isInCall() && voiceCallState.channelId === ch.id) {
-      const hcbOtherId = S.otherDMParticipant(ch, state.me && state.me.id);
-      const hcbOtherP = voiceCallState.participants.find(p => p.user_id === hcbOtherId);
-      const hasVideo = !voiceCallState.videoMuted || (hcbOtherP && !hcbOtherP.video_muted);
-      if (hasVideo || videoViewHidden) {
-        headerCamBtn.textContent = videoViewHidden ? "📺" : "💬";
-        headerCamBtn.title = videoViewHidden ? "Show video" : "Show chat";
-        headerCamBtn.hidden = false;
-      } else {
-        headerCamBtn.hidden = true;
-      }
+    secretBtn.hidden = !supported;
+  }
+  // Video/chat toggle: mobile-only (CSS hides on desktop). During a DM video
+  // call, 💬 lets the user switch to chat; 📺 returns them to the video view.
+  const headerCamBtn = $("#header-camera-btn");
+  if (isInCall() && voiceCallState.channelId === ch.id) {
+    const hcbOtherId = S.otherDMParticipant(ch, state.me && state.me.id);
+    const hcbOtherP = voiceCallState.participants.find(p => p.user_id === hcbOtherId);
+    const hasVideo = !voiceCallState.videoMuted || (hcbOtherP && !hcbOtherP.video_muted);
+    if (hasVideo || videoViewHidden) {
+      applyHeaderCamLabel(headerCamBtn);
+      headerCamBtn.hidden = false;
     } else {
       headerCamBtn.hidden = true;
     }
-    return;
+  } else {
+    headerCamBtn.hidden = true;
   }
-  dmDot.hidden = true;
-  dmCall.hidden = true;
-  secretBtn.hidden = true;
+}
+
+function renderRegularHeader(ch) {
+  const topicEl = $("#channel-topic");
+  const callBtn = $("#call-btn");
+  $("#channel-dm-dot").hidden = true;
+  $("#channel-dm-call").hidden = true;
+  $("#secret-btn").hidden = true;
   $("#header-camera-btn").hidden = true;
   $("#dm-volume").hidden = true;
   dmVolumeChannelId = null; dmVolumeOpen = false;
@@ -1572,8 +1590,7 @@ function renderChannelHeader(ch) {
       const groupHasVideo = !voiceCallState.videoMuted ||
         voiceCallState.participants.some(p => p.user_id !== (state.me && state.me.id) && !p.video_muted);
       if (groupHasVideo || videoViewHidden) {
-        headerCamBtn.textContent = videoViewHidden ? "📺" : "💬";
-        headerCamBtn.title = videoViewHidden ? "Show video" : "Show chat";
+        applyHeaderCamLabel(headerCamBtn);
         headerCamBtn.hidden = false;
       }
     } else {
@@ -2678,12 +2695,6 @@ function findMessage(messageId) {
 // registry) from literal Unicode graphemes, which don't match this pattern.
 const SHORTCODE_RE = /^[a-z0-9_]{2,32}$/;
 
-// Reverse of BUILTIN_EMOJI (glyph → shortcode name), so a Unicode reaction can
-// surface its `:shortcode:` in the hover tooltip alongside the names.
-const BUILTIN_GLYPH_TO_NAME = Object.fromEntries(
-  Object.entries(BUILTIN_EMOJI).map(([name, glyph]) => [glyph, name]),
-);
-
 // reactionsRow renders the pill row under a message, or null if it has none. Each
 // pill shows the emoji (custom shortcode → image, else the literal Unicode glyph)
 // and its count, is highlighted when I'm among the reactors, and toggles on click.
@@ -2706,18 +2717,9 @@ function reactionsRow(m) {
       : isOrphan
         ? el("span", { class: "r-emoji" }, "🪦")
         : el("span", { class: "r-emoji" }, g.emoji);
-    // Tooltip leads with the emoji's identity — its `:shortcode:` where one
-    // exists (custom/orphan store the bare code; builtin glyphs reverse-map to
-    // theirs), prefixed by the glyph for Unicode reactions — then the reactors.
-    const code = isCustom || isOrphan
-      ? `:${g.emoji}:`
-      : BUILTIN_GLYPH_TO_NAME[g.emoji]
-        ? `:${BUILTIN_GLYPH_TO_NAME[g.emoji]}:`
-        : null;
-    const ident = isCustom || isOrphan ? code : code ? `${g.emoji} ${code}` : g.emoji;
-    const titleText = isOrphan
-      ? `${ident} — ${names} (emoji deleted${mine ? " — click to remove" : ""})`
-      : `${ident} — ${names}`;
+    // Tooltip text (emoji identity — reactors, plus an orphan note) is a pure
+    // transform; the DOM/state bits (isCustom/isOrphan/mine/names) stay here.
+    const titleText = reactionTooltip(g.emoji, names, { isCustom, isOrphan, mine });
     row.append(el("button", {
       class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
       title: titleText,
@@ -3680,9 +3682,7 @@ function wireVoiceControls() {
   // Mobile video/chat toggle: switches between watching video and reading chat.
   $("#header-camera-btn").onclick = () => {
     videoViewHidden = !videoViewHidden;
-    const btn = $("#header-camera-btn");
-    btn.textContent = videoViewHidden ? "📺" : "💬";
-    btn.title = videoViewHidden ? "Show video" : "Show chat";
+    applyHeaderCamLabel($("#header-camera-btn"));
     renderVideoGrid();
   };
 
@@ -4064,6 +4064,22 @@ function appendFullscreenButton(grid) {
   grid.appendChild(fsBtn);
 }
 
+// hideVideoGrid collapses #video-grid and clears the body video-active state — the
+// shared "no video to show" teardown across renderVideoGrid and both renderers.
+function hideVideoGrid(grid) {
+  grid.classList.remove("group-grid");
+  grid.hidden = true;
+  setVideoActive(false);
+}
+
+// showVideoGrid reveals a freshly-built grid (with its fullscreen control) and
+// flips the body into video-active — the shared tail of both renderers.
+function showVideoGrid(grid) {
+  appendFullscreenButton(grid);
+  grid.hidden = false;
+  setVideoActive(true);
+}
+
 // videoAvatarTile builds the dark camera-off placeholder for one participant:
 // their avatar (or initials) plus their name. Used by both the DM and group
 // layouts wherever a participant has no live video.
@@ -4089,9 +4105,7 @@ function renderVideoGrid() {
     : null;
 
   if (!ch || voiceCallState.channelId !== state.activeChannelId) {
-    grid.classList.remove("group-grid");
-    grid.hidden = true;
-    setVideoActive(false);
+    hideVideoGrid(grid);
     return;
   }
   if (ch.is_dm) renderDMVideoGrid(grid, ch);
@@ -4111,15 +4125,13 @@ function renderDMVideoGrid(grid, ch) {
   // view-override so the toggle button disappears cleanly.
   if (voiceCallState.videoMuted && remoteVideoMuted) {
     videoViewHidden = false;
-    grid.hidden = true;
-    setVideoActive(false);
+    hideVideoGrid(grid);
     return;
   }
 
   // On mobile the user may have chosen to view chat instead of video.
   if (videoViewHidden) {
-    grid.hidden = true;
-    setVideoActive(false);
+    hideVideoGrid(grid);
     return;
   }
   const remoteVideo = otherId != null ? getVideoEl(otherId) : null;
@@ -4145,9 +4157,7 @@ function renderDMVideoGrid(grid, ch) {
     }
   }
 
-  appendFullscreenButton(grid);
-  grid.hidden = false;
-  setVideoActive(true);
+  showVideoGrid(grid);
 }
 
 // renderGroupVideoGrid is the 1.4.0 N-tile gallery: one tile per call
@@ -4163,15 +4173,11 @@ function renderGroupVideoGrid(grid, ch) {
 
   if (!anyVideo) {
     videoViewHidden = false;
-    grid.classList.remove("group-grid");
-    grid.hidden = true;
-    setVideoActive(false);
+    hideVideoGrid(grid);
     return;
   }
   if (videoViewHidden) {
-    grid.classList.remove("group-grid");
-    grid.hidden = true;
-    setVideoActive(false);
+    hideVideoGrid(grid);
     return;
   }
 
@@ -4196,9 +4202,7 @@ function renderGroupVideoGrid(grid, ch) {
     grid.appendChild(tile);
   }
 
-  appendFullscreenButton(grid);
-  grid.hidden = false;
-  setVideoActive(true);
+  showVideoGrid(grid);
 }
 
 function renderCallStrip() {
