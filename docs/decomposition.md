@@ -131,6 +131,7 @@ Conventions specific to this kind of module:
 | Secret-chat UX (request banner, 🔒 button, safety-number modal) | `secretui.js` | e2e (secret-chat, 2) | ✅ done |
 | Forward-message modal (+ pure `forwardBody`/`forwardTargets`/`makeCanSee`) | `forward.js` | unit (9) + e2e (forward, 3) | ✅ done |
 | Pinned-messages panel (list + jump + in-panel unpin; LWW refresh guard) | `pins.js` | e2e (pins, 2) | ✅ done |
+| Modal cluster (new-channel, edit-profile, invite, read-only user card) | `modals.js` | e2e (modals, 4) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -173,8 +174,6 @@ state-owning features the earlier list tracked — several large DOM-carrying
 sections write *zero* shared state and were simply never catalogued). Ranked by
 leverage; each needs a fresh e2e spec first:
 
-- **Invite/channel/profile modals + user card** — `open*Modal`/`openUserCard`
-  (~145 lines). A cluster of independent modal builders; one `modals.js` or split.
 - **Mobile long-press context menu** — `openMobileCtx` & friends (~89 lines). A
   self-contained gesture widget, zero state writes.
 
