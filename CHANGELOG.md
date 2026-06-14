@@ -5,6 +5,9 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+### Added
+- `nature.com` is now in the default link-preview allowlist, so links to Nature articles render preview cards.
+
 ## [1.4.67] - 2026-06-13
 
 ### Fixed
