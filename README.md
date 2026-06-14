@@ -222,7 +222,7 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               out of app.js: unread.js, channelorder.js,
                               drafts.js, composer-field.js, attachments.js,
                               autocomplete.js, prefs.js, previews.js, util.js,
-                              search.js, emoji.js, channeldrag.js
+                              search.js, emoji.js, channeldrag.js, presence.js
 web/sw.js                     service worker (Web Push display + click routing)
 web/manifest.json             PWA manifest (installability; iOS push needs install)
 web/test/                     node:test unit suites (one per pure JS module)

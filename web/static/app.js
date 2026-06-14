@@ -83,6 +83,7 @@ import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
 import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
 import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
 import { createChannelDrag } from "./channeldrag.js?v=__RIVENDELL_VERSION__";
+import { presenceClass, presenceDecision } from "./presence.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -4344,14 +4345,17 @@ function applyPresence(evt) {
 
 function schedulePresenceUpdate(evt) {
   const uid = evt.payload.user_id;
-  if (state.me && uid === state.me.id) { applyPresence(evt); return; } // self: immediate
+  const cur = state.users[uid];
+  const decision = presenceDecision({
+    isSelf: !!(state.me && uid === state.me.id),
+    knownUser: !!cur,
+    alreadyMatches: cur ? S.presenceMatches(cur, evt.payload) : false,
+  });
+  if (decision === "now") { applyPresence(evt); return; } // self: deliberate, no debounce
+  // Any non-self update supersedes a pending one for the same user.
   const pending = pendingPresence.get(uid);
   if (pending) { clearTimeout(pending); pendingPresence.delete(uid); }
-  const cur = state.users[uid];
-  if (!cur) return; // unknown user — setPresence would no-op anyway
-  // The incoming value already matches what we're showing: a prior flip has
-  // reverted within the window, so drop it without repainting.
-  if (S.presenceMatches(cur, evt.payload)) return;
+  if (decision === "drop") return; // unknown user, or a flip that reverted in-window
   pendingPresence.set(uid, setTimeout(() => {
     pendingPresence.delete(uid);
     applyPresence(evt);
@@ -4364,17 +4368,6 @@ function schedulePresenceUpdate(evt) {
 function flushPendingPresence() {
   for (const t of pendingPresence.values()) clearTimeout(t);
   pendingPresence.clear();
-}
-
-// presenceClass maps a user to a presence-dot color class. Offline (or invisible)
-// users are grey regardless of their stored status; online users get their
-// status color (online=green, away=amber, dnd=red). Idle shares away's amber —
-// auto-idle and user-set "away" are intentionally indistinguishable.
-function presenceClass(u) {
-  if (!u.online) return "offline";
-  if (u.idle) return "away";
-  if (u.status === "away" || u.status === "dnd") return u.status;
-  return "online";
 }
 
 // --- avatars & image preloading ----------------------------------------------

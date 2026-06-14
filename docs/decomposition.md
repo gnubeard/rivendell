@@ -118,6 +118,7 @@ Conventions specific to this kind of module:
 | Message-search modal controller (DOM-carrying feature module) | `search.js` | e2e (search, 5) | ✅ done |
 | Shared emoji popup (composer / inline-edit insert + reactions) | `emoji.js` | e2e (emoji-picker, 3) | ✅ done |
 | Moderator channel drag-reorder controller (DOM gesture) | `channeldrag.js` | e2e (channel-reorder, 1) | ✅ done |
+| Presence dot color + debounce decision (pure logic) | `presence.js` | unit (8) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -159,9 +160,6 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 self-containment — each declares its own state mid-file and touches the shared
 top-of-file state block only through `state`). Each needs a fresh e2e spec first:
 
-- **Presence** — owns `pendingPresence`, `PRESENCE_DEBOUNCE_MS`. The debounce +
-  apply logic; the `users.status`-durable and self-exempt invariants are guarded
-  by Go tests, so the e2e need only pin the dot-flicker debounce.
 - **Image preloading/warming** — owns `warmGen`, `preloadedAvatars`,
   `WARM_IMAGES_PER_CHANNEL`. Background avatar/image warm; mostly self-contained.
 - **Link previews** — owns `_previewRenderTimer`; already leans on `previews.js`
