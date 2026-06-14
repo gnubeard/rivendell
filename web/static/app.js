@@ -9,7 +9,6 @@ import {
   shouldNotify,
   showNotification,
   showViaServiceWorker,
-  closeNotificationsByTag,
   requestNotificationPermission,
   currentPermission,
   notificationsSupported,
@@ -32,42 +31,20 @@ import {
 import {
   initVoice,
   fetchIceServers,
-  joinVoiceChannel,
-  leaveVoiceChannel,
   endCallLocally,
-  setVoiceMuted,
-  setVoiceDeafened,
-  setCameraEnabled,
-  isCameraEnabled,
   cameraErrorMessage,
-  loadCameraPreference,
   getVideoEl,
-  isVoiceMuted,
-  isVoiceDeafened,
   isInCall,
   voiceChannelId,
   setSpeakingCallback,
   setCameraErrorCallback,
   setVolumeForUser,
   getVolumeForUser,
-  handleVoiceSignal,
-  pttShouldFire,
-  pttKeyLabel,
-  micErrorMessage,
   registerDebug,
   reconcilePeers,
 } from "./voice.js";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js";
-import {
-  primeAudio,
-  boop,
-  greetTone,
-  farewellTone,
-  startRingSound,
-  stopRingSound,
-  startPendingSound,
-  stopPendingSound,
-} from "./tones.js";
+import { primeAudio, boop, greetTone, farewellTone } from "./tones.js";
 import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js";
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
@@ -89,6 +66,7 @@ import { createPins } from "./pins.js";
 import { createModals } from "./modals.js";
 import { createMobileCtx } from "./mobilectx.js";
 import { createVideoGrid } from "./videogrid.js";
+import { createVoiceUI } from "./voiceui.js";
 
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
@@ -116,16 +94,9 @@ let maxAvatarBytes = 0;
 // must precede the values seeded from it.
 const prefs = createPrefs();
 // Desktop-notification opt-in (per browser). The OS permission is separate and
-// browser-owned; this is the in-app preference that gates it.
+// browser-owned; this is the in-app preference that gates it. (Push-to-talk
+// state moved into voiceui.js along with the rest of the call UI.)
 let notifEnabled = prefs.loadNotif();
-// Push-to-talk: when enabled the mic stays muted in a call until the bound key is
-// held (see wirePushToTalk). pttKeyCode is a layout-independent KeyboardEvent.code
-// (default backtick); pttTransmitting is true only while held; pttCapturing is
-// true while the profile-modal rebind UI awaits a keypress.
-let pttEnabled = prefs.loadPttEnabled();
-let pttKeyCode = prefs.loadPttKeyCode();
-let pttTransmitting = false;
-let pttCapturing = false;
 
 // Ephemeral bookkeeping owned by sibling modules (not part of `state`).
 const unread = createUnreadTracker(); // divider cursor, mark-unread suppression, mark-read POST dedupe
@@ -168,14 +139,12 @@ const historyComplete = new Set(); // channelIds whose oldest message is loaded
 const viewingHistory = new Set();  // channelIds whose loaded bottom isn't the live tail
 let flashMessageId = null;         // id of a jumped-to message to highlight; survives re-renders
 
-// Voice / call state. (Secret-chat banner state lives in secretui.js; app.js
-// reads the pending request via secretUI.getSecretRequest().)
-let ringState = null; // in-progress ring: { channelId, direction: "outgoing"|"incoming", fromUserId }
-let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, videoMuted: true, participants: [] }; // live from voice.js (via callback)
-let videoViewHidden = false; // mobile user tapped 💬 to view chat mid video call; cleared on end / channel switch / both-cameras-off
-let voiceRosters = {};       // channelId → [{user_id, joined_at, muted}] for sidebar display
-let callParticipantIds = new Set(); // user ids on our active call (self incl.), from voiceCallState; drives the on-call cue + greet/farewell tones
-let speakingIds = new Set(); // user ids currently speaking (voice.js metering via onSpeaking); pulses a ring on roster rows
+// Voice / call UI state lives in voiceui.js (the call strip, ring banner, PTT,
+// on-call rosters/participant/speaking sets, videoViewHidden); app.js's render
+// functions read it through the voiceUI accessors. (Secret-chat banner state
+// lives in secretui.js, read via secretUI.getSecretRequest().) Two voice values
+// stay here: voiceTelemetry, created + registered to voice.js in enterApp, and
+// the DM-partner volume widget, which is part of the channel header app.js owns.
 let voiceTelemetry = null;   // rtcdebug capture hook when enabled, else null; records app-side voice events alongside voice.js's
 // DM partner volume: the header 🔊 toggles a compact slider for the other DM
 // participant (reusing voice.js per-user playout gain). These track which DM it's
@@ -478,7 +447,7 @@ async function enterApp() {
   try {
     const vs = await api.voiceState();
     for (const { channel_id, participants } of vs) {
-      voiceRosters[channel_id] = participants;
+      voiceUI.seedRoster(channel_id, participants);
     }
   } catch (e) {
     /* non-fatal: sidebar voice cues populate from realtime events */
@@ -522,7 +491,7 @@ async function enterApp() {
   imageWarm.startBackgroundImageWarm(); // fire-and-forget; warms blob images across all channels
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
-  initVoice(state.me.id, sendWS, onVoiceStateChange, greetTone, farewellTone);
+  initVoice(state.me.id, sendWS, voiceUI.onVoiceStateChange, greetTone, farewellTone);
   // WebRTC debug telemetry: opt-in per client (?rtcdebug=1 / localStorage) or
   // forced on for everyone by the server flag. When enabled, capture batches
   // getStats() + lifecycle events to POST /api/debug/telemetry (logged server-side).
@@ -530,10 +499,11 @@ async function enterApp() {
     voiceTelemetry = createTelemetry({ getVideoEl });
     registerDebug(voiceTelemetry);
   }
-  setSpeakingCallback(onSpeaking);
+  setSpeakingCallback(voiceUI.onSpeaking);
   setCameraErrorCallback((err) => alert(cameraErrorMessage(err)));
   fetchIceServers(); // best-effort; falls back to public STUN on error
-  wireVoiceControls();
+  voiceUI.wireVoiceControls();
+  wireDMVolume(); // header partner-volume widget (stays in app.js with the header)
   // Secret chat: init module, wire controls, check browser support.
   initSecret(state.me.id, sendWS, onSecretEvent);
   wireSecretControls();
@@ -703,7 +673,7 @@ function handleRealtimeEvent(evt) {
     }
   }
   if (evt.type.startsWith("voice.")) {
-    onVoiceEvent(evt);
+    voiceUI.onVoiceEvent(evt);
   }
   if (evt.type.startsWith("secret.")) {
     handleSecretEvent(evt, (userId) => {
@@ -923,7 +893,7 @@ function renderChannels() {
     const unread = state.unread[id] || 0;
     const mentioned = state.mentions[id] || 0;
     const cls = channelRowClass(id, active, unread);
-    const roster = voiceRosters[id] || [];
+    const roster = voiceUI.rosterFor(id);
     const voiceRow = roster.length ? el("span", { class: "ch-voice" },
       "🔊 " + roster.map(p => (state.users[p.user_id] || {}).display_name || "?").join(", ")
     ) : null;
@@ -989,8 +959,7 @@ function renderMembers() {
   if (activeCh && !activeCh.is_private) users = users.filter((u) => !u.is_bot);
   // On-call cue: only meaningful when the channel we're viewing is the call's own
   // channel (the roster we hold is for that channel). null = show no cue.
-  const callIds = voiceCallState.inCall && voiceCallState.channelId === state.activeChannelId
-    ? callParticipantIds : null;
+  const callIds = voiceUI.callCueIds(state.activeChannelId);
   users.sort((a, b) => {
     if (!!b.online !== !!a.online) return b.online ? 1 : -1;
     return a.display_name.localeCompare(b.display_name);
@@ -1012,11 +981,11 @@ function renderMembers() {
     const callCue = onCall
       ? el("span", { class: "member-call", title: isSelf ? "You're on the call" : "On the call" }, "🔊")
       : null;
-    const speaking = onCall && speakingIds.has(u.id);
+    const speaking = onCall && voiceUI.isSpeaking(u.id);
     // Per-user volume slider: only for remote participants on our current call
     // (their <audio> element exists only then). Adjusts that one person's
     // playout level (voice.js setVolumeForUser), persisted across calls.
-    const volume = onCall && !isSelf ? volumeSlider(u) : null;
+    const volume = onCall && !isSelf ? voiceUI.volumeSlider(u) : null;
     list.append(
       el("li", {
         "data-user-id": String(u.id),
@@ -1056,26 +1025,6 @@ function renderSidebarBadges() {
   renderChannels();
   renderDMs();
   renderNotificationTotal();
-}
-
-// volumeSlider builds the per-user playout-volume control shown under an on-call
-// remote member's name. Clicks are kept off the row (which would open a DM); the
-// title tracks the live percentage. The value is applied + persisted by voice.js.
-function volumeSlider(u) {
-  const pct = (v) => `Volume — ${Math.round(v * 100)}%`;
-  return el("input", {
-    type: "range", min: "0", max: "1", step: "0.05",
-    value: String(getVolumeForUser(u.id)),
-    class: "member-volume",
-    title: pct(getVolumeForUser(u.id)),
-    "aria-label": `Volume for ${u.display_name}`,
-    onclick: (e) => e.stopPropagation(),
-    oninput: (e) => {
-      const v = Number(e.target.value);
-      setVolumeForUser(u.id, v);
-      e.target.title = pct(v);
-    },
-  });
 }
 
 // removeMember (moderator+) removes another user from the active private channel.
@@ -1270,8 +1219,7 @@ async function selectChannel(id) {
   // (re-opening honors that mark by jumping to the divider, then marks read from here).
   unread.openChannel(id, hadUnreads, state.lastRead[id]);
   renderSidebarBadges();
-  videoViewHidden = false;
-  renderVideoGrid();
+  voiceUI.resetVideoView(); // clear any mobile chat-override + repaint the grid
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
   imageWarm.startBackgroundImageWarm(); // reprioritizes from the new active channel outward
@@ -1426,18 +1374,6 @@ function applyChannelAffordances(ch) {
   document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
 }
 
-// renderChannelHeader paints the active channel's title + topic into the header.
-// For a real channel (not a DM) a moderator+ may click the topic to edit it inline;
-// the span advertises that and shows a prompt to add one when the topic is empty.
-// applyHeaderCamLabel sets the mobile video/chat toggle button's glyph + title
-// from videoViewHidden — 📺/"Show video" while chat is showing, 💬/"Show chat"
-// while video is. Single source of truth for that mapping (both header branches
-// and the button's own click handler in wireVoiceControls route through it).
-function applyHeaderCamLabel(btn) {
-  btn.textContent = videoViewHidden ? "📺" : "💬";
-  btn.title = videoViewHidden ? "Show video" : "Show chat";
-}
-
 // renderChannelHeader repaints the top bar for the active channel. DMs and regular
 // channels share almost nothing up there (DM: presence dot, call/secret buttons,
 // partner-volume; regular: join-voice button, editable topic), so each has its own
@@ -1463,8 +1399,7 @@ function renderDMHeader(ch) {
   // On-call cue: the member roster (which carries the 🔊 cue elsewhere) is
   // hidden in DM view, so surface "the other person is connected to this call"
   // here in the header — the analog of the DM presence dot for call state.
-  const otherOnCall = !!(voiceCallState.inCall && voiceCallState.channelId === ch.id
-    && otherId && callParticipantIds.has(otherId));
+  const otherOnCall = !!(voiceUI.inCallOn(ch.id) && otherId && voiceUI.isParticipant(otherId));
   $("#channel-dm-call").hidden = !otherOnCall;
   // Clicking the 🔊 reveals a slider for the partner's playout volume. It only
   // makes sense while they're on the call (their <audio> element — the thing
@@ -1487,13 +1422,14 @@ function renderDMHeader(ch) {
     secretBtn.hidden = true;
   } else {
     // Show/update the call button for DM channels.
-    if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
+    const rs = voiceUI.getRingState();
+    if (rs && rs.channelId === ch.id && rs.direction === "incoming") {
       callBtn.textContent = "✅";
       callBtn.title = "Answer call";
-    } else if (ringState && ringState.channelId === ch.id && ringState.direction === "outgoing") {
+    } else if (rs && rs.channelId === ch.id && rs.direction === "outgoing") {
       callBtn.textContent = "📵";
       callBtn.title = "Cancel call";
-    } else if (isInCall() && voiceCallState.channelId === ch.id) {
+    } else if (voiceUI.inCallOn(ch.id)) {
       callBtn.textContent = "📵";
       callBtn.title = "Leave call";
     } else {
@@ -1518,10 +1454,10 @@ function renderDMHeader(ch) {
   // Video/chat toggle: mobile-only (CSS hides on desktop). During a DM video
   // call, 💬 lets the user switch to chat; 📺 returns them to the video view.
   const headerCamBtn = $("#header-camera-btn");
-  if (isInCall() && voiceCallState.channelId === ch.id) {
-    const hasVideo = S.anyVideoPresent(voiceCallState, state.me && state.me.id);
-    if (hasVideo || videoViewHidden) {
-      applyHeaderCamLabel(headerCamBtn);
+  if (voiceUI.inCallOn(ch.id)) {
+    const hasVideo = voiceUI.anyVideoPresent();
+    if (hasVideo || voiceUI.isVideoViewHidden()) {
+      voiceUI.applyHeaderCamLabel(headerCamBtn);
       headerCamBtn.hidden = false;
     } else {
       headerCamBtn.hidden = true;
@@ -1541,15 +1477,15 @@ function renderRegularHeader(ch) {
   $("#dm-volume").hidden = true;
   dmVolumeChannelId = null; dmVolumeOpen = false;
   if (ch && !ch.is_dm) {
-    if (isInCall() && voiceCallState.channelId === ch.id) {
+    if (voiceUI.inCallOn(ch.id)) {
       callBtn.textContent = "🔴";
       callBtn.title = "Leave voice";
       // Same mobile-only 💬/📺 chat↔video toggle as DM calls, but for a group
       // video call: shown once any participant (us or a peer) has a camera on.
       const headerCamBtn = $("#header-camera-btn");
-      const groupHasVideo = S.anyVideoPresent(voiceCallState, state.me && state.me.id);
-      if (groupHasVideo || videoViewHidden) {
-        applyHeaderCamLabel(headerCamBtn);
+      const groupHasVideo = voiceUI.anyVideoPresent();
+      if (groupHasVideo || voiceUI.isVideoViewHidden()) {
+        voiceUI.applyHeaderCamLabel(headerCamBtn);
         headerCamBtn.hidden = false;
       }
     } else {
@@ -3284,7 +3220,7 @@ const modals = createModals({
   avatarSrc,
   initials,
   startDM,
-  onProfileOpen: () => { renderNotifControl(); pttCapturing = false; renderPttControl(); },
+  onProfileOpen: () => { renderNotifControl(); voiceUI.onProfileOpen(); },
   onActiveMembersChanged: (memberIds) => { activeMemberIds = memberIds; renderMembers(); },
 });
 const openInviteModal = modals.openInviteModal;
@@ -3394,45 +3330,8 @@ function firePing(evt, ch) {
   });
 }
 
-// Stable tag so repeat rings for the same incoming call coalesce into one
-// notification instead of stacking; `ringNotification` holds the page-context
-// Notification (the SW path is dismissed by tag) so clearRingNotification can
-// auto-dismiss it once the ring is answered/declined/times out.
-const RING_NOTIF_TAG = "rivendell-ring";
-let ringNotification = null;
-
-// fireRingNotification raises an OS notification for an incoming call when the
-// user has opted in and isn't looking at this tab — a backgrounded tab's audible
-// ring alone is easy to miss. Foreground only (a live tab): a ring is ephemeral
-// WS state, not a persisted message, so there's no Web Push path to a fully
-// closed app. Clicking it focuses the tab and opens the DM, mirroring firePing.
-function fireRingNotification(fromUserId, dmChannelId) {
-  if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: !tabUnfocused() })) {
-    return;
-  }
-  const caller = state.users[fromUserId];
-  const title = "📞 Call from " + displayNameOf(fromUserId);
-  const icon = caller && caller.has_avatar ? api.avatarURL(caller.id) : undefined;
-  // messageId 0 = "just open the channel" (real ids start at 1); the SW click
-  // routing in initPushRouting treats it as selectChannel rather than a jump.
-  const url = "/" + permalinkHash(dmChannelId, 0);
-  showViaServiceWorker(title, { tag: RING_NOTIF_TAG, icon, url }).then((shown) => {
-    if (!shown) {
-      ringNotification = showNotification(title, { tag: RING_NOTIF_TAG, icon, onclick: () => selectChannel(dmChannelId) });
-    }
-  });
-}
-
-// clearRingNotification dismisses the incoming-call notification (both paths) once
-// the ring resolves, so a stale "Call from …" doesn't linger after accept/decline/
-// timeout/sibling-dismiss.
-function clearRingNotification() {
-  if (ringNotification) {
-    try { ringNotification.close(); } catch (e) { /* best-effort */ }
-    ringNotification = null;
-  }
-  closeNotificationsByTag(RING_NOTIF_TAG);
-}
+// (The incoming-call OS notification — fireRingNotification/clearRingNotification
+// — moved into voiceui.js with the rest of the ring flow.)
 
 // --- web push subscription ---------------------------------------------------
 
@@ -3513,22 +3412,8 @@ function renderNotifControl() {
   else status.textContent = "Off — turn on to get alerts for DMs and @-mentions.";
 }
 
-// renderPttControl reflects the push-to-talk preference into the profile modal:
-// the enable checkbox, the (only-when-enabled) key-rebind button, and a hint.
-// While rebinding, the button reads "press a key…" until the next keypress.
-function renderPttControl() {
-  const cb = $("#ptt-enable");
-  if (!cb) return;
-  cb.checked = pttEnabled;
-  const keyrow = $("#ptt-keyrow");
-  const keyBtn = $("#ptt-key-btn");
-  const status = $("#ptt-status");
-  if (keyrow) keyrow.hidden = !pttEnabled;
-  if (keyBtn) keyBtn.textContent = pttCapturing ? "press a key…" : pttKeyLabel(pttKeyCode);
-  if (status) status.textContent = pttEnabled
-    ? "Your mic stays muted in a call until you hold the key. It still types normally in the message box."
-    : "Off — your mic is open the whole time you're in a call.";
-}
+// (renderPttControl — the profile-modal push-to-talk row — moved into voiceui.js;
+// app.js drives it via voiceUI.onProfileOpen from the modal's onProfileOpen hook.)
 
 // --- presence (debounced) ----------------------------------------------------
 
@@ -3616,12 +3501,12 @@ const videoGrid = createVideoGrid({
   el,
   $,
   getState: () => state,
-  getVoiceCallState: () => voiceCallState,
-  getSpeakingIds: () => speakingIds,
+  getVoiceCallState: () => voiceUI.getVoiceCallState(),
+  getSpeakingIds: () => voiceUI.getSpeakingIds(),
   avatarSrc,
   initials,
-  getVideoViewHidden: () => videoViewHidden,
-  setVideoViewHidden: (v) => { videoViewHidden = v; },
+  getVideoViewHidden: () => voiceUI.getVideoViewHidden(),
+  setVideoViewHidden: (v) => voiceUI.setVideoViewHidden(v),
 });
 const renderVideoGrid = videoGrid.renderVideoGrid;
 
@@ -3635,113 +3520,37 @@ function dismissLoadingScreen() {
 }
 
 // --- voice calling -----------------------------------------------------------
+//
+// The call UI controller lives in voiceui.js (the secretui.js method, but over
+// the voice.js WebRTC engine): it owns the call strip, ring banner, push-to-talk,
+// the per-user volume slider, the mobile video/chat toggle, and the ring OS
+// notification, plus the live call/ring state app.js's render functions read
+// through its accessors. Two voice values stay in app.js and are injected back:
+// voiceTelemetry (created + registered to voice.js in enterApp) via getTelemetry,
+// and the notification opt-in via getNotifEnabled (the ring notification reads it).
+const voiceUI = createVoiceUI({
+  $, el,
+  getState: () => state,
+  api,
+  sendWS,
+  prefs,
+  renderChannelHeader,
+  renderMembers,
+  renderChannels,
+  renderVideoGrid,
+  selectChannel,
+  ensureDMOpen,
+  displayNameOf,
+  tabUnfocused,
+  getNotifEnabled: () => notifEnabled,
+  getTelemetry: () => voiceTelemetry,
+});
 
-function wireVoiceControls() {
-  // Call strip (active call controls at the bottom of the sidebar).
-  $("#call-mute-btn").onclick = () => {
-    setVoiceMuted(!isVoiceMuted());
-    renderCallStrip();
-  };
-  $("#call-deafen-btn").onclick = () => {
-    setVoiceDeafened(!isVoiceDeafened());
-    renderCallStrip();
-  };
-  $("#call-leave-btn").onclick = () => leaveVoiceChannel();
-
-  // Camera toggle (DM calls only — button is hidden in regular voice channels).
-  $("#call-camera-btn").onclick = async () => {
-    await setCameraEnabled(!isCameraEnabled());
-    renderCallStrip();
-    renderVideoGrid();
-  };
-  // Mobile video/chat toggle: switches between watching video and reading chat.
-  $("#header-camera-btn").onclick = () => {
-    videoViewHidden = !videoViewHidden;
-    applyHeaderCamLabel($("#header-camera-btn"));
-    renderVideoGrid();
-  };
-
-  // Accept the current incoming ring: signal the caller, clear the banner, and
-  // join the call. Shared by the ring banner's accept button and the channel
-  // header call button (which doubles as "Answer" while a ring is incoming).
-  const acceptRing = async () => {
-    if (!ringState) return;
-    const chId = ringState.channelId;
-    const fromUserId = ringState.fromUserId;
-    stopRingSound();
-    clearRingNotification();
-    // Send acceptance before joining so the caller gets the signal promptly.
-    sendWS({ type: "voice.ring_response", dm_channel_id: chId, accept: true });
-    ringState = null;
-    renderRingBanner();
-    try {
-      await ensureDMOpen(chId, fromUserId);
-      await joinVoiceChannel(chId, { enableVideo: loadCameraPreference(chId) });
-      selectChannel(chId);
-    } catch (e) {
-      alert(micErrorMessage(e));
-    }
-  };
-
-  // Ring banner (incoming call).
-  $("#ring-accept-btn").onclick = acceptRing;
-  $("#ring-decline-btn").onclick = () => {
-    if (!ringState) return;
-    const chId = ringState.channelId;
-    stopRingSound();
-    stopPendingSound();
-    clearRingNotification();
-    sendWS({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
-    ringState = null;
-    renderRingBanner();
-    renderChannelHeader(state.channels[state.activeChannelId]);
-  };
-
-  // Call button in the channel header (DMs and regular channels).
-  $("#call-btn").onclick = async () => {
-    const ch = state.channels[state.activeChannelId];
-    if (!ch) return;
-    if (!ch.is_dm) {
-      // Regular voice channel: toggle join/leave.
-      if (isInCall() && voiceCallState.channelId === ch.id) {
-        await leaveVoiceChannel();
-      } else {
-        try {
-          await joinVoiceChannel(ch.id);
-        } catch (e) {
-          alert(micErrorMessage(e));
-        }
-      }
-      return;
-    }
-    if (ringState && ringState.channelId === ch.id && ringState.direction === "incoming") {
-      // Answer the incoming call (same path as the ring banner's accept button).
-      await acceptRing();
-      return;
-    }
-    if (ringState) {
-      // Cancel the outgoing ring.
-      const chId = ringState.channelId;
-      stopPendingSound();
-      sendWS({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
-      ringState = null;
-      renderRingBanner();
-      renderChannelHeader(ch);
-      return;
-    }
-    if (isInCall()) {
-      await leaveVoiceChannel();
-      return;
-    }
-    sendWS({ type: "voice.ring", dm_channel_id: ch.id });
-    ringState = { channelId: ch.id, direction: "outgoing", fromUserId: state.me.id };
-    renderChannelHeader(ch);
-    renderRingBanner();
-    startPendingSound(); // caller-side "waiting for pickup" tone
-  };
-
-  // DM partner volume: the header 🔊 toggles a slider for the other participant.
-  // The slider drives voice.js's per-user playout gain (persisted across calls).
+// wireDMVolume binds the channel-header 🔊 partner-volume widget. It stays in
+// app.js because the widget's bound-channel + collapsed state (dmVolumeChannelId/
+// dmVolumeOpen) is driven by the channel header app.js renders; the slider itself
+// drives voice.js's per-user playout gain (persisted across calls).
+function wireDMVolume() {
   const toggleDMVolume = () => {
     if ($("#channel-dm-call").hidden) return; // only when the partner is on call
     dmVolumeOpen = !dmVolumeOpen;
@@ -3760,305 +3569,6 @@ function wireVoiceControls() {
     setVolumeForUser(otherId, v);
     e.target.title = `Volume — ${Math.round(v * 100)}%`;
   };
-
-  wirePushToTalk();
-}
-
-// --- push-to-talk ------------------------------------------------------------
-//
-// When PTT is enabled, the mic is held muted in a call (set on join, see
-// onVoiceStateChange) and only opens while the bound key is held. We listen in
-// the capture phase so the rebind UI can intercept a keypress before anything
-// else, and so a held PTT key is seen even when focus is elsewhere. The bound
-// key still types normally inside a text field — pttShouldFire's editable guard
-// is what makes the default backtick usable for code in the composer.
-function wirePushToTalk() {
-  window.addEventListener("keydown", onPttKeyDown, true);
-  window.addEventListener("keyup", onPttKeyUp, true);
-  // A held key whose keyup we'd otherwise miss (tab/window blur) must not leave
-  // the mic stuck open — release PTT defensively when we lose focus.
-  window.addEventListener("blur", () => { if (pttTransmitting) releasePtt(); });
-
-  // Profile-modal controls: the enable checkbox and the key-rebind button.
-  const cb = $("#ptt-enable");
-  if (cb) {
-    cb.onchange = () => {
-      pttEnabled = cb.checked;
-      pttCapturing = false;
-      prefs.savePtt(pttEnabled, pttKeyCode);
-      // Apply immediately if we're already in a call: enabling holds the mic
-      // muted at rest; disabling opens it back up.
-      if (isInCall()) { pttTransmitting = false; setVoiceMuted(pttEnabled); }
-      renderPttControl();
-      renderCallStrip();
-    };
-  }
-  const keyBtn = $("#ptt-key-btn");
-  if (keyBtn) {
-    keyBtn.onclick = () => { pttCapturing = true; renderPttControl(); };
-  }
-}
-
-function isEditableTarget(t) {
-  if (!t) return false;
-  const tag = t.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
-}
-
-function onPttKeyDown(e) {
-  // Rebind capture: the next keypress (Escape cancels) becomes the PTT key. We
-  // swallow it so it neither toggles PTT nor closes the open profile modal.
-  if (pttCapturing) {
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    if (e.code !== "Escape") { pttKeyCode = e.code; prefs.savePtt(pttEnabled, pttKeyCode); }
-    pttCapturing = false;
-    renderPttControl();
-    renderCallStrip();
-    return;
-  }
-  if (e.repeat) return; // auto-repeat while the key is held — already transmitting
-  if (pttTransmitting) return;
-  if (!pttShouldFire({ enabled: pttEnabled, inCall: isInCall(), code: e.code, boundCode: pttKeyCode, editable: isEditableTarget(e.target) })) return;
-  pttTransmitting = true;
-  setVoiceMuted(false);
-  renderCallStrip();
-}
-
-function onPttKeyUp(e) {
-  if (!pttTransmitting || e.code !== pttKeyCode) return;
-  releasePtt();
-}
-
-// releasePtt closes the PTT mic gate (re-mutes) and repaints the strip.
-function releasePtt() {
-  pttTransmitting = false;
-  if (isInCall()) setVoiceMuted(true);
-  renderCallStrip();
-}
-
-// --- voice + ring event handling ---------------------------------------------
-
-// onVoiceEvent handles incoming voice.* events from the server.
-async function onVoiceEvent(evt) {
-  const p = evt.payload || {};
-
-  if (evt.type === "voice.ring") {
-    // Incoming ring from another user.
-    if (ringState) return; // already in a ring — ignore (shouldn't happen in practice)
-    ringState = { channelId: p.dm_channel_id, direction: "incoming", fromUserId: p.from_user_id };
-    renderRingBanner();
-    // Repaint the header so the active DM's call button flips to the "answer"
-    // icon — the banner alone doesn't drive the header.
-    renderChannelHeader(state.channels[state.activeChannelId]);
-    startRingSound();
-    fireRingNotification(p.from_user_id, p.dm_channel_id);
-    return;
-  }
-
-  if (evt.type === "voice.ring_response") {
-    // Response to a ring we sent, or the other side cancelling their ring.
-    if (!ringState) return;
-    stopRingSound();
-    stopPendingSound();
-    clearRingNotification();
-    const accepted = p.accept;
-    const chId = ringState.channelId;
-    ringState = null;
-    renderRingBanner();
-    renderChannelHeader(state.channels[state.activeChannelId]);
-    if (accepted) {
-      try {
-        await joinVoiceChannel(chId, { enableVideo: loadCameraPreference(chId) });
-      } catch (e) {
-        alert(micErrorMessage(e));
-      }
-    }
-    return;
-  }
-
-  if (evt.type === "voice.ring_timeout") {
-    if (ringState && ringState.channelId === p.dm_channel_id) {
-      stopRingSound();
-      stopPendingSound();
-      clearRingNotification();
-      ringState = null;
-      renderRingBanner();
-      renderChannelHeader(state.channels[state.activeChannelId]);
-    }
-    return;
-  }
-
-  if (evt.type === "voice.ring_dismissed") {
-    // Another of our own sessions (tab/device) answered or declined this ring.
-    // Stop ringing here too, but do NOT join — that session handles the call.
-    if (ringState && ringState.channelId === p.dm_channel_id) {
-      stopRingSound();
-      stopPendingSound();
-      clearRingNotification();
-      ringState = null;
-      renderRingBanner();
-      renderChannelHeader(state.channels[state.activeChannelId]);
-    }
-    return;
-  }
-
-  if (evt.type === "voice.end") {
-    // The other party in a DM hung up (or dropped): the call ends for both.
-    // Tear down our side without echoing a voice.leave (the server already
-    // removed us). endCallLocally fires the farewell tone (in steady-state
-    // capture) then tears down — async, fire-and-forget here.
-    if (isInCall() && voiceChannelId() === p.channel_id) {
-      endCallLocally();
-    }
-    return;
-  }
-
-  if (evt.type === "voice.join_denied") {
-    // The server refused our join (group caps). "full": the channel is at its
-    // participant limit — abort the optimistic local join. "video_full": only
-    // the camera slots are exhausted, so stay in the call but drop back to
-    // audio-only (the server already forced us video-muted).
-    if (voiceTelemetry) { try { voiceTelemetry.event(0, "join-denied", { reason: p.reason, limit: p.limit }); } catch { /* telemetry never throws */ } }
-    if (p.reason === "video_full") {
-      await setCameraEnabled(false);
-      alert(`This call already has the maximum ${p.limit} cameras on — staying audio-only.`);
-    } else {
-      if (isInCall() && voiceChannelId() === p.channel_id) await endCallLocally();
-      alert(`That call is full (max ${p.limit}).`);
-    }
-    return;
-  }
-
-  // voice.state — update sidebar rosters for any channel, then pass to voice.js.
-  if (evt.type === "voice.state") {
-    voiceRosters[evt.payload.channel_id] = evt.payload.participants || [];
-    renderChannels();
-  }
-  // voice.state / offer / answer / ice — pass to voice.js machinery.
-  await handleVoiceSignal(evt);
-}
-
-function renderRingBanner() {
-  const banner = $("#ring-banner");
-  if (!ringState) {
-    banner.hidden = true;
-    return;
-  }
-  const { direction, fromUserId, channelId } = ringState;
-  const bannerText = $("#ring-banner-text");
-  if (direction === "incoming") {
-    bannerText.textContent = displayNameOf(fromUserId) + " is calling…";
-    $("#ring-accept-btn").hidden = false;
-    $("#ring-decline-btn").textContent = "Decline";
-  } else {
-    // outgoing ring
-    const ch = state.channels[channelId];
-    const otherName = ch ? dmDisplayName(state, ch) : "…";
-    bannerText.textContent = "Calling " + otherName + "…";
-    $("#ring-accept-btn").hidden = true;
-    $("#ring-decline-btn").textContent = "Cancel";
-  }
-  banner.hidden = false;
-}
-
-// --- voice state callbacks ---------------------------------------------------
-
-// onVoiceStateChange folds a fresh state push from voice.js into the UI: it
-// chimes a greet/farewell tone for each remote peer that joined/left since the
-// last push, refreshes the on-call cue set, and repaints the call strip, header,
-// and member roster. Our OWN join/leave tones are NOT fired here — they're
-// driven by voice.js lifecycle hooks (greetTone just after the mic is live and
-// settled, farewellTone just before teardown) so they land in the same
-// steady-state capture window where these remote-peer tones play loud, not in
-// the capture start/stop device transition. See initVoice / joinVoiceChannel.
-function onVoiceStateChange(vs) {
-  const prevInCall = voiceCallState.inCall;
-  const prevRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
-  voiceCallState = vs;
-  callParticipantIds = new Set((vs.participants || []).map((p) => p.user_id));
-  // Entering a call with push-to-talk on: hold the mic muted at rest (the key
-  // opens it). The !prevInCall guard fires this only on the join transition;
-  // setVoiceMuted re-enters here with prevInCall now true, so it won't recurse.
-  if (!prevInCall && vs.inCall && pttEnabled && !pttTransmitting && !isVoiceMuted()) setVoiceMuted(true);
-  if (!vs.inCall) pttTransmitting = false; // call ended: drop any stuck PTT gate
-  if (prevInCall && vs.inCall) {
-    // Already in call: chime for remote peers joining/leaving. (Self join/leave
-    // tones are handled by the voice.js lifecycle hooks, not here.)
-    const nowRemote = new Set([...callParticipantIds].filter((id) => id !== state.me.id));
-    for (const id of nowRemote) if (!prevRemote.has(id)) greetTone();
-    for (const id of prevRemote) if (!nowRemote.has(id)) farewellTone();
-  }
-  if (!vs.inCall && speakingIds.size) speakingIds.clear(); // call ended: drop stale rings
-  if (!vs.inCall) videoViewHidden = false; // call ended: clear any mobile chat-override
-  renderCallStrip();
-  renderVideoGrid();
-  renderChannelHeader(state.channels[state.activeChannelId]);
-  renderMembers();
-}
-
-// onSpeaking folds a speaking-state flip from voice.js into the roster: it
-// toggles a pulsing ring on that user's member row without re-rendering the
-// whole list (the flip fires every ~80ms of metering, far too often to repaint).
-function onSpeaking(userId, speaking) {
-  const had = speakingIds.has(userId);
-  if (speaking === had) return;
-  if (speaking) speakingIds.add(userId);
-  else speakingIds.delete(userId);
-  const li = document.querySelector(`#member-list li[data-user-id="${userId}"]`);
-  if (li) li.classList.toggle("speaking", speaking);
-  // In a group video gallery, promote the active speaker by highlighting their
-  // tile — without repainting the grid (the flip fires far too often for that).
-  const tile = document.querySelector(`#video-grid .video-tile[data-user-id="${userId}"]`);
-  if (tile) tile.classList.toggle("speaking", speaking);
-}
-
-// --- call strip --------------------------------------------------------------
-// The video grid itself lives in videogrid.js (createVideoGrid above); what
-// stays here is the call strip, which reads the PTT flags and is more coupled.
-
-function renderCallStrip() {
-  const strip = $("#call-strip");
-  if (!voiceCallState.inCall) {
-    strip.hidden = true;
-    return;
-  }
-  const ch = voiceCallState.channelId !== null ? state.channels[voiceCallState.channelId] : null;
-  const label = ch ? (ch.is_dm ? "📞 " + dmDisplayName(state, ch) : "🔊 #" + ch.name) : "In call";
-  $("#call-strip-label").textContent = label;
-  // In PTT mode the mic is key-driven, so the mute toggle is replaced by a PTT
-  // pill that lights up while you're holding the key (transmitting).
-  const muteBtn = $("#call-mute-btn");
-  const pttPill = $("#call-ptt");
-  if (pttEnabled) {
-    muteBtn.hidden = true;
-    pttPill.hidden = false;
-    pttPill.textContent = "PTT " + pttKeyLabel(pttKeyCode);
-    pttPill.title = "Push-to-talk — hold " + pttKeyLabel(pttKeyCode) + " to talk";
-    pttPill.classList.toggle("active", pttTransmitting);
-  } else {
-    pttPill.hidden = true;
-    muteBtn.hidden = false;
-    muteBtn.textContent = voiceCallState.muted ? "🔇" : "🎙";
-    muteBtn.title = voiceCallState.muted ? "Unmute" : "Mute";
-    muteBtn.classList.toggle("active", voiceCallState.muted);
-  }
-  const deafBtn = $("#call-deafen-btn");
-  deafBtn.textContent = voiceCallState.deafened ? "🔈" : "🔊";
-  deafBtn.title = voiceCallState.deafened ? "Undeafen" : "Deafen";
-  deafBtn.classList.toggle("active", voiceCallState.deafened);
-  // Camera button: available in any call — DMs and group voice channels alike
-  // (group video is the 1.4.0 feature). Hidden only when there's no active call.
-  const camBtn = $("#call-camera-btn");
-  if (ch) {
-    camBtn.hidden = false;
-    camBtn.textContent = voiceCallState.videoMuted ? "📷" : "🎥";
-    camBtn.title = voiceCallState.videoMuted ? "Turn camera on" : "Turn camera off";
-    camBtn.classList.toggle("active", voiceCallState.videoMuted);
-  } else {
-    camBtn.hidden = true;
-  }
-  strip.hidden = false;
 }
 
 // --- secret session UI -------------------------------------------------------

@@ -37,15 +37,18 @@ internal/httpapi/             server.go (Server struct + New + the Handler route
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188)
 web/static/                   app.js (orchestrator; being decomposed — see
                               docs/decomposition.md), api.js, ws.js, state.js,
-                              format.js, syntax.js, voice.js, secret.js,
-                              notify.js, rtcdebug.js, style.css; modules carved
-                              out of app.js: unread.js, channelorder.js,
-                              drafts.js, composer-field.js, attachments.js,
-                              autocomplete.js, prefs.js, previews.js, util.js,
-                              search.js, emoji.js, channeldrag.js, presence.js,
-                              imagewarm.js, linkpreview.js, admin.js, secretui.js,
-                              forward.js, pins.js, modals.js, mobilectx.js,
-                              videogrid.js
+                              format.js, syntax.js, voice.js (WebRTC engine),
+                              secret.js, notify.js, rtcdebug.js, tones.js (all
+                              Web Audio synthesis: chime + greet/farewell +
+                              ring/pending), style.css; modules carved out of
+                              app.js: unread.js, channelorder.js, drafts.js,
+                              composer-field.js, attachments.js, autocomplete.js,
+                              prefs.js, previews.js, util.js, search.js, emoji.js,
+                              channeldrag.js, presence.js, imagewarm.js,
+                              linkpreview.js, admin.js, secretui.js, forward.js,
+                              pins.js, modals.js, mobilectx.js, videogrid.js,
+                              voiceui.js (call/ring UI over voice.js: call strip,
+                              ring banner, PTT, volume slider, video toggle)
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites for the pure JS modules
                               (DOM-carrying modules are covered by e2e instead)
