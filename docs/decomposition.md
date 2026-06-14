@@ -119,6 +119,7 @@ Conventions specific to this kind of module:
 | Shared emoji popup (composer / inline-edit insert + reactions) | `emoji.js` | e2e (emoji-picker, 3) | ✅ done |
 | Moderator channel drag-reorder controller (DOM gesture) | `channeldrag.js` | e2e (channel-reorder, 1) | ✅ done |
 | Presence dot color + debounce decision (pure logic) | `presence.js` | unit (8) | ✅ done |
+| Image cache warming (avatars, viewport, bg blob sweep; pure URL scan) | `imagewarm.js` | unit (10) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -160,7 +161,5 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 self-containment — each declares its own state mid-file and touches the shared
 top-of-file state block only through `state`). Each needs a fresh e2e spec first:
 
-- **Image preloading/warming** — owns `warmGen`, `preloadedAvatars`,
-  `WARM_IMAGES_PER_CHANNEL`. Background avatar/image warm; mostly self-contained.
 - **Link previews** — owns `_previewRenderTimer`; already leans on `previews.js`
   for its cache state machine. The render/observe half could join it.

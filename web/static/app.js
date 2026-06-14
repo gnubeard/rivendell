@@ -84,6 +84,7 @@ import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
 import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
 import { createChannelDrag } from "./channeldrag.js?v=__RIVENDELL_VERSION__";
 import { presenceClass, presenceDecision } from "./presence.js?v=__RIVENDELL_VERSION__";
+import { createImageWarmer } from "./imagewarm.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -515,7 +516,7 @@ async function enterApp() {
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
   state = S.setUsers(state, users);
   state = S.setChannels(state, channels);
-  preloadAvatars(); // warm the avatar cache so channel switches paint without jank
+  imageWarm.preloadAvatars(); // warm the avatar cache so channel switches paint without jank
   // Custom emojis power :shortcode: rendering; best-effort so a failure here
   // never blocks the app from loading (messages just render the literal text).
   try {
@@ -580,9 +581,9 @@ async function enterApp() {
   }
   // Warm any images already rendered in the active channel, then fade out the
   // loading screen so the first visible frame has content fully painted.
-  await warmViewportImages();
+  await imageWarm.warmViewportImages();
   dismissLoadingScreen();
-  startBackgroundImageWarm(); // fire-and-forget; warms blob images across all channels
+  imageWarm.startBackgroundImageWarm(); // fire-and-forget; warms blob images across all channels
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
   initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
@@ -660,7 +661,7 @@ function startRealtime() {
         if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
           // Their avatar may have changed — force a re-fetch on next render.
           avatarVersion[evt.payload.id] = Date.now();
-          preloadAvatars(); // warm the new versioned URL ahead of the repaint
+          imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
         }
         renderMembers();
         renderMe();
@@ -854,7 +855,7 @@ async function resync() {
     const [users, channels] = await Promise.all([api.users(), api.channels()]);
     state = S.setUsers(state, users);
     state = S.setChannels(state, channels);
-    preloadAvatars(); // re-warm the avatar cache after a reconnect roster refresh
+    imageWarm.preloadAvatars(); // re-warm the avatar cache after a reconnect roster refresh
     try {
       state = S.setEmojis(state, await api.emojis());
     } catch (e) {
@@ -1342,7 +1343,7 @@ async function selectChannel(id) {
   renderVideoGrid();
   closeDrawers(); // on mobile, reveal the conversation after a pick
   await loadChannel(id);
-  startBackgroundImageWarm(); // reprioritizes from the new active channel outward
+  imageWarm.startBackgroundImageWarm(); // reprioritizes from the new active channel outward
   // Restore any saved draft and attachments for this channel.
   const composerInput = $("#composer-input");
   composerInput.value = drafts.restoreText(id);
@@ -4388,96 +4389,10 @@ function initials(name) {
   return (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
 
-// preloadAvatars eagerly warms the browser HTTP cache for member avatars so they
-// paint instantly on channel switch instead of streaming in afterwards (which
-// looks janky). With a ~20-friend roster this is a handful of small images.
-// Keyed by the versioned avatarSrc URL, so a changed avatar (new ?v= token)
-// re-warms while unchanged ones are skipped — calling it repeatedly is cheap.
-const preloadedAvatars = new Set();
-function preloadAvatars() {
-  for (const id in state.users) {
-    const u = state.users[id];
-    if (!u || !u.has_avatar) continue;
-    const url = avatarSrc(u.id);
-    if (preloadedAvatars.has(url)) continue;
-    preloadedAvatars.add(url);
-    const img = new Image();
-    img.decoding = "async";
-    img.src = url;
-  }
-}
-
-// warmViewportImages prefetches images rendered in the active message list so
-// they're decoded before the loading screen is dismissed. Images with
-// loading="lazy" may not have started fetching yet (the overlay occludes layout
-// intersection), so we probe each src explicitly via new Image() to bypass lazy.
-// A 1.5 s timeout caps the wait so a slow CDN never pins the loading screen.
-async function warmViewportImages() {
-  const wrap = document.getElementById("message-list");
-  if (!wrap) return;
-  const pending = [...wrap.querySelectorAll("img[src]")]
-    .filter(img => !img.complete || !img.naturalWidth)
-    .map(img => {
-      const probe = new Image();
-      probe.src = img.src;
-      return new Promise(resolve => { probe.onload = resolve; probe.onerror = resolve; });
-    });
-  if (!pending.length) return;
-  await Promise.race([Promise.all(pending), new Promise(r => setTimeout(r, 1500))]);
-}
-
-// WARM_IMAGES_PER_CHANNEL caps how many blob images are prefetched per channel
-// in the background sweep. 5 covers what's visible in roughly two viewports.
-const WARM_IMAGES_PER_CHANNEL = 5;
-
-// warmGen is incremented each time startBackgroundImageWarm is called. In-flight
-// sweeps compare against it and abort when the value diverges (channel switched).
-let warmGen = 0;
-
-// extractBlobUrls pulls up to `limit` /api/blobs/ paths from a messages array,
-// walking newest-first as returned by the API.
-function extractBlobUrls(messages, limit) {
-  const re = /!\[[^\]\n]*\]\((\/api\/blobs\/[a-f0-9]{64})\)/g;
-  const urls = [];
-  for (const msg of messages) {
-    if (urls.length >= limit) break;
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(msg.content)) !== null) {
-      urls.push(m[1]);
-      if (urls.length >= limit) break;
-    }
-  }
-  return urls;
-}
-
-// startBackgroundImageWarm walks every channel in sidebar order (skipping the
-// active one, already warmed by warmViewportImages), fetches up to 20 recent
-// messages if not cached, then warms up to WARM_IMAGES_PER_CHANNEL blob images
-// per channel one at a time. Calling it again increments warmGen, which causes
-// any in-flight sweep to abort — so channel switches naturally reprioritize.
-async function startBackgroundImageWarm() {
-  const gen = ++warmGen;
-  for (const channelId of sidebarChannelOrder(state)) {
-    if (gen !== warmGen) return;
-    if (channelId === state.activeChannelId) continue;
-    let msgs = state.messages[channelId];
-    if (!msgs) {
-      try { msgs = await api.messages(channelId, { limit: 20 }); }
-      catch { continue; }
-      if (gen !== warmGen) return;
-    }
-    for (const url of extractBlobUrls(msgs, WARM_IMAGES_PER_CHANNEL)) {
-      if (gen !== warmGen) return;
-      await new Promise(resolve => {
-        const img = new Image();
-        img.onload = resolve;
-        img.onerror = resolve;
-        img.src = url;
-      });
-    }
-  }
-}
+// Image cache warming (avatars, viewport images, background blob sweep). See
+// imagewarm.js for the contract; the pure newest-first URL scan is unit-tested
+// there. avatarSrc is passed by reference (it closes over avatarVersion/state).
+const imageWarm = createImageWarmer({ getState: () => state, api, avatarSrc });
 
 // --- loading screen ----------------------------------------------------------
 
