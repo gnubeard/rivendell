@@ -210,11 +210,57 @@ func wsReadFrame(r *bufio.Reader) (opcode byte, payload []byte, err error) {
 
 // wsExpect reads frames until it sees a text event of the given type, skipping
 // control frames and unrelated events. Fails if it doesn't arrive in time.
+// waitVoiceRoster blocks until the hub's voice roster for chID holds wantN
+// participants. Voice tests MUST gate on this committed server state rather than
+// on a voice.state broadcast frame: every join fans voice.state out to the whole
+// channel audience, so a witness connection receives (and a wsExpect would match)
+// a voice.state triggered by some OTHER participant's join — racing ahead of the
+// join the test actually depends on. That ambiguity is what made the cap tests
+// flaky: the third joiner could be sent before the second join had committed, so
+// the cap saw one participant and admitted instead of denying it.
+func waitVoiceRoster(t *testing.T, srv *Server, chID int64, wantN int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if got := len(srv.hub.VoiceParticipants(chID)); got == wantN {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("voice roster for ch %d never reached %d participants (have %d)",
+				chID, wantN, len(srv.hub.VoiceParticipants(chID)))
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// waitVoiceVideo blocks until userID's camera state in the roster matches wantOn,
+// so a test can gate on a committed camera toggle (same reason as waitVoiceRoster).
+func waitVoiceVideo(t *testing.T, srv *Server, chID, userID int64, wantOn bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		for _, p := range srv.hub.VoiceParticipants(chID) {
+			if p.UserID == userID && p.VideoMuted == !wantOn {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("user %d camera in ch %d never reached on=%v", userID, chID, wantOn)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func wsExpect(t *testing.T, conn net.Conn, r *bufio.Reader, typ string) {
 	t.Helper()
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	defer conn.SetReadDeadline(time.Time{})
 	for {
+		// Reset the deadline per frame, not once for the whole call: an observer
+		// connection can sit behind a backlog of broadcast frames (voice.state,
+		// presence) that must be drained before the awaited type arrives. Budgeting
+		// a single absolute deadline for the entire drain let the backlog eat it
+		// under load. 3s per frame instead.
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		op, payload, err := wsReadFrame(r)
 		if err != nil {
 			t.Fatalf("waiting for %q: %v", typ, err)

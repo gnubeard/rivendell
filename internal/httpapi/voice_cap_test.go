@@ -28,18 +28,22 @@ func TestVoiceJoinDeniedWhenFull(t *testing.T) {
 	var ch store.Channel
 	json.Unmarshal(body, &ch)
 
-	conn1, r1 := wsDial(t, ts, adminC)
+	conn1, _ := wsDial(t, ts, adminC)
 	defer conn1.Close()
-	conn2, r2 := wsDial(t, ts, c2)
+	conn2, _ := wsDial(t, ts, c2)
 	defer conn2.Close()
 	conn3, r3 := wsDial(t, ts, c3)
 	defer conn3.Close()
 
-	// First two joins fill the channel; each joiner sees its own voice.state.
+	// First two joins fill the channel. Gate on the hub roster — not on the
+	// joiner's own voice.state frame, which is ambiguous: every join broadcasts to
+	// the whole channel audience, so conn2's queue already holds conn1's-join
+	// voice.state and a wsExpect would match that before conn2's own join commits,
+	// racing the over-cap join ahead of a full roster. See waitVoiceRoster.
 	wsSend(t, conn1, map[string]any{"type": "voice.join", "channel_id": ch.ID})
-	wsExpect(t, conn1, r1, "voice.state")
+	waitVoiceRoster(t, srv, ch.ID, 1)
 	wsSend(t, conn2, map[string]any{"type": "voice.join", "channel_id": ch.ID})
-	wsExpect(t, conn2, r2, "voice.state")
+	waitVoiceRoster(t, srv, ch.ID, 2)
 
 	// The third join is over the cap — denied, not admitted.
 	wsSend(t, conn3, map[string]any{"type": "voice.join", "channel_id": ch.ID})
@@ -57,7 +61,7 @@ func TestVoiceVideoSubCap(t *testing.T) {
 	ts, st, _, srv := newTestServerSrv(t)
 	srv.cfg.MaxVoiceVideo = 1 // only one camera allowed at a time
 
-	adminC, _ := seedAdmin(t, ts, st)
+	adminC, u1 := seedAdmin(t, ts, st)
 	c2, u2 := seedMember(t, ts, st, "frodo", "Frodo", store.RoleMember)
 
 	resp, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "voice"})
@@ -67,19 +71,22 @@ func TestVoiceVideoSubCap(t *testing.T) {
 	var ch store.Channel
 	json.Unmarshal(body, &ch)
 
-	conn1, r1 := wsDial(t, ts, adminC)
+	conn1, _ := wsDial(t, ts, adminC)
 	defer conn1.Close()
 	conn2, r2 := wsDial(t, ts, c2)
 	defer conn2.Close()
 
+	// Gate each step on committed hub state, not on broadcast frames — see
+	// waitVoiceRoster for why a witnessed voice.state can't confirm a given step.
 	wsSend(t, conn1, map[string]any{"type": "voice.join", "channel_id": ch.ID})
-	wsExpect(t, conn1, r1, "voice.state")
+	waitVoiceRoster(t, srv, ch.ID, 1)
 	wsSend(t, conn2, map[string]any{"type": "voice.join", "channel_id": ch.ID})
-	wsExpect(t, conn2, r2, "voice.state")
+	waitVoiceRoster(t, srv, ch.ID, 2)
 
-	// First camera-on succeeds.
+	// First camera-on succeeds; wait until it's committed so the sub-cap check
+	// below actually sees a camera already on.
 	wsSend(t, conn1, map[string]any{"type": "voice.mute", "channel_id": ch.ID, "video_muted": false})
-	wsExpect(t, conn1, r1, "voice.state")
+	waitVoiceVideo(t, srv, ch.ID, u1.ID, true)
 
 	// Second camera-on is over the sub-cap: denied, and the participant stays
 	// video-muted server-side.
