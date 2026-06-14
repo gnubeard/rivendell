@@ -19,6 +19,7 @@ web/package-lock.json
 
 # Playwright e2e artifacts (suite under web/e2e)
 web/test-results/
+test-results/
 web/playwright-report/
 web/e2e/.e2e-state.json
 web/e2e/server.log
