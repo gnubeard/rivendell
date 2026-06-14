@@ -378,11 +378,29 @@ export function applyEvent(state, evt) {
       return upsertChannel(state, evt.payload);
     case "channel.archive":
       return removeChannel(state, evt.payload.id);
-    case "message.new":
+    case "message.new": {
+      // A new message also advances the channel's last_message_at so the DM list
+      // stays sorted by recency. Edits (message.update) must NOT bump it.
+      let s = addMessage(state, evt.payload);
+      const ch = s.channels[evt.payload.channel_id];
+      if (ch) s = upsertChannel(s, { ...ch, last_message_at: evt.payload.created_at });
+      return s;
+    }
     case "message.update":
       return addMessage(state, evt.payload);
     case "message.delete":
       return markMessageDeleted(state, evt.payload.channel_id, evt.payload.id);
+    case "member.remove": {
+      // I was removed (or left from another session). Drop the channel unless I'm
+      // an admin, who retains read-only bypass access to private channels. Removal
+      // of *other* users is roster-only bookkeeping the handler does (activeMemberIds
+      // is not part of state), so it's a no-op here.
+      const { channel_id, user_id } = evt.payload;
+      if (user_id === (state.me && state.me.id) && !isAdmin(state.me)) {
+        return removeChannel(state, channel_id);
+      }
+      return state;
+    }
     case "reaction.update":
       return setReactions(state, evt.payload.channel_id, evt.payload.message_id, evt.payload.reactions);
     case "read.update":

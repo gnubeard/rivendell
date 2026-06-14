@@ -658,6 +658,10 @@ function startRealtime() {
       // Presence is debounced (see schedulePresenceUpdate): a transient flip that
       // reverts within ~1s never paints, so dots don't flicker on brief blips.
       if (evt.type === "presence.update") { schedulePresenceUpdate(evt); return; }
+      // member.remove's side effects below need to know whether the channel was
+      // still present *before* applyEvent folds the removal in — so a removal we
+      // already did locally (leaveActiveChannel) doesn't trigger a redundant reload.
+      const hadChannel = evt.type === "member.remove" && !!state.channels[evt.payload.channel_id];
       state = S.applyEvent(state, evt);
       // Targeted re-renders based on event type.
       if (evt.type.startsWith("presence") || evt.type === "user.update") {
@@ -689,17 +693,18 @@ function startRealtime() {
       if (evt.type === "member.remove") {
         const { channel_id, user_id } = evt.payload;
         if (user_id === state.me.id) {
-          // I left (or was removed): drop the channel, unless I already removed
-          // it locally in leaveActiveChannel, or I'm an admin (who retains bypass access).
-          if (state.channels[channel_id] && state.me.role !== "admin") {
-            state = S.removeChannel(state, channel_id);
+          // applyEvent dropped the channel for me (non-admin); render the
+          // consequences — unless it was already gone before the fold (e.g.
+          // leaveActiveChannel handled it), which hadChannel guards.
+          if (hadChannel && !S.isAdmin(state.me)) {
             renderChannels();
             renderDMs();
             renderNotificationTotal();
+            // removeChannel re-pointed activeChannelId; load the new active one.
             if (state.activeChannelId) loadChannel(state.activeChannelId);
-          } else if (state.channels[channel_id] && channel_id === state.activeChannelId) {
-            // Admin lost membership on the active channel (could be via another session
-            // or removed by another admin) — hide the leave button and do a server
+          } else if (hadChannel && channel_id === state.activeChannelId) {
+            // Admin lost membership on the active channel (via another session or
+            // another admin) but keeps bypass access — hide the leave button and
             // re-fetch so the roster is accurate.
             $("#leave-btn").hidden = true;
             refreshActiveMembers();
@@ -775,11 +780,9 @@ function startRealtime() {
         // My own new message snaps the view to the newest, so I land on what I
         // just sent even if I'd scrolled up to read.
         const isNewFromMe = evt.type === "message.new" && evt.payload.user_id === state.me.id;
-        // Keep last_message_at current so DM list stays sorted by recency.
-        if (evt.type === "message.new" && ch) {
-          state = S.upsertChannel(state, { ...ch, last_message_at: evt.payload.created_at });
-          if (isNewFromMe && ch.is_dm) renderDMs();
-        }
+        // applyEvent bumped last_message_at so the DM list stays sorted by
+        // recency; reflect a DM I just sent (ch is post-fold, already current).
+        if (evt.type === "message.new" && ch && isNewFromMe && ch.is_dm) renderDMs();
         if (cid === state.activeChannelId) {
           if (isNewFromMe && viewingHistory.has(cid)) {
             // I sent while viewing a history window (below the live tail): reload
