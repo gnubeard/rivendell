@@ -19,7 +19,11 @@ internal/auth/                password.go (PBKDF2), token.go (random+hash)
 internal/store/               store.go (open/migrate + structs), queries.go (all SQL),
                               migrations/ (0001..NNNN .sql, embedded + applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
-internal/httpapi/             server.go (routes/middleware), handlers.go (handler bodies)
+internal/httpapi/             server.go (routes/middleware), handlers.go (core:
+                              health/instance/voice-state reads/WS upgrade + shared
+                              vars), handlers_<domain>.go (handler bodies split by
+                              domain: auth, users, channels, messages, reactions,
+                              pins, emoji, admin, blobs, push)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188)
 web/static/                   app.js (orchestrator; being decomposed — see
                               docs/decomposition.md), api.js, ws.js, state.js,
