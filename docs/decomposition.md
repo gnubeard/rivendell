@@ -167,8 +167,15 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   sequences are trivial data; unit-testing them is a tautology). Leave it.
 - **Boot/auth flow** — `boot`, `wireLogin`, `bootSetPassword`, `bootSignup`,
   `enterApp`. Mostly DOM/network orchestration; e2e territory.
-- **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. Folds into
-  `state.applyEvent` already; the handler's routing is DOM-heavy.
+- **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. The
+  state-folding has been pulled fully into the pure layer: `state.applyEvent` is
+  now total over state-mutating events (the `message.new` last_message_at bump and
+  `member.remove` channel drop moved in), and the unread/mention/ping decision
+  matrix is a tested pure function (`classifyIncomingMessage` in `unread.js`) the
+  handler feeds three view booleans (active/focused/adminPanelOpen). What's left in
+  the handler is genuinely DOM-heavy: per-event-type re-render routing, scroll-
+  geometry marker placement, and `voice.*`/`secret.*` dispatch — e2e territory,
+  not a further pure carve.
 
 **Feature-module candidates: all extracted.** The 2026-06 re-audit catalogued the
 DOM-carrying feature sections that write little or no shared state — forward, pins,

@@ -1,5 +1,8 @@
 // unread.js — the client's ephemeral read-tracking bookkeeping.
 //
+// Plus one pure classifier (classifyIncomingMessage) for the realtime handler's
+// unread/ping decision matrix; see its own comment below.
+//
 // Three small maps that are NOT part of the durable `state` model in state.js:
 // they're per-session UI state that resets on reload and is re-synced from the
 // server's cursors. They're grouped behind one tracker so the subtle rules
@@ -9,6 +12,54 @@
 // Unlike state.js this is deliberately mutable: these maps are transient
 // scratch state, not the immutable world model, so a closure-encapsulated
 // tracker fits better than a pure reducer.
+
+import { mentionsUser } from "./format.js?v=__RIVENDELL_VERSION__";
+import { isMuted } from "./state.js?v=__RIVENDELL_VERSION__";
+
+// classifyIncomingMessage decides how a realtime message event affects the
+// reader. It separates two questions the handler used to answer inline:
+//
+//   what the event *is* (from state alone): my own vs another's message, whether
+//   it @-mentions me or replies to a message of mine, whether it "pings" me (any
+//   DM, a mention, or a reply), and whether its channel is muted; and
+//
+//   what to *do* (folding in the view): whether to raise the unread / mention
+//   badges, and whether to alert (chime + notification). The view supplies the
+//   three booleans the decision needs from the DOM — `active` (am I looking at
+//   this channel), `focused` (is the tab focused), and `adminPanelOpen` (is the
+//   admin panel covering the conversation).
+//
+// Pure; the matrix it encodes was previously open-coded and untested in the
+// realtime handler. Returns the raw classification flags too, since the handler
+// still uses isNewFromMe/isNewFromOther for its DOM side effects.
+export function classifyIncomingMessage(state, evt, view) {
+  const me = state.me || {};
+  const cid = evt.payload.channel_id;
+  const ch = state.channels[cid];
+  const isNew = evt.type === "message.new";
+  const isNewFromMe = isNew && evt.payload.user_id === me.id;
+  const isNewFromOther = isNew && evt.payload.user_id !== me.id;
+
+  const isReplyToMe = isNewFromOther && evt.payload.reply_to_id != null &&
+    (evt.payload.reply_to_user_id === me.id ||
+     (state.messages[cid] || []).some((m) => m.id === evt.payload.reply_to_id && m.user_id === me.id));
+  const mentioned = isNewFromOther && (mentionsUser(evt.payload.content, me.username) || isReplyToMe);
+  // A "ping" is a message directed at you: any DM, an @-mention, or a reply.
+  const pingsMe = isNewFromOther && ((!!ch && ch.is_dm) || mentioned);
+  const muted = isMuted(state, cid);
+
+  // "Unseen" = I'm not actively reading it right now: either it's not the open
+  // channel, or the tab is unfocused (the server only advances the read cursor on
+  // focus, so an unfocused open channel still counts as unread).
+  const unseen = !view.active || !view.focused;
+  const countUnread = isNewFromOther && !muted && unseen;
+  const countMention = countUnread && mentioned;
+  // Alert on a ping unless muted, and only when I wouldn't otherwise notice it:
+  // unseen, or the admin panel is covering the (focused, active) channel.
+  const ping = pingsMe && !muted && (unseen || !!view.adminPanelOpen);
+
+  return { isNewFromMe, isNewFromOther, mentioned, pingsMe, muted, countUnread, countMention, ping };
+}
 
 export function createUnreadTracker() {
   // Highest message id we've told the server we've read, per channel — dedupes

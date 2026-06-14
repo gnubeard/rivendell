@@ -63,7 +63,7 @@ import {
   reconcilePeers,
 } from "./voice.js?v=__RIVENDELL_VERSION__";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
-import { createUnreadTracker, unreadCountAfter } from "./unread.js?v=__RIVENDELL_VERSION__";
+import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js?v=__RIVENDELL_VERSION__";
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
 import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
@@ -768,47 +768,33 @@ function startRealtime() {
         if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
         const cid = evt.payload.channel_id;
         const ch = state.channels[cid];
-        const isNewFromOther = evt.type === "message.new" && evt.payload.user_id !== state.me.id;
-        const isReplyToMe = isNewFromOther && evt.payload.reply_to_id != null &&
-          (evt.payload.reply_to_user_id === state.me.id ||
-           (state.messages[cid] || []).some((m) => m.id === evt.payload.reply_to_id && m.user_id === state.me.id));
-        const mentioned = isNewFromOther && (mentionsUser(evt.payload.content, state.me.username) || isReplyToMe);
-        // A "ping" is a message directed at you: any DM, an @-mention, or a reply to your message.
-        const pingsMe = isNewFromOther && ((ch && ch.is_dm) || mentioned);
-        // A muted channel is fully silent: no badge bump, no chime/notification.
-        const muted = S.isMuted(state, cid);
-        // My own new message snaps the view to the newest, so I land on what I
-        // just sent even if I'd scrolled up to read.
-        const isNewFromMe = evt.type === "message.new" && evt.payload.user_id === state.me.id;
+        const active = cid === state.activeChannelId;
+        const focused = !tabUnfocused();
+        // The unread/mention/ping decision matrix is a pure function of state +
+        // event + these three view booleans (see unread.js). isNewFromMe/Other
+        // come back too, for the DOM side effects below.
+        const d = classifyIncomingMessage(state, evt, {
+          active,
+          focused,
+          adminPanelOpen: !$("#admin-panel").hidden,
+        });
         // applyEvent bumped last_message_at so the DM list stays sorted by
         // recency; reflect a DM I just sent (ch is post-fold, already current).
-        if (evt.type === "message.new" && ch && isNewFromMe && ch.is_dm) renderDMs();
-        if (cid === state.activeChannelId) {
-          if (isNewFromMe && viewingHistory.has(cid)) {
+        if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
+        if (active) {
+          if (d.isNewFromMe && viewingHistory.has(cid)) {
             // I sent while viewing a history window (below the live tail): reload
             // the channel so my message shows at the bottom in proper context,
             // not appended after a gap of unloaded messages.
             loadChannel(cid);
           } else {
-            renderMessages(isNewFromMe); // mine forces a jump to the newest
+            renderMessages(d.isNewFromMe); // mine forces a jump to the newest
           }
           refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
-          if (tabUnfocused()) {
-            // It's the open channel, but the tab isn't focused — you haven't
-            // actually seen it, so it counts as unread (matching the server,
-            // whose cursor we only advance on focus) and pings still alert.
-            if (isNewFromOther && !muted) {
-              state = S.bumpUnread(state, cid);
-              if (mentioned) state = S.bumpMention(state, cid);
-              renderChannels();
-              renderDMs();
-              renderNotificationTotal();
-            }
-            if (pingsMe && !muted) firePing(evt, ch);
-          } else if (isNewFromOther) {
-            // You're looking right at it — keep the read cursor current.
-            // If the user is scrolled up, plant the marker at the current read
-            // position so they see where new messages begin when they scroll down.
+          if (focused && d.isNewFromOther) {
+            // You're looking right at it — keep the read cursor current. If the
+            // user is scrolled up, plant the marker at the current read position
+            // so they see where new messages begin when they scroll down.
             if (!unread.markerFor(cid)) {
               const ml = $("#message-list");
               if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > 80) {
@@ -816,24 +802,22 @@ function startRealtime() {
               }
             }
             markActiveChannelRead();
-            // If the admin panel is covering the conversation, a ping in the
-            // active channel is still invisible — fire a toast so it's not silent.
-            if (pingsMe && !muted && !$("#admin-panel").hidden) firePing(evt, ch);
           }
-        } else if (isNewFromOther && !muted) {
-          // A new message in a channel we're not looking at: flag it unread,
-          // and separately flag @-mentions so they badge distinctly. A message
-          // landing in a closed DM resurfaces it server-side, which arrives as a
-          // channel.new just before this event — so the row is already back.
+        }
+        // Raise the unread badge for a message I won't immediately see read, and
+        // separately the mention badge so @-mentions stand out. (A message landing
+        // in a closed DM resurfaces it server-side, arriving as a channel.new just
+        // before this event — so the row is already back.)
+        if (d.countUnread) {
           state = S.bumpUnread(state, cid);
-          if (mentioned) state = S.bumpMention(state, cid);
+          if (d.countMention) state = S.bumpMention(state, cid);
           renderChannels();
           renderDMs();
           renderNotificationTotal();
-          // Chime + (if opted in and not looking here) raise an OS notification
-          // for pings; plain channel chatter stays silent with just the badge.
-          if (pingsMe) firePing(evt, ch);
         }
+        // Chime + (if opted in) an OS notification for pings; plain channel
+        // chatter stays silent with just the badge.
+        if (d.ping) firePing(evt, ch);
       }
     },
     (online) => {

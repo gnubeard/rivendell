@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createUnreadTracker, unreadCountAfter } from "../static/unread.js";
+import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "../static/unread.js";
 
 test("markerFor is 0 for an untouched channel", () => {
   const u = createUnreadTracker();
@@ -118,4 +118,97 @@ test("unreadCountAfter counts loaded messages past the cursor that aren't mine",
 test("unreadCountAfter tolerates a null/empty message list", () => {
   assert.equal(unreadCountAfter(null, 0, 1), 0);
   assert.equal(unreadCountAfter([], 5, 1), 0);
+});
+
+// --- classifyIncomingMessage: the unread/mention/ping decision matrix ---
+
+// me = alice (id 1). Channel 7 is a regular channel; channel 9 is a DM. Channel 7
+// already holds a message of mine (id 100) so replies-to-me can be detected.
+const ME = { id: 1, username: "alice" };
+function S0(over = {}) {
+  return {
+    me: ME,
+    channels: { 7: { id: 7, is_dm: false }, 9: { id: 9, is_dm: true } },
+    messages: { 7: [{ id: 100, user_id: 1 }] },
+    muted: {},
+    ...over,
+  };
+}
+function evNew(over = {}) {
+  return { type: "message.new", payload: { channel_id: 7, user_id: 2, id: 200, content: "hello", ...over } };
+}
+const view = (o = {}) => ({ active: false, focused: true, adminPanelOpen: false, ...o });
+
+test("classify: my own message is never unread or a ping", () => {
+  const d = classifyIncomingMessage(S0(), evNew({ user_id: 1 }), view());
+  assert.equal(d.isNewFromMe, true);
+  assert.equal(d.isNewFromOther, false);
+  assert.equal(d.countUnread, false);
+  assert.equal(d.ping, false);
+});
+
+test("classify: plain message in an unviewed channel counts unread but doesn't ping", () => {
+  const d = classifyIncomingMessage(S0(), evNew(), view({ active: false }));
+  assert.equal(d.countUnread, true);
+  assert.equal(d.countMention, false);
+  assert.equal(d.pingsMe, false);
+  assert.equal(d.ping, false);
+});
+
+test("classify: an @-mention counts unread + mention and pings", () => {
+  const d = classifyIncomingMessage(S0(), evNew({ content: "hey @alice" }), view({ active: false }));
+  assert.equal(d.mentioned, true);
+  assert.equal(d.countUnread, true);
+  assert.equal(d.countMention, true);
+  assert.equal(d.ping, true);
+});
+
+test("classify: a reply to my message pings (via payload or loaded history), to others' doesn't", () => {
+  // reply_to_user_id names me directly.
+  let d = classifyIncomingMessage(S0(), evNew({ content: "ok", reply_to_id: 100, reply_to_user_id: 1 }), view());
+  assert.equal(d.mentioned, true);
+  assert.equal(d.ping, true);
+  // reply_to_user_id absent → matched by looking up the loaded message (id 100 is mine).
+  d = classifyIncomingMessage(S0(), evNew({ content: "ok", reply_to_id: 100 }), view());
+  assert.equal(d.mentioned, true, "reply matched via loaded messages");
+  // A reply to someone else's message is not a ping.
+  d = classifyIncomingMessage(
+    S0({ messages: { 7: [{ id: 100, user_id: 3 }] } }),
+    evNew({ content: "ok", reply_to_id: 100, reply_to_user_id: 3 }), view());
+  assert.equal(d.mentioned, false);
+  assert.equal(d.ping, false);
+});
+
+test("classify: any DM message pings", () => {
+  const d = classifyIncomingMessage(S0(), evNew({ channel_id: 9 }), view({ active: false }));
+  assert.equal(d.pingsMe, true);
+  assert.equal(d.ping, true);
+});
+
+test("classify: muting silences everything — no badge, no ping", () => {
+  const d = classifyIncomingMessage(
+    S0({ muted: { 9: true } }), evNew({ channel_id: 9, content: "@alice" }), view({ active: false }));
+  assert.equal(d.muted, true);
+  assert.equal(d.countUnread, false);
+  assert.equal(d.countMention, false);
+  assert.equal(d.ping, false);
+});
+
+test("classify: the focused active channel marks read, and a ping there only alerts under the admin panel", () => {
+  // Viewing it, focused → not unread.
+  assert.equal(classifyIncomingMessage(S0(), evNew(), view({ active: true, focused: true })).countUnread, false);
+  // A ping while you're looking right at it: no alert...
+  assert.equal(
+    classifyIncomingMessage(S0(), evNew({ content: "@alice" }), view({ active: true, focused: true, adminPanelOpen: false })).ping,
+    false, "looking at it → no alert");
+  // ...unless the admin panel is covering the conversation.
+  assert.equal(
+    classifyIncomingMessage(S0(), evNew({ content: "@alice" }), view({ active: true, focused: true, adminPanelOpen: true })).ping,
+    true, "admin panel covers it → alert anyway");
+});
+
+test("classify: the active channel while unfocused still counts unread and pings", () => {
+  const d = classifyIncomingMessage(S0(), evNew({ content: "@alice" }), view({ active: true, focused: false }));
+  assert.equal(d.countUnread, true);
+  assert.equal(d.ping, true);
 });
