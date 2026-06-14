@@ -63,7 +63,7 @@ import {
 } from "./voice.js";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js";
 import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js";
-import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js";
+import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
 import { upgradeComposerField } from "./composer-field.js";
 import { humanBytes, formatTime, overSizeLimit } from "./util.js";
