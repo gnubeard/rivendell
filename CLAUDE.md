@@ -27,12 +27,14 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               out of app.js: unread.js, channelorder.js,
                               drafts.js, composer-field.js, attachments.js,
                               autocomplete.js, prefs.js, previews.js, util.js,
-                              search.js, emoji.js, channeldrag.js, presence.js
+                              search.js, emoji.js, channeldrag.js, presence.js,
+                              imagewarm.js, linkpreview.js, admin.js, secretui.js
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites (one per pure JS module)
 web/e2e/                      Playwright specs (composer-paste, dm-call,
-                              group-call, search, emoji-picker, channel-reorder);
-                              dev-only, run via `make test-e2e`
+                              group-call, search, emoji-picker, channel-reorder,
+                              link-previews, admin, secret-chat); dev-only, run
+                              via `make test-e2e`
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
@@ -72,6 +74,11 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - Presence debounce (~1s, `schedulePresenceUpdate`) — don't "simplify" to immediate apply. Own user is exempt.
 - `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last.
 - CSS: `[hidden] { display: none !important; }` must stay. Wire controls before `startRealtime()`.
+- Frontend ES modules import siblings with the `?v=__RIVENDELL_VERSION__` suffix; the
+  server rewrites it in **every** served `.js` (not just app.js) so each module resolves
+  to one URL = one instance. A *stateful* module imported by both app.js and a sibling
+  with an unrewritten suffix would load twice and silently unshare state.
+  `TestStaticTemplatesAllJSModules` guards this.
 
 ## Critical feature invariants (full design notes in README)
 
@@ -99,6 +106,10 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - Offerer = lower user_id. Sessions in JS memory only — never persisted.
 - No fallback to weaker crypto primitives — ever.
 - Server relays `secret.*` WS frames opaque, same DM-membership validation as voice.
+- UI/UX lives in `secretui.js` (banner, 🔒 button, safety modal); `secret.js` owns the
+  crypto/session state. Identity key is published at boot (idempotent) so any peer can be
+  offered a session — an offer needs the peer's key already published. `web/e2e/secret-chat`
+  pins offer→accept→matching safety number across two browsers.
 
 **Uploads / blobs**
 - Content type sniffed with `http.DetectContentType`, never trusts header.
