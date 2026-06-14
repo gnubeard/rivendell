@@ -79,6 +79,7 @@ import { createImageWarmer } from "./imagewarm.js?v=__RIVENDELL_VERSION__";
 import { createLinkPreviews } from "./linkpreview.js?v=__RIVENDELL_VERSION__";
 import { createAdminPanel } from "./admin.js?v=__RIVENDELL_VERSION__";
 import { createSecretUI } from "./secretui.js?v=__RIVENDELL_VERSION__";
+import { createForward } from "./forward.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -2754,74 +2755,17 @@ async function toggleReaction(messageId, emoji, knownMine) {
 
 // --- forward message ---------------------------------------------------------
 
-// forwardBody builds the text a forward sends. A CHANNEL message forwards as a
-// permalink, which renders as an embed card in the target (via
-// extractMessagePermalinkURL in buildLinkPreview). A DM message forwards as a
-// quoted "*Forwarded:*" copy of its text instead: a DM permalink only resolves
-// for that DM's two participants, so an embed would be dead for everyone else.
-function forwardBody(m, fromDM, srcChannelId) {
-  if (!fromDM) return `${location.origin}/${permalinkHash(srcChannelId, m.id)}`;
-  const quoted = (m.content || "").split("\n").map((l) => "> " + l).join("\n");
-  return `*Forwarded:*\n${quoted}`;
-}
-
-// openForwardModal shows a picker to forward a message (see forwardBody for what
-// each kind sends). It hides DM targets whose other member can't see the source
-// channel — for a permalink forward the embed would be dead for them. The text
-// box filters the list by channel/person name.
-async function openForwardModal(m) {
-  if (m.deleted_at) return;
-  const srcChannelId = state.activeChannelId;
-  const srcCh = state.channels[srcChannelId];
-  const fromDM = !!(srcCh && srcCh.is_dm);
-
-  // Who can open a permalink to the source? Everyone, for a public channel or a
-  // DM copy (null sentinel ⇒ no DM filtering). For a private non-DM channel it's
-  // the members plus every mod/admin, mirroring the server's audienceForChannel.
-  let canSee = null;
-  if (!fromDM && srcCh && srcCh.is_private) {
-    try {
-      const ids = new Set((await api.channelMembers(srcChannelId)).map((u) => u.id));
-      canSee = (uid) => ids.has(uid) || ["admin", "moderator"].includes((state.users[uid] || {}).role);
-    } catch {
-      canSee = null; // on error, don't over-hide
-    }
-  }
-
-  const list = $("#forward-list");
-  const filter = $("#forward-filter");
-  const render = () => {
-    const needle = filter.value.trim().toLowerCase();
-    list.innerHTML = "";
-    for (const id of state.channelOrder) {
-      const ch = state.channels[id];
-      if (!ch) continue;
-      if (ch.is_dm && canSee) {
-        const other = S.otherDMParticipant(ch, state.me.id);
-        if (other == null || !canSee(other)) continue;
-      }
-      const label = ch.is_dm ? dmDisplayName(state, ch) : "#" + ch.name;
-      if (needle && !label.toLowerCase().includes(needle)) continue;
-      list.append(el("li", { class: "invite-item", onclick: async () => {
-        $("#forward-modal").hidden = true;
-        try {
-          // Jump to the forwarded copy in its target channel rather than leaving
-          // the user where they were — follow the message to where it landed.
-          const sent = await api.sendMessage(id, forwardBody(m, fromDM, srcChannelId), null);
-          if (sent && sent.id) await jumpToMessage(id, sent.id);
-        } catch (ex) {
-          alert("Failed to forward: " + ex.message);
-        }
-      }}, label));
-    }
-  };
-
-  filter.value = "";
-  filter.oninput = render;
-  render();
-  $("#forward-modal").hidden = false;
-  filter.focus();
-}
+// The forward modal (target picker + filter + send-then-jump) and its pure cores
+// (forwardBody, forwardTargets, makeCanSee) live in forward.js; e2e/forward.spec
+// nets the DOM behavior, web/test/forward.test the cores.
+const forward = createForward({
+  el,
+  $,
+  getState: () => state,
+  api,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+});
+const openForwardModal = forward.openForwardModal;
 
 // --- mobile long-press context menu ------------------------------------------
 

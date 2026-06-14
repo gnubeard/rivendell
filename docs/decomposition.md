@@ -129,6 +129,7 @@ Conventions specific to this kind of module:
 | Inline link/embed previews (msg-permalink embeds, YouTube, og: cards) | `linkpreview.js` | e2e (link-previews, 3) | ✅ done |
 | Admin/moderator settings panel (stats, users, invites, tokens, emojis) | `admin.js` | e2e (admin, 5) | ✅ done |
 | Secret-chat UX (request banner, 🔒 button, safety-number modal) | `secretui.js` | e2e (secret-chat, 2) | ✅ done |
+| Forward-message modal (+ pure `forwardBody`/`forwardTargets`/`makeCanSee`) | `forward.js` | unit (9) + e2e (forward, 3) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -175,16 +176,9 @@ leverage; each needs a fresh e2e spec first:
   (~145 lines). A cluster of independent modal builders; one `modals.js` or split.
 - **Mobile long-press context menu** — `openMobileCtx` & friends (~89 lines). A
   self-contained gesture widget, zero state writes.
-- **Forward message** — `openForwardModal` + the pure `forwardBody` (~63 lines).
-  Has a real pure core (permalink vs. quoted-copy assembly) worth a unit test,
-  plus the `canSee` audience predicate mirroring the server's `audienceForChannel`.
-  **E2E net staged ahead of the extraction:** `web/e2e/forward.spec.js` (3 tests —
-  channel→permalink-embed+jump, DM→quoted copy not an embed, filter narrows the
-  list) is written and passes green against the *un-extracted* code, per the
-  feature-module method. Next: extract `forward.js` with `forwardBody`/`canSee`
-  unit-tested, leaving a thin `createForward(deps)` surface; this spec holds the line.
 - **Pinned messages** — `openPinsModal`/`refreshPins(IfOpen)` (~70 lines). Modal +
-  fetch-then-render, self-contained.
+  fetch-then-render, self-contained. The likely next pick: smallest remaining
+  feature module, e2e-first per the method.
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
 orchestration): the video grid, reactions (woven into message rendering + the
