@@ -23,11 +23,17 @@ internal/store/               store.go (open/migrate + structs), queries.go (cor
                               reactions, read, push, blobs, previews),
                               migrations/ (0001..NNNN .sql, embedded + applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
-internal/httpapi/             server.go (routes/middleware), handlers.go (core:
-                              health/instance/voice-state reads/WS upgrade + shared
-                              vars), handlers_<domain>.go (handler bodies split by
-                              domain: auth, users, channels, messages, reactions,
-                              pins, emoji, admin, blobs, push)
+internal/httpapi/             server.go (Server struct + New + the Handler route
+                              table), middleware.go (recover/log/auth/role + session
+                              cookies), realtime.go (broadcast/audience/visibility +
+                              onPresenceChange), ws_dispatch.go (onWSMessage + voice/
+                              secret WS signaling + call teardown), static.go (versioned/
+                              templated static serving), httputil.go (writeJSON/writeErr/
+                              decodeBody/pathInt helpers); handlers.go (core: health/
+                              instance/voice-state reads/WS upgrade + shared vars),
+                              handlers_<domain>.go (handler bodies split by domain: auth,
+                              users, channels, messages, reactions, pins, emoji, admin,
+                              blobs, push)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188)
 web/static/                   app.js (orchestrator; being decomposed — see
                               docs/decomposition.md), api.js, ws.js, state.js,

@@ -276,7 +276,12 @@ internal/store/               store.go (open/migrate + domain structs),
                               push, blobs, previews),
                               migrations/0001…NNNN.sql (embedded; applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
-internal/httpapi/             server.go (routes/middleware/realtime),
+internal/httpapi/             server.go (Server struct + Handler route table),
+                              middleware.go (recover/log/auth/role + sessions),
+                              realtime.go (broadcast/audience/visibility),
+                              ws_dispatch.go (WS voice/secret signaling + teardown),
+                              static.go (versioned/templated static serving),
+                              httputil.go (JSON/path helpers),
                               handlers.go (core: health/instance/voice-state
                               reads/WS upgrade), handlers_<domain>.go (handler
                               bodies split by domain: auth, users, channels,
