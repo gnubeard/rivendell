@@ -129,5 +129,11 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - `invitations` table is distinct from `magic_links`. Don't merge them.
 - Account creation + invitation consumption are one transaction (`store.RedeemInvitation`).
 
-**Link preview proxy: removed.** No arbitrary-URL server-side fetch. YouTube embeds and
-message-permalink embeds are client-side only and were intentionally kept.
+**Link preview proxy: allowlist-only.** No *arbitrary-URL* server-side fetch — the proxy
+(`preview.go`, route `GET /api/link-preview`) fetches OG tags (Wikipedia via its summary
+API) only for hostnames on the allowlist: a hardcoded default set in `config.go`
+(github/wikipedia/major news orgs), overridable via `RIVENDELL_LINK_PREVIEW_DOMAINS`;
+`domainAllowed` matches subdomains too. A non-allowlisted or cache-errored URL gets a bare
+`404` (`http.NotFound`, no JSON — the allowlist isn't leaked), which `api.getLinkPreview`
+maps to a "no card" marker without throwing. An empty allowlist disables the feature.
+YouTube + message-permalink embeds are client-side only and were intentionally kept.
