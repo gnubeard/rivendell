@@ -3,7 +3,7 @@
 
 import { api } from "./api.js?v=__RIVENDELL_VERSION__";
 import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractYouTubeVideoID, extractHideURL, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
 import * as S from "./state.js?v=__RIVENDELL_VERSION__";
 import {
   shouldNotify,
@@ -77,7 +77,6 @@ import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
 import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
 import { humanBytes, formatTime, overSizeLimit } from "./util.js?v=__RIVENDELL_VERSION__";
 import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
-import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
 import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
 import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
@@ -85,6 +84,7 @@ import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
 import { createChannelDrag } from "./channeldrag.js?v=__RIVENDELL_VERSION__";
 import { presenceClass, presenceDecision } from "./presence.js?v=__RIVENDELL_VERSION__";
 import { createImageWarmer } from "./imagewarm.js?v=__RIVENDELL_VERSION__";
+import { createLinkPreviews } from "./linkpreview.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -112,17 +112,8 @@ const unread = createUnreadTracker();
 // cached, so when someone changes their avatar we bump their token to force a
 // re-fetch (the server broadcasts user.update on avatar change).
 const avatarVersion = {};
-// Preview caches (state machine in previews.js): same-origin message embeds and
-// external og: link cards. Keys move unrequested → loading → resolved/pending/failed.
-const msgPreviews = createPreviewCache();
-const extPreviews = createPreviewCache();
-// Debounce token: multiple preview fetches completing close together collapse into
-// one renderMessages() call instead of one per URL.
-let _previewRenderTimer = null;
-function schedulePreviewRender() {
-  if (_previewRenderTimer) return;
-  _previewRenderTimer = setTimeout(() => { _previewRenderTimer = null; renderMessages(); }, 60);
-}
+// Inline link/embed previews live in linkpreview.js; the factory is wired below
+// the el() builder it depends on (see the "link previews" section).
 // Message ids deleted *during this session* (seen live via message.delete). Only
 // these get a "message deleted" tombstone; messages that arrive already-deleted
 // from history render as nothing, so a fresh load isn't littered with tombstones.
@@ -2610,123 +2601,19 @@ function cancelEdit() {
 
 // --- link previews -----------------------------------------------------------
 
-// fetchExtPreview requests a link preview for url and triggers a re-render when
-// the result arrives. On 202 (background fetch in progress) it retries once
-// after 2.5 s. Idempotent: a second call while already loading is a no-op.
-async function fetchExtPreview(url) {
-  if (!extPreviews.begin(url)) return;
-  const data = await api.getLinkPreview(url);
-  if (data && data.title) {
-    extPreviews.resolve(url, data);
-  } else if (data && data._status === 202) {
-    extPreviews.pending(url);
-    setTimeout(() => { extPreviews.forget(url); schedulePreviewRender(); }, 2500);
-    return;
-  } else {
-    extPreviews.fail(url);
-  }
-  schedulePreviewRender();
-}
-
-// renderExtPreviewCard builds an og: link-preview card for an external URL.
-function renderExtPreviewCard(preview, url) {
-  const hostname = (() => { try { return new URL(url).hostname; } catch { return url; } })();
-  const site = preview.site_name || hostname;
-  const card = el("a", {
-    class: "link-preview",
-    href: url,
-    target: "_blank",
-    rel: "noopener noreferrer",
-  });
-  card._previewUrl = url;
-  const textCol = el("div", { class: "link-preview-text" });
-  textCol.append(el("div", { class: "link-preview-site" }, site));
-  if (preview.title) textCol.append(el("div", { class: "link-preview-title" }, preview.title));
-  if (preview.description) textCol.append(el("div", { class: "link-preview-desc" }, preview.description));
-  card.append(textCol);
-  if (preview.image_url) {
-    const img = el("img", { class: "link-preview-image", src: preview.image_url, alt: "", loading: "lazy" });
-    card.append(img);
-  }
-  return card;
-}
-
-// fetchMsgPreview fetches a message for an embed preview card and triggers a
-// re-render when done. Idempotent — a second call for an already-cached id is a
-// no-op.
-async function fetchMsgPreview(messageId) {
-  if (!msgPreviews.begin(messageId)) return;
-  try {
-    const msg = await api.getMessage(messageId);
-    msgPreviews.resolve(messageId, msg);
-  } catch {
-    msgPreviews.fail(messageId);
-  }
-  schedulePreviewRender();
-}
-
-// renderMsgEmbedCard builds the inline preview card for a same-origin message
-// permalink. Clicking navigates the same way as the message timestamp link.
-function renderMsgEmbedCard(msg, channelId, messageId) {
-  const author = state.users[msg.user_id];
-  const card = el("div", { class: "msg-embed" });
-  const head = el("div", { class: "msg-embed-head" });
-  head.append(
-    el("span", { class: "msg-embed-author" }, author ? author.display_name : "unknown"),
-    el("span", { class: "msg-embed-time" }, formatTime(msg.created_at)),
-  );
-  card.append(head);
-  const body = el("div", { class: "msg-embed-body" });
-  if (msg.deleted_at) {
-    body.append(el("span", { class: "deleted" }, "message deleted"));
-  } else {
-    body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false, channels: state.channels, users: state.users });
-  }
-  card.append(body);
-  card.addEventListener("click", (e) => { e.preventDefault(); jumpToMessage(channelId, messageId); });
-  return card;
-}
-
-// buildLinkPreview returns a same-origin message-embed card, a YouTube embed,
-// or an external og: link-preview card for the first matching bare URL in
-// content, or null if there is none / not ready.
-function buildLinkPreview(content) {
-  // Same-origin message permalink: render an inline embed card.
-  const pl = extractMessagePermalinkURL(content, location.origin);
-  if (pl) {
-    const out = msgPreviews.outcome(pl.messageId);
-    if (out === "fetch") { fetchMsgPreview(pl.messageId); return null; }
-    if (out === "wait") return null;
-    return renderMsgEmbedCard(msgPreviews.get(pl.messageId), pl.channelId, pl.messageId);
-  }
-
-  // YouTube embed is purely client-side — no async fetch needed.
-  const ytID = extractYouTubeVideoID(content);
-  if (ytID) return renderYouTubeEmbed(ytID);
-
-  // External link preview (og: meta-tag card from allowlisted domains).
-  const extURL = extractFirstBareURL(content);
-  if (extURL) {
-    const out = extPreviews.outcome(extURL);
-    if (out === "fetch") { fetchExtPreview(extURL); return null; }
-    if (out === "wait") return null;
-    return renderExtPreviewCard(extPreviews.get(extURL), extURL);
-  }
-
-  return null;
-}
-
-function renderYouTubeEmbed(videoID) {
-  return el("a", {
-    class: "yt-thumb",
-    href: `https://www.youtube.com/watch?v=${videoID}`,
-    target: "_blank",
-    rel: "noopener noreferrer",
-  },
-    el("img", { src: `https://i.ytimg.com/vi/${videoID}/hqdefault.jpg`, alt: "YouTube video", loading: "lazy" }),
-    el("span", { class: "yt-play" }, "▶"),
-  );
-}
+// Inline link/embed previews (message-permalink embeds, YouTube thumbs, og:
+// cards). See linkpreview.js for the contract; it owns its two fetch caches and
+// the render-coalescing debounce, and reaches back only through rerender. el is
+// passed by value (defined above); jumpToMessage/renderMessages are wrapped in
+// arrows so their late definitions resolve at call time.
+const linkPreviews = createLinkPreviews({
+  el,
+  getState: () => state,
+  api,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+  rerender: () => renderMessages(),
+});
+const buildLinkPreview = linkPreviews.buildLinkPreview;
 
 // commitEdit saves the inline edit. An empty draft on the most recent own message
 // deletes it; empty on any other message just cancels. Unchanged draft cancels.

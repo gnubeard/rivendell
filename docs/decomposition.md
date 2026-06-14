@@ -120,6 +120,7 @@ Conventions specific to this kind of module:
 | Moderator channel drag-reorder controller (DOM gesture) | `channeldrag.js` | e2e (channel-reorder, 1) | ✅ done |
 | Presence dot color + debounce decision (pure logic) | `presence.js` | unit (8) | ✅ done |
 | Image cache warming (avatars, viewport, bg blob sweep; pure URL scan) | `imagewarm.js` | unit (10) | ✅ done |
+| Inline link/embed previews (msg-permalink embeds, YouTube, og: cards) | `linkpreview.js` | e2e (link-previews, 3) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -157,9 +158,10 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 - **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. Folds into
   `state.applyEvent` already; the handler's routing is DOM-heavy.
 
-**Feature-module candidates** (next targets for the `search.js` method, ranked by
-self-containment — each declares its own state mid-file and touches the shared
-top-of-file state block only through `state`). Each needs a fresh e2e spec first:
-
-- **Link previews** — owns `_previewRenderTimer`; already leans on `previews.js`
-  for its cache state machine. The render/observe half could join it.
+**Feature-module candidates**: none left. The self-contained, mid-file features
+that owned their own state (`search`, `emoji`, `channeldrag`, `imagewarm`,
+`linkpreview`) have all been carved out via the `search.js` method. What remains
+in `app.js` is the deliberately-retained core listed above — `wireComposer`, the
+video grid, inline editing, boot/auth, realtime/sync — each a wireComposer-class
+entanglement the spine says to leave in place, honestly bannered and findable.
+Revisit only if a clean pure core or a genuinely self-contained widget emerges.
