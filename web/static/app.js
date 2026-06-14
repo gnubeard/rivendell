@@ -51,10 +51,6 @@ import {
   setVolumeForUser,
   getVolumeForUser,
   handleVoiceSignal,
-  startRingSound,
-  stopRingSound,
-  startPendingSound,
-  stopPendingSound,
   pttShouldFire,
   pttKeyLabel,
   micErrorMessage,
@@ -62,6 +58,16 @@ import {
   reconcilePeers,
 } from "./voice.js";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js";
+import {
+  primeAudio,
+  boop,
+  greetTone,
+  farewellTone,
+  startRingSound,
+  stopRingSound,
+  startPendingSound,
+  stopPendingSound,
+} from "./tones.js";
 import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js";
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
@@ -266,87 +272,16 @@ function trackViewportHeight() {
 }
 
 // --- notification chime ------------------------------------------------------
-// A small, soft "boop" synthesized with the Web Audio API (no asset to ship).
-// Browsers require a user gesture before audio can play, so we lazily create and
-// resume the context on the first interaction.
-let audioCtx = null;
-function primeAudio() {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
-  } catch {
-    /* no Web Audio; chime simply won't play */
-  }
-}
+// The chime + call tones (boop / greet / farewell / ring / pending) are
+// synthesized in tones.js, behind one gesture-primed AudioContext; primeAudio
+// (wired to gesture events in boot) unlocks it. app.js just calls the players.
+
 // tabUnfocused reports whether the user isn't actually looking here — the tab is
 // backgrounded/minimized (document.hidden) or another window/app has focus
 // (!document.hasFocus()).
 function tabUnfocused() {
   return document.hidden || !document.hasFocus();
 }
-
-// A small lookahead so the gain envelope's attack is always scheduled in the
-// future. resume() can take a few ms to settle; without the cushion the ramp's
-// start lands in the past and the browser clips the attack — which read as a
-// quieter, decaying tone across rapid suspend/resume cycles.
-const TONE_LOOKAHEAD = 0.06;
-
-function boop() {
-  // Only use a context that a prior user gesture already created — never create
-  // one here, or the browser logs "AudioContext was prevented from starting".
-  if (!audioCtx) return;
-  const run = () => {
-    const t = audioCtx.currentTime + TONE_LOOKAHEAD;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "sine";
-    // A gentle downward bend reads as a rounded, low-key "boop". Kept a touch
-    // baritone, but not so low that small speakers (which roll off bass) swallow
-    // it; the gain is nudged up to compensate for reduced low-frequency loudness.
-    osc.frequency.setValueAtTime(520, t);
-    osc.frequency.exponentialRampToValueAtTime(380, t + 0.18);
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.015); // soft attack
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22); // quick gentle decay
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(t);
-    osc.stop(t + 0.23);
-  };
-  // Always resume()-then-run, not just when state is already "suspended": a
-  // call teardown (mic + peers closing) can suspend the context a beat AFTER we
-  // check, so an unconditional resume covers that race. resume() on a running
-  // context resolves immediately and is harmless.
-  audioCtx.resume().then(run).catch(() => {});
-}
-
-// playTones plays a short sequence of sine notes ({f: Hz, t: start offset, d:
-// duration}) on the gesture-primed shared context. Like boop(), it never creates
-// the context itself — silent until a user gesture has primed audio.
-function playTones(seq) {
-  if (!audioCtx) return;
-  const run = () => {
-    const t0 = audioCtx.currentTime + TONE_LOOKAHEAD;
-    for (const n of seq) {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = n.f;
-      const s = t0 + n.t;
-      gain.gain.setValueAtTime(0.0001, s);
-      gain.gain.exponentialRampToValueAtTime(0.14, s + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, s + n.d);
-      osc.connect(gain).connect(audioCtx.destination);
-      osc.start(s);
-      osc.stop(s + n.d + 0.02);
-    }
-  };
-  // See boop(): unconditional resume covers the post-teardown suspend race.
-  audioCtx.resume().then(run).catch(() => {});
-}
-// A rising two-note chirp when someone joins the call, falling when they leave —
-// the direction makes the two instantly distinguishable without looking.
-function greetTone() { playTones([{ f: 523, t: 0, d: 0.12 }, { f: 784, t: 0.1, d: 0.18 }]); }
-function farewellTone() { playTones([{ f: 784, t: 0, d: 0.12 }, { f: 523, t: 0.1, d: 0.18 }]); }
 
 // --- bootstrapping -----------------------------------------------------------
 
@@ -3802,7 +3737,7 @@ function wireVoiceControls() {
     ringState = { channelId: ch.id, direction: "outgoing", fromUserId: state.me.id };
     renderChannelHeader(ch);
     renderRingBanner();
-    startPendingSound(audioCtx); // caller-side "waiting for pickup" tone
+    startPendingSound(); // caller-side "waiting for pickup" tone
   };
 
   // DM partner volume: the header 🔊 toggles a slider for the other participant.
@@ -3916,7 +3851,7 @@ async function onVoiceEvent(evt) {
     // Repaint the header so the active DM's call button flips to the "answer"
     // icon — the banner alone doesn't drive the header.
     renderChannelHeader(state.channels[state.activeChannelId]);
-    startRingSound(audioCtx);
+    startRingSound();
     fireRingNotification(p.from_user_id, p.dm_channel_id);
     return;
   }
