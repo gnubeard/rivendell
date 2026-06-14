@@ -89,7 +89,13 @@ Conventions specific to this kind of module:
 - **Header comment states the contract** — what the module owns, what stays in
   the caller, and any invariant a test guards. This is the "well-documented" part.
 - **Imports use the `?v=__RIVENDELL_VERSION__` cache-bust suffix**, matching
-  app.js (the server rewrites the token; `node --test` ignores the query).
+  app.js (the server rewrites the token in *every* served .js; `node --test`
+  ignores the query). This is load-bearing, not just cache hygiene: ES modules
+  are keyed by resolved URL, so the token MUST resolve identically everywhere or
+  a module imported by both app.js and a sibling loads twice. Harmless for pure
+  modules, but two instances of a *stateful* module (e.g. `secret.js`'s session
+  map) silently don't share state. The server-side fix (template all .js) landed
+  with the secretui.js extraction; `TestStaticTemplatesAllJSModules` guards it.
 - **Pure modules export functions; stateful ephemeral bookkeeping exports a
   `createX()` factory** (closure-encapsulated, like `createUnreadTracker`) rather
   than module-level mutable globals.
@@ -122,6 +128,7 @@ Conventions specific to this kind of module:
 | Image cache warming (avatars, viewport, bg blob sweep; pure URL scan) | `imagewarm.js` | unit (10) | ✅ done |
 | Inline link/embed previews (msg-permalink embeds, YouTube, og: cards) | `linkpreview.js` | e2e (link-previews, 3) | ✅ done |
 | Admin/moderator settings panel (stats, users, invites, tokens, emojis) | `admin.js` | e2e (admin, 5) | ✅ done |
+| Secret-chat UX (request banner, 🔒 button, safety-number modal) | `secretui.js` | e2e (secret-chat, 2) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -164,10 +171,6 @@ state-owning features the earlier list tracked — several large DOM-carrying
 sections write *zero* shared state and were simply never catalogued). Ranked by
 leverage; each needs a fresh e2e spec first:
 
-- **Secret session UI** — `onSecretEvent`/`renderSecretBanner`/`wireSecretControls`/
-  `openSafetyModal` (~235 lines). Owns `secretRequestState` (moves into the
-  module, search.js-style), wraps the already-modular `secret.js`, and drives
-  three renders via injected callbacks. Next up.
 - **Invite/channel/profile modals + user card** — `open*Modal`/`openUserCard`
   (~145 lines). A cluster of independent modal builders; one `modals.js` or split.
 - **Mobile long-press context menu** — `openMobileCtx` & friends (~89 lines). A
