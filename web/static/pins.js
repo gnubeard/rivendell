@@ -15,8 +15,8 @@
 // reactionsRow (the shared message reactions row, which lives in app.js with the
 // `mine` invariant). permalinkHash/formatMessage/formatTime are imported directly.
 
-import { permalinkHash, formatMessage } from "./format.js?v=__RIVENDELL_VERSION__";
-import { formatTime } from "./util.js?v=__RIVENDELL_VERSION__";
+import { permalinkHash, formatMessage } from "./format.js";
+import { formatTime } from "./util.js";
 
 export function createPins({ el, $, getState, api, jumpToMessage, closeDrawers, reactionsRow }) {
   let refreshSeq = 0; // last-writer-wins token for concurrent refresh() calls

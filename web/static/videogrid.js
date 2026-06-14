@@ -21,8 +21,8 @@
 // Tested by web/e2e/video-grid.spec.js (grid show/hide, fullscreen control, the
 // mobile chat↔video toggle) plus the live-tile assertions in dm-call/group-call.
 
-import { getVideoEl, getLocalVideoEl } from "./voice.js?v=__RIVENDELL_VERSION__";
-import { otherDMParticipant } from "./state.js?v=__RIVENDELL_VERSION__";
+import { getVideoEl, getLocalVideoEl } from "./voice.js";
+import { otherDMParticipant, anyVideoPresent } from "./state.js";
 
 export function createVideoGrid({
   el,
@@ -99,8 +99,9 @@ export function createVideoGrid({
     const remoteVideoMuted = !otherP || otherP.video_muted;
 
     // When both cameras are off there's no video to show; also clear any mobile
-    // view-override so the toggle button disappears cleanly.
-    if (voiceCallState.videoMuted && remoteVideoMuted) {
+    // view-override so the toggle button disappears cleanly. Same predicate the
+    // header toggle keys on (state.anyVideoPresent) so the two never disagree.
+    if (!anyVideoPresent(voiceCallState, state.me && state.me.id)) {
       setVideoViewHidden(false);
       hideVideoGrid(grid);
       return;
@@ -148,10 +149,8 @@ export function createVideoGrid({
     const voiceCallState = getVoiceCallState();
     const speakingIds = getSpeakingIds();
     const meId = state.me && state.me.id;
-    const anyVideo = !voiceCallState.videoMuted ||
-      voiceCallState.participants.some(p => p.user_id !== meId && !p.video_muted);
 
-    if (!anyVideo) {
+    if (!anyVideoPresent(voiceCallState, meId)) {
       setVideoViewHidden(false);
       hideVideoGrid(grid);
       return;

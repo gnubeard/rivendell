@@ -18,9 +18,9 @@
 // fresh), api (channelMembers/sendMessage), jumpToMessage, and origin (defaults
 // to location.origin; injectable so the body assembly stays unit-testable).
 
-import { permalinkHash } from "./format.js?v=__RIVENDELL_VERSION__";
-import { dmDisplayName } from "./channelorder.js?v=__RIVENDELL_VERSION__";
-import { otherDMParticipant } from "./state.js?v=__RIVENDELL_VERSION__";
+import { permalinkHash } from "./format.js";
+import { dmDisplayName } from "./channelorder.js";
+import { otherDMParticipant } from "./state.js";
 
 // forwardBody builds the text a forward sends (see the module header). Pure;
 // origin is passed in (location.origin at runtime) so it needs no DOM.

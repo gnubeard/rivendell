@@ -12,7 +12,7 @@
 // (openForReaction), and the message actions startReply, openForwardModal,
 // startEdit, togglePin, toggleMessageRead, deleteMessage.
 
-import { canModerate } from "./state.js?v=__RIVENDELL_VERSION__";
+import { canModerate } from "./state.js";
 
 export function createMobileCtx({
   el, $, getState, api, emojiPicker,

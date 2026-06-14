@@ -13,8 +13,8 @@
 // scratch state, not the immutable world model, so a closure-encapsulated
 // tracker fits better than a pure reducer.
 
-import { mentionsUser } from "./format.js?v=__RIVENDELL_VERSION__";
-import { isMuted } from "./state.js?v=__RIVENDELL_VERSION__";
+import { mentionsUser } from "./format.js";
+import { isMuted } from "./state.js";
 
 // classifyIncomingMessage decides how a realtime message event affects the
 // reader. It separates two questions the handler used to answer inline:

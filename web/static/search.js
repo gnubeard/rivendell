@@ -7,10 +7,10 @@
 // DOM events to the returned methods. Behavior is pinned by web/e2e/search.spec.js
 // (there is little pure logic to unit-test — the value is in the racy DOM path,
 // which only a real browser reproduces).
-import { api } from "./api.js?v=__RIVENDELL_VERSION__";
-import { formatMessage } from "./format.js?v=__RIVENDELL_VERSION__";
-import { formatTime } from "./util.js?v=__RIVENDELL_VERSION__";
-import { dmDisplayName } from "./channelorder.js?v=__RIVENDELL_VERSION__";
+import { api } from "./api.js";
+import { formatMessage } from "./format.js";
+import { formatTime } from "./util.js";
+import { dmDisplayName } from "./channelorder.js";
 
 export const SEARCH_PAGE = 25;
 

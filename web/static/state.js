@@ -268,6 +268,17 @@ export function otherDMParticipant(channel, meId) {
   return other != null ? other : (ids[0] === meId ? meId : null);
 }
 
+// anyVideoPresent reports whether a call has any live video worth showing: our
+// own camera is on, OR some *other* participant's is. It's the single predicate
+// behind both the #video-grid show/hide (videogrid.js) and the mobile 💬/📺
+// header toggle's visibility (app.js) — the two MUST agree or you get a toggle
+// with no grid behind it (or vice versa). DM and group calls share this form: a
+// DM has exactly one other participant, so the `some(... !== meId)` reduces to
+// "is the peer's camera on". `vcs` is voice.js's voiceCallState (not `state`).
+export function anyVideoPresent(vcs, meId) {
+  return !vcs.videoMuted || (vcs.participants || []).some((p) => p.user_id !== meId && !p.video_muted);
+}
+
 // setMessages replaces the message list for a channel (used on initial load).
 export function setMessages(state, channelId, list) {
   const sorted = [...(list || [])].sort((a, b) => a.id - b.id);

@@ -16,7 +16,7 @@
 // behind the panel), fileTooLarge (app.js's DOM adapter over the pure size
 // check), getMaxAvatarBytes (() => the server's avatar ceiling).
 
-import { formatTime } from "./util.js?v=__RIVENDELL_VERSION__";
+import { formatTime } from "./util.js";
 
 export function createAdminPanel({ el, $, getState, api, closeDrawers, fileTooLarge, getMaxAvatarBytes }) {
   async function refreshAdminStats() {

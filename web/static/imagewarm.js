@@ -12,7 +12,7 @@
 // State (warmGen, preloadedAvatars) is closure-encapsulated in createImageWarmer
 // per the decomposition spine; the caller reaches in only through deps.
 
-import { sidebarChannelOrder } from "./channelorder.js?v=__RIVENDELL_VERSION__";
+import { sidebarChannelOrder } from "./channelorder.js";
 
 // extractBlobUrls pulls up to `limit` /api/blobs/ paths from a messages array,
 // walking newest-first as returned by the API. Pure: the only testable logic here.

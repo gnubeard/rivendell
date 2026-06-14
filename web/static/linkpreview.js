@@ -16,9 +16,9 @@
 // (navigate to an embedded message), rerender (re-render the message list when a
 // fetch resolves — the only side effect that reaches back into app.js).
 
-import { formatMessage, extractMessagePermalinkURL, extractYouTubeVideoID, extractFirstBareURL } from "./format.js?v=__RIVENDELL_VERSION__";
-import { formatTime } from "./util.js?v=__RIVENDELL_VERSION__";
-import { createPreviewCache } from "./previews.js?v=__RIVENDELL_VERSION__";
+import { formatMessage, extractMessagePermalinkURL, extractYouTubeVideoID, extractFirstBareURL } from "./format.js";
+import { formatTime } from "./util.js";
+import { createPreviewCache } from "./previews.js";
 
 export function createLinkPreviews({ el, getState, api, jumpToMessage, rerender }) {
   // Preview caches (state machine in previews.js): same-origin message embeds and

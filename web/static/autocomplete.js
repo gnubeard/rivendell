@@ -9,7 +9,7 @@
 // handling, inserting the pick) lives in the widget; its e2e net is the
 // "@-mention autocomplete" test in web/e2e/composer-paste.spec.js.
 
-import { atQuery, colonQuery, hashQuery, BUILTIN_EMOJI } from "./format.js?v=__RIVENDELL_VERSION__";
+import { atQuery, colonQuery, hashQuery, BUILTIN_EMOJI } from "./format.js";
 
 // mentionedUsernames returns the lowercased usernames already @-mentioned in
 // `text`, EXCLUDING a mention whose '@' sits at triggerAt (the one being typed,

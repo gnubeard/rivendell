@@ -78,11 +78,16 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - Presence debounce (~1s, `schedulePresenceUpdate`) — don't "simplify" to immediate apply. Own user is exempt.
 - `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last.
 - CSS: `[hidden] { display: none !important; }` must stay. Wire controls before `startRealtime()`.
-- Frontend ES modules import siblings with the `?v=__RIVENDELL_VERSION__` suffix; the
-  server rewrites it in **every** served `.js` (not just app.js) so each module resolves
-  to one URL = one instance. A *stateful* module imported by both app.js and a sibling
-  with an unrewritten suffix would load twice and silently unshare state.
-  `TestStaticTemplatesAllJSModules` guards this.
+- Frontend ES modules import siblings with **bare relative specifiers** (`./api.js`,
+  no version suffix). Cache-busting is **path-based**: index.html loads the entry from
+  `/v/<version>/static/app.js`, and relative imports keep every sibling under that same
+  prefix, so one page load resolves each module to one URL = one instance (the
+  single-instance guarantee for stateful modules like secret.js). The server strips
+  `/v/<version>/` and serves the file raw + immutable (`handleVersionedStatic`); the
+  `<version>` value is a pure cache key (ignored on read). A bump changes the prefix ⇒
+  all module URLs change at once. Only index.html and sw.js still carry the
+  `__RIVENDELL_VERSION__` token (templated at serve time). Guarded by the
+  `TestVersioned*` / `TestIndexReferencesVersionedEntry` tests in `static_test.go`.
 
 ## Critical feature invariants (full design notes in README)
 

@@ -447,3 +447,29 @@ test("nextUnreadChannelId finds the nearest unread in a direction", () => {
   assert.equal(S.nextUnreadChannelId(order, null, unread, -1), 40, "no active, up -> last unread");
   assert.equal(S.nextUnreadChannelId(order, 20, {}, 1), null, "nothing unread -> null");
 });
+
+test("anyVideoPresent: own camera on is enough", () => {
+  const vcs = { videoMuted: false, participants: [{ user_id: 1, video_muted: true }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), true);
+});
+
+test("anyVideoPresent: a peer's camera on counts even when ours is off", () => {
+  const vcs = { videoMuted: true, participants: [{ user_id: 1, video_muted: true }, { user_id: 2, video_muted: false }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), true);
+});
+
+test("anyVideoPresent: all cameras off -> no video", () => {
+  const vcs = { videoMuted: true, participants: [{ user_id: 1, video_muted: true }, { user_id: 2, video_muted: true }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), false);
+});
+
+test("anyVideoPresent: our own muted camera does not count as a peer's", () => {
+  // only participant is us, camera off -> nothing to show (the some() must skip self)
+  const vcs = { videoMuted: true, participants: [{ user_id: 1, video_muted: false }] };
+  assert.equal(S.anyVideoPresent(vcs, 1), false);
+});
+
+test("anyVideoPresent: tolerates a missing participants list", () => {
+  assert.equal(S.anyVideoPresent({ videoMuted: true }, 1), false);
+  assert.equal(S.anyVideoPresent({ videoMuted: false }, 1), true);
+});

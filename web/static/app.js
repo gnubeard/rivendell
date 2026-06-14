@@ -1,10 +1,10 @@
 // app.js — the rivendell web client. Wires the API, websocket, formatter, and the
 // pure state reducer to the DOM. Deliberately framework-free.
 
-import { api } from "./api.js?v=__RIVENDELL_VERSION__";
-import { connectRealtime } from "./ws.js?v=__RIVENDELL_VERSION__";
-import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip } from "./format.js?v=__RIVENDELL_VERSION__";
-import * as S from "./state.js?v=__RIVENDELL_VERSION__";
+import { api } from "./api.js";
+import { connectRealtime } from "./ws.js";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip } from "./format.js";
+import * as S from "./state.js";
 import {
   shouldNotify,
   showNotification,
@@ -18,7 +18,7 @@ import {
   subscribeToPush,
   unsubscribeFromPush,
   pushSubscriptionPayload,
-} from "./notify.js?v=__RIVENDELL_VERSION__";
+} from "./notify.js";
 import {
   initSecret,
   isSecretSupported,
@@ -28,7 +28,7 @@ import {
   sendEndAllOnUnload,
   sendSecretMessage,
   handleSecretEvent,
-} from "./secret.js?v=__RIVENDELL_VERSION__";
+} from "./secret.js";
 import {
   initVoice,
   fetchIceServers,
@@ -60,29 +60,29 @@ import {
   micErrorMessage,
   registerDebug,
   reconcilePeers,
-} from "./voice.js?v=__RIVENDELL_VERSION__";
-import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js?v=__RIVENDELL_VERSION__";
-import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js?v=__RIVENDELL_VERSION__";
-import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
-import { createDraftStore } from "./drafts.js?v=__RIVENDELL_VERSION__";
-import { upgradeComposerField } from "./composer-field.js?v=__RIVENDELL_VERSION__";
-import { humanBytes, formatTime, overSizeLimit } from "./util.js?v=__RIVENDELL_VERSION__";
-import { createPrefs, normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
-import { createAttachmentTray, composeMessageBody } from "./attachments.js?v=__RIVENDELL_VERSION__";
-import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
-import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
-import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
-import { createChannelDrag } from "./channeldrag.js?v=__RIVENDELL_VERSION__";
-import { presenceClass, presenceLabel, presenceDecision } from "./presence.js?v=__RIVENDELL_VERSION__";
-import { createImageWarmer } from "./imagewarm.js?v=__RIVENDELL_VERSION__";
-import { createLinkPreviews } from "./linkpreview.js?v=__RIVENDELL_VERSION__";
-import { createAdminPanel } from "./admin.js?v=__RIVENDELL_VERSION__";
-import { createSecretUI } from "./secretui.js?v=__RIVENDELL_VERSION__";
-import { createForward } from "./forward.js?v=__RIVENDELL_VERSION__";
-import { createPins } from "./pins.js?v=__RIVENDELL_VERSION__";
-import { createModals } from "./modals.js?v=__RIVENDELL_VERSION__";
-import { createMobileCtx } from "./mobilectx.js?v=__RIVENDELL_VERSION__";
-import { createVideoGrid } from "./videogrid.js?v=__RIVENDELL_VERSION__";
+} from "./voice.js";
+import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js";
+import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js";
+import { regularChannelOrder, sidebarChannelOrder, dmDisplayName, channelReorderPatches } from "./channelorder.js";
+import { createDraftStore } from "./drafts.js";
+import { upgradeComposerField } from "./composer-field.js";
+import { humanBytes, formatTime, overSizeLimit } from "./util.js";
+import { createPrefs, normalizeTheme } from "./prefs.js";
+import { createAttachmentTray, composeMessageBody } from "./attachments.js";
+import { createAutocomplete } from "./autocomplete.js";
+import { createSearch } from "./search.js";
+import { createEmojiPicker } from "./emoji.js";
+import { createChannelDrag } from "./channeldrag.js";
+import { presenceClass, presenceLabel, presenceDecision } from "./presence.js";
+import { createImageWarmer } from "./imagewarm.js";
+import { createLinkPreviews } from "./linkpreview.js";
+import { createAdminPanel } from "./admin.js";
+import { createSecretUI } from "./secretui.js";
+import { createForward } from "./forward.js";
+import { createPins } from "./pins.js";
+import { createModals } from "./modals.js";
+import { createMobileCtx } from "./mobilectx.js";
+import { createVideoGrid } from "./videogrid.js";
 
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
@@ -1584,9 +1584,7 @@ function renderDMHeader(ch) {
   // call, 💬 lets the user switch to chat; 📺 returns them to the video view.
   const headerCamBtn = $("#header-camera-btn");
   if (isInCall() && voiceCallState.channelId === ch.id) {
-    const hcbOtherId = S.otherDMParticipant(ch, state.me && state.me.id);
-    const hcbOtherP = voiceCallState.participants.find(p => p.user_id === hcbOtherId);
-    const hasVideo = !voiceCallState.videoMuted || (hcbOtherP && !hcbOtherP.video_muted);
+    const hasVideo = S.anyVideoPresent(voiceCallState, state.me && state.me.id);
     if (hasVideo || videoViewHidden) {
       applyHeaderCamLabel(headerCamBtn);
       headerCamBtn.hidden = false;
@@ -1614,8 +1612,7 @@ function renderRegularHeader(ch) {
       // Same mobile-only 💬/📺 chat↔video toggle as DM calls, but for a group
       // video call: shown once any participant (us or a peer) has a camera on.
       const headerCamBtn = $("#header-camera-btn");
-      const groupHasVideo = !voiceCallState.videoMuted ||
-        voiceCallState.participants.some(p => p.user_id !== (state.me && state.me.id) && !p.video_muted);
+      const groupHasVideo = S.anyVideoPresent(voiceCallState, state.me && state.me.id);
       if (groupHasVideo || videoViewHidden) {
         applyHeaderCamLabel(headerCamBtn);
         headerCamBtn.hidden = false;

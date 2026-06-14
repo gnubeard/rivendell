@@ -25,8 +25,8 @@ import {
   getMyPubKeyB64,
   markVerified,
   computeSafetyNumber,
-} from "./secret.js?v=__RIVENDELL_VERSION__";
-import { otherDMParticipant } from "./state.js?v=__RIVENDELL_VERSION__";
+} from "./secret.js";
+import { otherDMParticipant } from "./state.js";
 
 export function createSecretUI({ $, getState, api, renderChannelHeader, renderMessages, renderDMs, selectChannel, ensureDMOpen }) {
   // secretRequestState is set when a peer sends a secret.offer (an incoming

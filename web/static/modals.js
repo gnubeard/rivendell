@@ -20,9 +20,9 @@
 // initials, startDM, plus the two callbacks above. presenceClass/normalizeTheme/
 // formatMessage are imported directly.
 
-import { presenceClass } from "./presence.js?v=__RIVENDELL_VERSION__";
-import { normalizeTheme } from "./prefs.js?v=__RIVENDELL_VERSION__";
-import { formatMessage } from "./format.js?v=__RIVENDELL_VERSION__";
+import { presenceClass } from "./presence.js";
+import { normalizeTheme } from "./prefs.js";
+import { formatMessage } from "./format.js";
 
 export function createModals({
   el, $, getState, api, closeDrawers, avatarSrc, initials, startDM,

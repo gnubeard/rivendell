@@ -14,7 +14,7 @@
 //   isModPlus   — () => whether the current user is moderator+ (gates the ➕ footer)
 //   toggleReaction(messageId, value) — apply a reaction pick
 //   openEmojiManager() — open the custom-emoji manager modal (from the ➕ footer)
-import { api } from "./api.js?v=__RIVENDELL_VERSION__";
+import { api } from "./api.js";
 
 // A small set of common Unicode emoji offered alongside the instance's custom
 // emoji, so reactions aren't custom-only. These are literal graphemes (no image).

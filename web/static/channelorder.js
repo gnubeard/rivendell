@@ -3,7 +3,7 @@
 // views; keeping them out of app.js makes the ordering rules unit-testable. The
 // DOM/event wiring for the drag gesture itself stays in app.js (pure plumbing).
 
-import { otherDMParticipant } from "./state.js?v=__RIVENDELL_VERSION__";
+import { otherDMParticipant } from "./state.js";
 
 // regularChannelOrder: the non-DM channel ids in their stored order.
 export function regularChannelOrder(state) {
@@ -25,9 +25,10 @@ export function sidebarChannelOrder(state) {
 // falling back to the raw channel name if that user isn't loaded. For a self-DM
 // the "other" participant is the current user; we append "(you)".
 export function dmDisplayName(state, ch) {
-  const otherId = otherDMParticipant(ch, state.me.id);
-  if (otherId === state.me.id) {
-    const me = state.users[state.me.id] || state.me;
+  const meId = state.me && state.me.id;
+  const otherId = otherDMParticipant(ch, meId);
+  if (otherId === meId) {
+    const me = state.users[meId] || state.me;
     return (me.display_name || me.username) + " (you)";
   }
   const other = otherId != null ? state.users[otherId] : null;

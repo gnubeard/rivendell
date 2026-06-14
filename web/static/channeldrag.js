@@ -12,8 +12,8 @@
 //   setChannels(updated) — fold a reordered channel map into app state (optimistic)
 //   renderChannels — repaint the sidebar (used to revert a cancelled drag)
 //   resync         — full resync (used to revert a failed PATCH)
-import { api } from "./api.js?v=__RIVENDELL_VERSION__";
-import { channelReorderPatches } from "./channelorder.js?v=__RIVENDELL_VERSION__";
+import { api } from "./api.js";
+import { channelReorderPatches } from "./channelorder.js";
 
 // Replaces the old up/down arrow glyphs (too easy to mis-hit). Desktop: press
 // and drag a channel row with the mouse. Mobile: long-press to "unstick" the
