@@ -18,13 +18,15 @@ with a vanilla-JS web client and no frontend dependencies.
 - Roles: admin / moderator / member
 - Realtime messaging over WebSocket (hand-rolled RFC 6455)
 - Edit and soft-delete messages, pinned messages, scrollback with keyset pagination
+- Forward a message to another channel or DM
 - Emoji reactions, with instance-wide custom `:shortcode:` emoji
 - Full-text message search, scoped to your accessible channels
 - @-mentions with inline autocomplete, and live typing indicators
 - Presence and status (online / away / do not disturb / invisible, with auto-idle)
-- Unread indicators with DM chime, per-channel/DM mute, and opt-in desktop notifications
+- Unread indicators with DM chime, per-channel/DM mute, and opt-in notifications — foreground desktop alerts plus offline Web Push (installable PWA)
 - Message permalinks — every timestamp links to that point in history
-- Voice channels and 1:1 voice calls — P2P WebRTC mesh, no media server (STUN/TURN configurable)
+- Voice and video calls — voice channels, 1:1 and group calls with camera, P2P WebRTC mesh, no media server (STUN/TURN configurable)
+- Secret chat — opt-in end-to-end encrypted DMs with a verifiable safety number; sessions live only in browser memory, never on the server
 - Image and file uploads — content-addressed blob store, paste/drop/attach, inline rendering
 - Inline markdown links and image embeds; same-origin message permalinks, YouTube embeds, and og: link preview cards for allowlisted domains
 - Avatars (PNG, JPEG, WebP, GIF) and per-user UI themes
@@ -222,13 +224,18 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               out of app.js: unread.js, channelorder.js,
                               drafts.js, composer-field.js, attachments.js,
                               autocomplete.js, prefs.js, previews.js, util.js,
-                              search.js, emoji.js, channeldrag.js, presence.js
+                              search.js, emoji.js, channeldrag.js, presence.js,
+                              imagewarm.js, linkpreview.js, admin.js, secretui.js,
+                              forward.js, pins.js, modals.js, mobilectx.js
 web/sw.js                     service worker (Web Push display + click routing)
 web/manifest.json             PWA manifest (installability; iOS push needs install)
-web/test/                     node:test unit suites (one per pure JS module)
+web/test/                     node:test unit suites for the pure JS modules
+                              (DOM-carrying modules are covered by e2e instead)
 web/e2e/                      Playwright specs (composer-paste, dm-call,
-                              group-call, search, emoji-picker, channel-reorder);
-                              dev-only, run via `make test-e2e`
+                              group-call, search, emoji-picker, channel-reorder,
+                              link-previews, admin, secret-chat, forward, pins,
+                              modals, mobile-ctx, non-admin); dev-only, run via
+                              `make test-e2e`
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,

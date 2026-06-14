@@ -62,9 +62,15 @@ the existing e2e (or a new one) hold the line.
 The early slices took the **pure-core** path: a data transform or decision rule
 lifted out and exhaustively unit-tested, with a thin DOM adapter left behind
 (`unread`, `channelorder`, `drafts`, `prefs`, `previews`, `util`, the
-`autocomplete`/`attachments` filters). That well is now largely dry — what
-remains in `app.js` is overwhelmingly DOM construction and stateful
-orchestration with little extractable pure logic.
+`autocomplete`/`attachments` filters). The big modules' wells are now largely
+dry — what remains in `app.js` is overwhelmingly DOM construction and stateful
+orchestration — but smaller pure cores still surface from the orchestrator spine
+and are worth lifting when they do: the unread/mention/ping decision matrix moved
+to `classifyIncomingMessage` (in `unread.js`), and the role-hierarchy checks to
+`S.isAdmin`/`S.canModerate` (in `state.js`), both with unit tests. These aren't
+new modules — they're pure functions added to existing ones plus an in-place
+dedup (the `guard()` error-alert helper is similar) — so they don't get a status
+row below; they're part of tightening the spine, not carving it up.
 
 So the current method is the **feature module** (the `no` branch above): lift a
 whole feature that *carries its own DOM* — it owns its state, renders itself, and
