@@ -219,6 +219,18 @@ function show(view) {
   if (view !== "app") dismissLoadingScreen();
 }
 
+// guard runs an async action and surfaces any failure as an alert() — the shared
+// shape for the "fire-and-tell-me-if-it-breaks" API calls. Actions that recover
+// from failure themselves (revert optimistic state, restore a composer, return
+// early) keep their own try/catch rather than using this.
+async function guard(action) {
+  try {
+    await action();
+  } catch (ex) {
+    alert(ex.message);
+  }
+}
+
 // --- mobile viewport height --------------------------------------------------
 // Pin a --app-height var to the *visual* viewport so the app fits the area not
 // covered by the on-screen keyboard. Without this, focusing the composer makes
@@ -1122,15 +1134,13 @@ function volumeSlider(u) {
 // them locally so it's instant even for a mod viewing via the not-a-member bypass.
 async function removeMember(channelId, userId, displayName) {
   if (!confirm(`Remove ${displayName} from this channel?`)) return;
-  try {
+  await guard(async () => {
     await api.removeChannelMember(channelId, userId);
     if (activeMemberIds) {
       activeMemberIds.delete(userId);
       renderMembers();
     }
-  } catch (ex) {
-    alert(ex.message);
-  }
+  });
 }
 
 function renderAdminVisibility() {
@@ -1159,11 +1169,7 @@ async function deleteChannel(id) {
   const ch = state.channels[id];
   if (!ch) return;
   if (!confirm(`Delete #${ch.name}? It will be removed for everyone.`)) return;
-  try {
-    await api.archiveChannel(id);
-  } catch (ex) {
-    alert(ex.message);
-  }
+  await guard(() => api.archiveChannel(id));
 }
 
 // toggleMute silences or un-silences a channel/DM for this user. Optimistic:
@@ -1252,13 +1258,11 @@ async function closeDM(id) {
 // "resurrect a closed DM" path — opening reopens it server-side (createDM marks
 // it open), so it reappears here and on the user's other devices.
 async function startDM(userId) {
-  try {
+  await guard(async () => {
     const ch = await api.createDM(userId);
     state = S.upsertChannel(state, ch);
     await selectChannel(ch.id);
-  } catch (ex) {
-    alert(ex.message);
-  }
+  });
 }
 
 // ensureDMOpen guarantees that a DM channel is present in state before navigation.
@@ -2630,11 +2634,7 @@ async function commitEdit(m) {
     const own = msgs.filter((msg) => msg.user_id === state.me.id && !msg.deleted_at);
     if (own.length && own[own.length - 1].id === m.id) {
       cancelEdit();
-      try {
-        await api.deleteMessage(m.id);
-      } catch (ex) {
-        alert(ex.message);
-      }
+      await guard(() => api.deleteMessage(m.id));
     } else {
       cancelEdit();
     }
@@ -2655,22 +2655,13 @@ async function commitEdit(m) {
 
 async function deleteMessage(m) {
   if (!confirm("Delete this message?")) return;
-  try {
-    await api.deleteMessage(m.id);
-  } catch (ex) {
-    alert(ex.message);
-  }
+  await guard(() => api.deleteMessage(m.id));
 }
 
 // togglePin pins/unpins a message (mod+). The resulting message.update broadcast
 // refreshes the message list and any open pins panel.
 async function togglePin(m) {
-  try {
-    if (m.pinned_at) await api.unpinMessage(m.id);
-    else await api.pinMessage(m.id);
-  } catch (ex) {
-    alert(ex.message);
-  }
+  await guard(() => (m.pinned_at ? api.unpinMessage(m.id) : api.pinMessage(m.id)));
 }
 
 // --- reactions ---------------------------------------------------------------
@@ -2749,12 +2740,7 @@ async function toggleReaction(messageId, emoji, knownMine) {
     const grp = m && m.reactions && m.reactions.find((g) => g.emoji === emoji);
     mine = !!(grp && (grp.user_ids || []).includes(state.me.id));
   }
-  try {
-    if (mine) await api.removeReaction(messageId, emoji);
-    else await api.addReaction(messageId, emoji);
-  } catch (ex) {
-    alert(ex.message);
-  }
+  await guard(() => (mine ? api.removeReaction(messageId, emoji) : api.addReaction(messageId, emoji)));
 }
 
 // --- feature-module wiring ---------------------------------------------------
@@ -2888,13 +2874,7 @@ function wireDelegatedClicks() {
 // profile modal (opened from the name/status text), live theme preview, the
 // desktop-notification opt-in, the profile save, and the avatar uploader.
 function wireProfileControls() {
-  $("#status-select").onchange = async (e) => {
-    try {
-      await api.setStatus(e.target.value);
-    } catch (ex) {
-      alert(ex.message);
-    }
-  };
+  $("#status-select").onchange = (e) => guard(() => api.setStatus(e.target.value));
 
   $("#me-name").onclick = openProfileModal;
   $("#me-status-text").onclick = openProfileModal;
