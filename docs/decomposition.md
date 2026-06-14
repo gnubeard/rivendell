@@ -121,6 +121,7 @@ Conventions specific to this kind of module:
 | Presence dot color + debounce decision (pure logic) | `presence.js` | unit (8) | ✅ done |
 | Image cache warming (avatars, viewport, bg blob sweep; pure URL scan) | `imagewarm.js` | unit (10) | ✅ done |
 | Inline link/embed previews (msg-permalink embeds, YouTube, og: cards) | `linkpreview.js` | e2e (link-previews, 3) | ✅ done |
+| Admin/moderator settings panel (stats, users, invites, tokens, emojis) | `admin.js` | e2e (admin, 5) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -158,10 +159,26 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 - **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. Folds into
   `state.applyEvent` already; the handler's routing is DOM-heavy.
 
-**Feature-module candidates**: none left. The self-contained, mid-file features
-that owned their own state (`search`, `emoji`, `channeldrag`, `imagewarm`,
-`linkpreview`) have all been carved out via the `search.js` method. What remains
-in `app.js` is the deliberately-retained core listed above — `wireComposer`, the
-video grid, inline editing, boot/auth, realtime/sync — each a wireComposer-class
-entanglement the spine says to leave in place, honestly bannered and findable.
-Revisit only if a clean pure core or a genuinely self-contained widget emerges.
+**Feature-module candidates** (a 2026-06 re-audit of the whole file, not just the
+state-owning features the earlier list tracked — several large DOM-carrying
+sections write *zero* shared state and were simply never catalogued). Ranked by
+leverage; each needs a fresh e2e spec first:
+
+- **Secret session UI** — `onSecretEvent`/`renderSecretBanner`/`wireSecretControls`/
+  `openSafetyModal` (~235 lines). Owns `secretRequestState` (moves into the
+  module, search.js-style), wraps the already-modular `secret.js`, and drives
+  three renders via injected callbacks. Next up.
+- **Invite/channel/profile modals + user card** — `open*Modal`/`openUserCard`
+  (~145 lines). A cluster of independent modal builders; one `modals.js` or split.
+- **Mobile long-press context menu** — `openMobileCtx` & friends (~89 lines). A
+  self-contained gesture widget, zero state writes.
+- **Forward message** — `openForwardModal` + the pure `forwardBody` (~71 lines).
+  Has a real pure core (permalink vs. quoted-copy assembly) worth a unit test,
+  plus an audience predicate mirroring the server's `audienceForChannel`.
+- **Pinned messages** — `openPinsModal`/`refreshPins(IfOpen)` (~70 lines). Modal +
+  fetch-then-render, self-contained.
+
+Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
+orchestration): the video grid, reactions (woven into message rendering + the
+`mine` invariant), control wiring, bootstrapping, realtime/sync, message
+rendering/loading, channel header/selection.
