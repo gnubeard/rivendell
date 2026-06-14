@@ -145,6 +145,7 @@ Conventions specific to this kind of module:
 | Modal cluster (new-channel, edit-profile, invite, read-only user card) | `modals.js` | e2e (modals, 4) | ✅ done |
 | Mobile long-press action sheet (+ reactions sub-panel) | `mobilectx.js` | e2e (mobile-ctx, 5) | ✅ done |
 | In-call video grid (DM 2-tile + group gallery, show/hide, fullscreen) | `videogrid.js` | e2e (video-grid, 3) | ✅ done |
+| Foreground notifications (missed-count badge/title, ping toast, push lifecycle, opt-in control) | `notifyui.js` | e2e (notifications, 3) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -218,6 +219,76 @@ flags), control wiring, bootstrapping, realtime/sync, message rendering/loading,
 channel header/selection. With the video grid lifted, the next worthwhile work is
 different in kind — tightening that spine (in-file helper splits, leaning the realtime
 handler harder on `state.applyEvent`), not carving out more modules.
+
+### notifyui.js (✅ done), then a sequenced message-pane pass
+
+Two more carves were on deck. They are very different in kind, and the order matters.
+The first — **notifyui.js** — is now done (see the status row above); the second — the
+**message pane** — is recorded here as the live plan, NOT yet started.
+
+**notifyui.js — the foreground-notification glue (done, low risk).** The pure
+core already left long ago: `notify.js` owns the decision predicate (`shouldNotify`)
+and the browser glue (`showNotification`/`currentPermission`/permission request), and
+`prefs.js` owns the opt-in persistence. What was still in `app.js` was the *orchestration*
+that wires those to the DOM and the realtime handler — a coherent ~160-line cluster
+under the "notifications & ring alerts" / "web push subscription" / "settings controls"
+banners: `renderNotificationTotal` (title + sidebar badge), `showPingToast` (the
+focused-tab mobile toast), `firePing` (the chime + toast-vs-OS-notification decision),
+`enablePush`/`disablePush`/`initPushRouting` (the Web Push subscription lifecycle), and
+`renderNotifControl` (the profile opt-in row). It carries its own DOM (the `#ping-toasts`
+toast, the `#notif-total` badge, the `#notif-enable` control) and its seam into the
+spine is narrow — `firePing(evt, ch)` from the realtime handler, plus the push lifecycle
+and the profile sub-control — so it lifted cleanly behind `createNotifyUI(deps)`. The
+module *owns* `enabled` (the opt-in, seeded from `prefs.loadNotif()`) and `baseTitle`
+(set via `setBaseTitle` from `applyInstanceName`); app.js and voiceui.js read the opt-in
+through `isEnabled()`, and the profile toggle drives `setEnabled(checked)` (which
+encapsulates the request-permission → enable/disable push → save → re-render flow). This
+was the **`no` branch / e2e-net** kind of extraction, not a pure-core one — the decision
+logic is unit-tested in `notify.js`; the module is DOM/network glue, so
+`web/e2e/notifications.spec.js` (3 specs: the missed-count badge/title, the focused-tab
+mobile toast + tap-to-navigate, and the opt-in control) is the net, written and run green
+against the un-extracted code first per the iron rule.
+
+Two shared-helper snags were resolved *into the pure layer*, not papered over:
+`displayNameOf` (the `state.users[id]?.display_name ?? "Someone"` lookup, shared with the
+ring banner in voiceui.js) moved to `state.js` as a pure, unit-tested `displayNameOf(state,
+id)`; and `pingLabel` (the "<who> in #<channel>" / DM-name string) moved to `format.js` as
+a pure, unit-tested `pingLabel(who, ch)`. With those down a layer, notifyui.js and
+voiceui.js share the helpers without depending on each other. As predicted it was a
+*modest* win — most of the value was banked when `notify.js` was split; this relocated the
+remaining glue and shrank app.js by one more concern (~160 lines).
+
+**Message pane — NOT a single lift; a sequenced pass.** The "main message pane" is not a
+feature module — it is the orchestrator spine itself (`renderMessages`/`messageRow`/
+`messageActions`/`renderSecretView`/`renderTypingIndicator`, the `loadChannel`/`loadOlder`/
+`loadNewer` history machinery, `jumpToMessage`, and the scroll geometry), and its
+constituents are exactly the wireComposer-class entanglements this doc already lists as
+deliberately retained. A monolithic `messagepane.js` would need a 15+ entry deps bag of
+mutable session state (`editingMessageId`/`editDraft`/`editFocusPending`, `replyingToId`,
+`flashMessageId`, `liveDeleted`, `loadingOlder`/`loadingNewer`, `historyComplete`/
+`viewingHistory`, the `unread` tracker, `NEAR_BOTTOM_PX`, `state`, `socket`, plus
+cross-calls to `selectChannel`/`jumpToMessage`/`markActiveChannelRead`/linkpreview/emoji)
+— which would *relocate* the tangle behind a bigger, harder-to-follow seam rather than
+isolate it, and would churn the riskiest DOM in the app with e2e as the only net. That
+violates the spine's "don't move the call sites' job into the module" rule. So the value
+the owner wants (isolated + tested) is real, but it comes from the **pure-core +
+untangle** axis, sequenced:
+
+1. **Lift the pure decision cores and unit-test them** (their homes already exist):
+   message *grouping* (consecutive same-author within the time window → the `grouped`
+   flag), the *unread-divider* placement decision, and the *near-bottom* scroll-anchor
+   decision (`NEAR_BOTTOM_PX` is already named). These are genuinely pure and currently
+   untested.
+2. **Untangle the woven sub-concerns first** — the prerequisite that makes the pane
+   legible: inline editing via the in-file `captureEditState`/`restoreEditState` split
+   already prescribed above (NOT a module), and reactions (preserving the `mine`
+   invariant) out of the `renderMessages` loop.
+3. **Only then, if a module still earns its keep, carve the history/paging + scroll
+   sub-system** (`loadChannel`/`loadOlderMessages`/`loadNewerMessages`/
+   `observeScrollSentinels`/`scrollToBottom` + `historyComplete`/`viewingHistory`/
+   `loadingOlder`/`loadingNewer`) — a self-contained sub-system with a clean seam and a
+   pure-ish core (paging cursors, near-bottom math), unlike "the whole pane." That is the
+   carve to bless, e2e-first; a `messagepane.js` god-module is not.
 
 That spine-tightening is ongoing and is a distinct axis from module extraction: it
 splits oversized orchestrator functions into named in-file helpers (same file, no

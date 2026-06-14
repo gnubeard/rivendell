@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, BUILTIN_EMOJI } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, BUILTIN_EMOJI } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 // ---- reactionTooltip ----
@@ -599,6 +599,13 @@ test("permalinkHash builds the canonical no-slash hash", () => {
 
 test("parsePermalink round-trips permalinkHash", () => {
   assert.deepEqual(parsePermalink(permalinkHash(5, 123)), { channelId: 5, messageId: 123 });
+});
+
+test("pingLabel: a DM is just the sender's name; a channel reads '<who> in #<name>'", () => {
+  assert.equal(pingLabel("Frodo", { is_dm: true, name: "ignored" }), "Frodo");
+  assert.equal(pingLabel("Frodo", { is_dm: false, name: "shire" }), "Frodo in #shire");
+  // A missing channel record falls back to a generic "#channel".
+  assert.equal(pingLabel("Frodo", null), "Frodo in #channel");
 });
 
 test("parsePermalink parses a valid hash", () => {

@@ -152,6 +152,16 @@ export function upsertUser(state, user) {
   return { ...state, users: { ...state.users, [user.id]: { ...prev, ...user } } };
 }
 
+// displayNameOf returns a user's display name, or "Someone" when the user isn't in
+// the roster — the generic actor for a notification/ring where we hold only an id.
+// Shared by the ping toast / OS notification (notifyui.js) and the call ring banner
+// (voiceui.js); kept here, in the pure layer, so neither feature module depends on
+// the other. Pure.
+export function displayNameOf(state, userId) {
+  const u = state.users[userId];
+  return u ? u.display_name : "Someone";
+}
+
 // presenceMatches reports whether a presence.update payload would leave a user's
 // currently displayed presence (online/status/idle) unchanged. The client uses it
 // to drop a transient flip that reverts before the debounce window elapses. A user

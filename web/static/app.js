@@ -6,19 +6,6 @@ import { connectRealtime } from "./ws.js";
 import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip } from "./format.js";
 import * as S from "./state.js";
 import {
-  shouldNotify,
-  showNotification,
-  showViaServiceWorker,
-  requestNotificationPermission,
-  currentPermission,
-  notificationsSupported,
-  pushSupported,
-  ensureServiceWorker,
-  subscribeToPush,
-  unsubscribeFromPush,
-  pushSubscriptionPayload,
-} from "./notify.js";
-import {
   initSecret,
   isSecretSupported,
   getSession,
@@ -44,7 +31,7 @@ import {
   reconcilePeers,
 } from "./voice.js";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js";
-import { primeAudio, boop, greetTone, farewellTone } from "./tones.js";
+import { primeAudio, greetTone, farewellTone } from "./tones.js";
 import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js";
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
@@ -67,6 +54,7 @@ import { createModals } from "./modals.js";
 import { createMobileCtx } from "./mobilectx.js";
 import { createVideoGrid } from "./videogrid.js";
 import { createVoiceUI } from "./voiceui.js";
+import { createNotifyUI } from "./notifyui.js";
 
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
@@ -81,7 +69,6 @@ let state = S.initialState();
 let socket = null;
 let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
 let isIdle = false;     // client-side idle state, re-signaled on reconnect
-let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
 let appVersion = "";    // server-reported semantic version, shown in the About dialog
 let debugTelemetryFlag = false; // server switch (GET /api/instance) forcing WebRTC telemetry on for all clients
 // Server-reported upload size ceilings (bytes) for the client-side pre-check.
@@ -90,13 +77,10 @@ let maxImageBytes = 0;
 let maxAvatarBytes = 0;
 
 // Browser-local preferences (notifications + push-to-talk). prefs.js handles
-// load/persist + localStorage fail-safety; app.js holds the live values. `prefs`
-// must precede the values seeded from it.
+// load/persist + localStorage fail-safety. `prefs` must precede the modules seeded
+// from it. (The notification opt-in lives in notifyui.js; push-to-talk in voiceui.js
+// — both seed from prefs and own their live value.)
 const prefs = createPrefs();
-// Desktop-notification opt-in (per browser). The OS permission is separate and
-// browser-owned; this is the in-app preference that gates it. (Push-to-talk
-// state moved into voiceui.js along with the rest of the call UI.)
-let notifEnabled = prefs.loadNotif();
 
 // Ephemeral bookkeeping owned by sibling modules (not part of `state`).
 const unread = createUnreadTracker(); // divider cursor, mark-unread suppression, mark-read POST dedupe
@@ -294,7 +278,7 @@ async function applyInstanceName() {
       if (vEl) vEl.textContent = "v" + inst.version;
     }
     if (inst.name) {
-      baseTitle = inst.name;
+      notifUI.setBaseTitle(inst.name);
       document.title = inst.name;
       for (const node of document.querySelectorAll(".brand")) node.textContent = inst.name;
     }
@@ -467,7 +451,7 @@ async function enterApp() {
   renderMe();
   rerenderSidebar();
   renderAdminVisibility();
-  renderNotificationTotal();
+  notifUI.renderNotificationTotal();
   // Check for a permalink hash (#c<channelId>/m<messageId>) before loading
   // the default channel — if present, jump there instead.
   const permalink = parsePermalink(location.hash);
@@ -524,7 +508,7 @@ async function enterApp() {
   wireIdleDetection();
   // Web Push: register the service worker + refresh the subscription if
   // notifications are on, and route SW notification clicks to the message.
-  initPushRouting();
+  notifUI.initPushRouting();
   // Returning to the tab clears the open channel's unread (you're looking now).
   window.addEventListener("focus", onWindowFocus);
   document.addEventListener("visibilitychange", () => {
@@ -733,7 +717,7 @@ function handleRealtimeEvent(evt) {
     }
     // Chime + (if opted in) an OS notification for pings; plain channel
     // chatter stays silent with just the badge.
-    if (d.ping) firePing(evt, ch);
+    if (d.ping) notifUI.firePing(evt, ch);
   }
 }
 
@@ -782,7 +766,7 @@ async function resync() {
     }
     renderMe();
     rerenderSidebar();
-    renderNotificationTotal();
+    notifUI.renderNotificationTotal();
     if (state.activeChannelId) {
       await loadChannel(state.activeChannelId);
       if (!tabUnfocused()) markActiveChannelRead();
@@ -1024,7 +1008,7 @@ function rerenderSidebar() {
 function renderSidebarBadges() {
   renderChannels();
   renderDMs();
-  renderNotificationTotal();
+  notifUI.renderNotificationTotal();
 }
 
 // removeMember (moderator+) removes another user from the active private channel.
@@ -2687,6 +2671,21 @@ const search = createSearch({
   closeDrawers,
 });
 
+// Foreground notifications — notifyui.js, e2e/notifications.spec. Owns the opt-in
+// (seeded from prefs) + baseTitle; renderNotificationTotal/firePing/renderNotifControl/
+// initPushRouting are driven from the realtime handler, sidebar badges, and profile
+// modal. voiceUI reads the opt-in via notifUI.isEnabled (below).
+const notifUI = createNotifyUI({
+  el,
+  $,
+  getState: () => state,
+  api,
+  prefs,
+  selectChannel,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+  tabUnfocused,
+});
+
 // --- control wiring: one-time event bindings, grouped by concern -------------
 
 // openLightbox shows an inline image large, centred on a dark backdrop, instead
@@ -2769,26 +2768,10 @@ function wireProfileControls() {
   // reverted (to myTheme) if the modal is dismissed without saving.
   $("#profile-theme").onchange = (e) => applyTheme(e.target.value);
 
-  // Desktop-notification opt-in. Turning it on requests the OS permission;
-  // turning it off just drops the in-app preference (the OS grant is sticky and
-  // only the browser can revoke it).
+  // Desktop-notification opt-in (the request-permission → push → persist → re-render
+  // flow lives in notifyui.js).
   const notifCb = $("#notif-enable");
-  if (notifCb) {
-    notifCb.onchange = async () => {
-      if (notifCb.checked) {
-        const perm = await requestNotificationPermission();
-        notifEnabled = perm === "granted";
-        // Also register for offline (Web Push) delivery. Best-effort: a failure
-        // here still leaves foreground notifications working.
-        if (notifEnabled) enablePush();
-      } else {
-        notifEnabled = false;
-        disablePush();
-      }
-      prefs.saveNotif(notifEnabled);
-      renderNotifControl();
-    };
-  }
+  if (notifCb) notifCb.onchange = () => notifUI.setEnabled(notifCb.checked);
   $("#profile-form").onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#profile-error");
@@ -3220,7 +3203,7 @@ const modals = createModals({
   avatarSrc,
   initials,
   startDM,
-  onProfileOpen: () => { renderNotifControl(); voiceUI.onProfileOpen(); },
+  onProfileOpen: () => { notifUI.renderNotifControl(); voiceUI.onProfileOpen(); },
   onActiveMembersChanged: (memberIds) => { activeMemberIds = memberIds; renderMembers(); },
 });
 const openInviteModal = modals.openInviteModal;
@@ -3251,169 +3234,21 @@ const openEmojiManager = adminPanel.openEmojiManager;
 const refreshEmojiManagerIfOpen = adminPanel.refreshEmojiManagerIfOpen;
 
 // --- notifications & ring alerts ---------------------------------------------
-
-// renderNotificationTotal reflects the global "missed notifications" count (the
-// sum of pings across channels) in the sidebar badge and the page title, so it's
-// visible even when the tab is in the background.
-function renderNotificationTotal() {
-  const n = S.totalMentions(state);
-  const badge = $("#notif-total");
-  if (badge) {
-    badge.textContent = n > 99 ? "99+" : String(n);
-    badge.hidden = n === 0;
-  }
-  document.title = n > 0 ? `(${n}) ${baseTitle}` : baseTitle;
-}
-
-// displayNameOf returns a user's display name, or "Someone" when the user isn't in
-// the roster — the generic actor for a notification/ring where we hold only an id.
-function displayNameOf(userId) {
-  const u = state.users[userId];
-  return u ? u.display_name : "Someone";
-}
-
-// pingLabel formats the "who" line shared by the ping toast and the OS ping
-// notification: a DM is just the sender's name; a channel message reads
-// "<sender> in #<channel>". One source of truth so the toast and the OS alert
-// never drift apart.
-function pingLabel(evt, ch) {
-  const who = displayNameOf(evt.payload.user_id);
-  return ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
-}
-
-// showPingToast renders a brief top-of-screen toast for a ping that arrives while
-// the tab is focused (where OS notifications are suppressed). Auto-dismisses after
-// 4 s; tapping navigates to the channel. Mobile only — on desktop the toast is more
-// intrusive than useful (the message is already on screen or one click away), so it
-// is gated behind the mobile-layout breakpoint.
-function showPingToast(evt, ch) {
-  if (!window.matchMedia("(max-width: 720px)").matches) return;
-  const container = $("#ping-toasts");
-  if (!container) return;
-  const label = pingLabel(evt, ch);
-  const body = (evt.payload.content || "").replace(/\n+/g, " ");
-  const toast = el("div", { class: "ping-toast" },
-    el("span", { class: "ping-toast-who" }, label),
-    body ? el("span", { class: "ping-toast-body" }, body) : null,
-  );
-  let timer;
-  const dismiss = () => { clearTimeout(timer); toast.remove(); };
-  toast.onclick = () => { dismiss(); selectChannel(evt.payload.channel_id); };
-  container.append(toast);
-  timer = setTimeout(dismiss, 4000);
-}
-
-// firePing alerts the user to a ping (DM or @-mention): always a soft chime, plus
-// an in-app toast when the tab is focused (OS notifications are suppressed then),
-// or an OS notification when they've opted in and aren't looking here. The OS path
-// routes through the service worker when one is registered (works on mobile, and
-// clicks deep-link via the SW), falling back to a page-context Notification.
-function firePing(evt, ch) {
-  boop();
-  if (!tabUnfocused()) {
-    showPingToast(evt, ch);
-    return;
-  }
-  if (!shouldNotify({ permission: currentPermission(), enabled: notifEnabled, focused: false })) {
-    return;
-  }
-  const author = state.users[evt.payload.user_id];
-  const title = pingLabel(evt, ch);
-  const body = evt.payload.content || "";
-  const tag = `rivendell-ch-${evt.payload.channel_id}`;
-  const icon = author && author.has_avatar ? api.avatarURL(author.id) : undefined;
-  const url = "/" + permalinkHash(evt.payload.channel_id, evt.payload.id);
-  showViaServiceWorker(title, { body, tag, icon, url }).then((shown) => {
-    if (!shown) {
-      showNotification(title, { body, tag, icon, onclick: () => selectChannel(evt.payload.channel_id) });
-    }
-  });
-}
-
-// (The incoming-call OS notification — fireRingNotification/clearRingNotification
-// — moved into voiceui.js with the rest of the ring flow.)
-
-// --- web push subscription ---------------------------------------------------
-
-// enablePush registers the service worker and a push subscription, then sends it
-// to the server so DMs/@-mentions arrive when the app is fully closed. Idempotent
-// and best-effort — any failure (older browser, blocked SW, denied permission)
-// leaves foreground notifications working and is logged, not surfaced.
-async function enablePush() {
-  if (!pushSupported()) return;
-  try {
-    const { enabled, key } = await api.pushKey();
-    if (!enabled || !key) return; // server has push disabled
-    const sub = await subscribeToPush(key);
-    if (!sub) return;
-    await api.pushSubscribe(pushSubscriptionPayload(sub));
-  } catch (e) {
-    console.warn("rivendell: enable push failed:", e && e.message);
-  }
-}
-
-// disablePush cancels the browser's push subscription and tells the server to
-// drop it. Best-effort.
-async function disablePush() {
-  try {
-    const endpoint = await unsubscribeFromPush();
-    if (endpoint) await api.pushUnsubscribe(endpoint);
-  } catch (e) {
-    console.warn("rivendell: disable push failed:", e && e.message);
-  }
-}
-
-// initPushRouting registers the SW (so firePing can show via it and any push
-// arrives) when notifications are already enabled, refreshes the push
-// subscription, and routes a service-worker notification click back to the right
-// message. Called once at app start.
-function initPushRouting() {
-  if (!pushSupported()) return;
-  // Route clicks the SW forwards from a background notification.
-  navigator.serviceWorker.addEventListener("message", (event) => {
-    const data = event.data || {};
-    if (data.type !== "notificationclick" || !data.url) return;
-    const hash = data.url.indexOf("#") >= 0 ? data.url.slice(data.url.indexOf("#")) : "";
-    const pl = parsePermalink(hash);
-    if (pl && state.channels[pl.channelId]) {
-      // messageId 0 is the "open the channel" sentinel a ring notification uses
-      // (real message ids start at 1) — there's no message to jump to.
-      if (pl.messageId) jumpToMessage(pl.channelId, pl.messageId);
-      else selectChannel(pl.channelId);
-    }
-    try { window.focus(); } catch (e) { /* best-effort */ }
-  });
-  // If notifications are already on, make sure the SW is live and the
-  // subscription is fresh (it can be rotated by the browser at any time).
-  if (notifEnabled && currentPermission() === "granted") {
-    ensureServiceWorker().then(() => enablePush());
-  }
-}
-
-// --- notification & PTT settings controls ------------------------------------
-
-// renderNotifControl reflects the desktop-notification opt-in into the profile
-// modal: the checkbox shows the *effective* state (preference AND OS permission),
-// and the hint explains anything blocking it.
-function renderNotifControl() {
-  const cb = $("#notif-enable");
-  const status = $("#notif-status");
-  if (!cb) return;
-  const supported = notificationsSupported();
-  const perm = currentPermission();
-  cb.checked = notifEnabled && perm === "granted";
-  cb.disabled = !supported || perm === "denied";
-  if (!status) return;
-  if (!supported) status.textContent = "Your browser doesn't support notifications.";
-  else if (perm === "denied") status.textContent = "Blocked in your browser settings — allow notifications there to use this.";
-  else if (notifEnabled && perm === "granted") status.textContent = pushSupported()
-    ? "On — you'll be notified of DMs and @-mentions, even when the app is closed."
-    : "On — you'll be notified of DMs and @-mentions when this tab isn't focused.";
-  else status.textContent = "Off — turn on to get alerts for DMs and @-mentions.";
-}
-
-// (renderPttControl — the profile-modal push-to-talk row — moved into voiceui.js;
-// app.js drives it via voiceUI.onProfileOpen from the modal's onProfileOpen hook.)
+//
+// The foreground-notification UX — the global missed-count badge/title, the
+// focused-tab ping toast, firePing's chime/toast/OS-alert decision, the Web Push
+// subscription lifecycle, and the profile opt-in control — lives in notifyui.js
+// (created in the feature-module wiring above as `notifUI`). app.js's realtime
+// handler calls notifUI.firePing on a ping; renderSidebarBadges/enterApp call
+// notifUI.renderNotificationTotal; the profile modal drives setEnabled/
+// renderNotifControl. The opt-in is read back via notifUI.isEnabled (voiceui.js's
+// ring path uses it through the injected getNotifEnabled). The incoming-call OS
+// notification and the push-to-talk control row live in voiceui.js.
+//
+// The shared label helpers moved down a layer: state.displayNameOf (the roster
+// lookup) and format.pingLabel (the "<who> in #<channel>" string), both pure and
+// unit-tested, so notifyui.js and voiceui.js share them without depending on each
+// other.
 
 // --- presence (debounced) ----------------------------------------------------
 
@@ -3540,9 +3375,9 @@ const voiceUI = createVoiceUI({
   renderVideoGrid,
   selectChannel,
   ensureDMOpen,
-  displayNameOf,
+  displayNameOf: (id) => S.displayNameOf(state, id),
   tabUnfocused,
-  getNotifEnabled: () => notifEnabled,
+  getNotifEnabled: () => notifUI.isEnabled(),
   getTelemetry: () => voiceTelemetry,
 });
 
