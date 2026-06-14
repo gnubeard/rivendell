@@ -269,7 +269,11 @@ cmd/server/main.go            entrypoint; flags; first-boot bootstrap
 internal/config/config.go     env-var config (all RIVENDELL_* vars)
 internal/auth/                password.go (PBKDF2), token.go (random + hash)
 internal/store/               store.go (open/migrate + domain structs),
-                              queries.go (all SQL),
+                              queries.go (core helpers: ErrNotFound, collectRows,
+                              exec, IsUniqueViolation), store_<domain>.go (SQL
+                              methods split by domain: users, emoji, admin, auth,
+                              invitations, channels, messages, reactions, read,
+                              push, blobs, previews),
                               migrations/0001…NNNN.sql (embedded; applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
 internal/httpapi/             server.go (routes/middleware/realtime),

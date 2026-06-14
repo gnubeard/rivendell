@@ -16,7 +16,11 @@ Some choices were forced by the build environment — removing them is not a fre
 cmd/server/main.go            entrypoint; flags; first-boot bootstrap
 internal/config/config.go     env-var config (RIVENDELL_* vars)
 internal/auth/                password.go (PBKDF2), token.go (random+hash)
-internal/store/               store.go (open/migrate + structs), queries.go (all SQL),
+internal/store/               store.go (open/migrate + structs), queries.go (core:
+                              ErrNotFound, collectRows/exec helpers, IsUniqueViolation);
+                              the SQL methods are split by domain into store_<domain>.go
+                              (users, emoji, admin, auth, invitations, channels, messages,
+                              reactions, read, push, blobs, previews),
                               migrations/ (0001..NNNN .sql, embedded + applied in order)
 internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
 internal/httpapi/             server.go (routes/middleware), handlers.go (core:
