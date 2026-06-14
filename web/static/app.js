@@ -55,6 +55,7 @@ import { createMobileCtx } from "./mobilectx.js";
 import { createVideoGrid } from "./videogrid.js";
 import { createVoiceUI } from "./voiceui.js";
 import { createNotifyUI } from "./notifyui.js";
+import { isNearBottom } from "./history.js";
 
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
@@ -112,11 +113,8 @@ let activeMemberIds = null;
 
 // Scrollback: messages load a page at a time as you scroll.
 const PAGE = 50;
-// Distance-from-bottom (px) within which the reader counts as "pinned to the live
-// tail" — the threshold that decides whether a new message auto-follows or holds
-// position. Shared by every scroll-geometry check (viewport resize, incoming
-// message, re-render) so they agree on what "at the bottom" means.
-const NEAR_BOTTOM_PX = 80;
+// NEAR_BOTTOM_PX (the "pinned to the live tail" threshold) and the isNearBottom
+// predicate now live in history.js — the home for scroll geometry. Imported above.
 let loadingOlder = false; // guards overlapping back-paging fetches
 let loadingNewer = false; // guards overlapping forward-paging fetches
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
@@ -208,7 +206,7 @@ function trackViewportHeight() {
     // viewport for the on-screen keyboard otherwise leaves the newest messages
     // hidden behind it. Measure before applying the new height.
     const ml = $("#message-list");
-    const atBottom = ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight < NEAR_BOTTOM_PX;
+    const atBottom = ml && isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight);
     const h = Math.round(vv ? vv.height : window.innerHeight);
     document.documentElement.style.setProperty("--app-height", `${h}px`);
     if (atBottom && ml) {
@@ -699,7 +697,7 @@ function handleRealtimeEvent(evt) {
         // so they see where new messages begin when they scroll down.
         if (!unread.markerFor(cid)) {
           const ml = $("#message-list");
-          if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > NEAR_BOTTOM_PX) {
+          if (ml && !isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight)) {
             unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
           }
         }
@@ -1824,7 +1822,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   // holdPosition wins over both: when paging forward through history (or jumping)
   // we must NOT snap to the bottom — that would strand the reader past the content
   // they just loaded. The caller restores/sets the scroll position itself.
-  const atBottom = !holdPosition && (forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < NEAR_BOTTOM_PX);
+  const atBottom = !holdPosition && (forceBottom || isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight));
   const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
   // Capture an in-progress inline edit before innerHTML wipes the textarea, so a
   // re-render triggered by an incoming event keeps the draft, caret, and focus.
