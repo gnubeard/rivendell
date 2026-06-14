@@ -84,109 +84,93 @@ import { createPins } from "./pins.js?v=__RIVENDELL_VERSION__";
 import { createModals } from "./modals.js?v=__RIVENDELL_VERSION__";
 import { createMobileCtx } from "./mobilectx.js?v=__RIVENDELL_VERSION__";
 
+// --- module state ------------------------------------------------------------
+// All mutable module-level state, grouped by concern. `state` is the immutable
+// world model (state.js); everything else is ephemeral session bookkeeping that
+// resets on reload. `state` is reassigned on every update — read it fresh, never
+// capture it. (TDZ isn't a concern: every read happens inside a function called
+// later, not at module-eval; the only eval-time reads are the prefs.loadX seeds,
+// and `prefs` is declared before them.)
+
+// Core app shell.
 let state = S.initialState();
 let socket = null;
 let wasOffline = false; // tracks realtime disconnects so a reconnect can resync
-let isIdle = false;    // tracks client-side idle state for re-signaling on reconnect
+let isIdle = false;     // client-side idle state, re-signaled on reconnect
 let baseTitle = document.title; // brand title, sans any "(N)" notification prefix
-let appVersion = ""; // server-reported semantic version, shown in the About dialog
-let debugTelemetryFlag = false; // server-side switch (GET /api/instance) to force WebRTC telemetry on for all clients
-// Server-reported upload size ceilings (bytes), used to reject oversized files
-// client-side before uploading. 0 = unknown (instance fetch failed) → skip the
-// pre-check and let the server enforce its own limit.
+let appVersion = "";    // server-reported semantic version, shown in the About dialog
+let debugTelemetryFlag = false; // server switch (GET /api/instance) forcing WebRTC telemetry on for all clients
+// Server-reported upload size ceilings (bytes) for the client-side pre-check.
+// 0 = unknown (instance fetch failed) → skip it and let the server enforce.
 let maxImageBytes = 0;
 let maxAvatarBytes = 0;
 
-// Browser-local preferences (notifications, push-to-talk). See prefs.js; app.js
-// holds the live values, prefs handles load/persist + localStorage fail-safety.
+// Browser-local preferences (notifications + push-to-talk). prefs.js handles
+// load/persist + localStorage fail-safety; app.js holds the live values. `prefs`
+// must precede the values seeded from it.
 const prefs = createPrefs();
 // Desktop-notification opt-in (per browser). The OS permission is separate and
-// owned by the browser; this is the user's in-app preference that gates it.
+// browser-owned; this is the in-app preference that gates it.
 let notifEnabled = prefs.loadNotif();
-// Ephemeral read-tracking bookkeeping (divider cursor, mark-unread suppression,
-// mark-read POST dedupe). See unread.js for the rules; not part of `state`.
-const unread = createUnreadTracker();
-// Per-user avatar cache-bust token. The avatar URL is otherwise stable and
-// cached, so when someone changes their avatar we bump their token to force a
-// re-fetch (the server broadcasts user.update on avatar change).
-const avatarVersion = {};
-// Inline link/embed previews live in linkpreview.js; the factory is wired below
-// the el() builder it depends on (see the "link previews" section).
-// Message ids deleted *during this session* (seen live via message.delete). Only
-// these get a "message deleted" tombstone; messages that arrive already-deleted
-// from history render as nothing, so a fresh load isn't littered with tombstones.
-const liveDeleted = new Set();
-// Per-channel composer scratch (draft text + pending uploads). See drafts.js.
-const drafts = createDraftStore();
-// The composer's attachment-upload tray (attachments.js). Created by wireComposer
-// once the DOM exists; null until then, so channel-switch calls guard with `?.`.
-let composerTray = null;
-
-// Push-to-talk (per browser, like the notification preference). When enabled,
-// the mic stays muted in a call until you hold the bound key — see
-// wirePushToTalk. pttKeyCode is a layout-independent KeyboardEvent.code
-// (default backtick); pttTransmitting is true only while the key is held;
-// pttCapturing is true while the profile-modal rebind UI awaits a keypress.
+// Push-to-talk: when enabled the mic stays muted in a call until the bound key is
+// held (see wirePushToTalk). pttKeyCode is a layout-independent KeyboardEvent.code
+// (default backtick); pttTransmitting is true only while held; pttCapturing is
+// true while the profile-modal rebind UI awaits a keypress.
 let pttEnabled = prefs.loadPttEnabled();
 let pttKeyCode = prefs.loadPttKeyCode();
 let pttTransmitting = false;
 let pttCapturing = false;
-// Member ids of the active channel when it's private (incl. DMs); null means
-// "show everyone" (public channels have no membership rows).
-let activeMemberIds = null;
 
-// Scrollback state: messages load a page at a time as you scroll up.
-const PAGE = 50;
-let loadingOlder = false; // guards against overlapping back-paging fetches
-let loadingNewer = false; // guards against overlapping forward-paging fetches
-const historyComplete = new Set(); // channelIds whose oldest message is loaded
-const viewingHistory = new Set(); // channelIds whose loaded bottom isn't the live tail
-let flashMessageId = null; // id of a jumped-to message to highlight; survives re-renders
-// Inline message editing. renderMessages is the source of truth: when a message's
-// id == editingMessageId it draws an inline editor (not the body+actions) seeded
-// from editDraft. editDraft + caret are captured/restored across re-renders so an
-// incoming message event mid-edit can't blow the editor away (see renderMessages).
+// Ephemeral bookkeeping owned by sibling modules (not part of `state`).
+const unread = createUnreadTracker(); // divider cursor, mark-unread suppression, mark-read POST dedupe
+const drafts = createDraftStore();    // per-channel composer scratch (draft text + pending uploads)
+let composerTray = null;              // attachments.js upload tray; null until wireComposer builds it (guard with ?.)
+// Per-user avatar cache-bust token: bumped on user.update(avatar) to force a
+// re-fetch of the otherwise-stable, cached avatar URL.
+const avatarVersion = {};
+// Message ids deleted *during this session* (seen live via message.delete); only
+// these earn a tombstone, so a fresh history load isn't littered with them.
+const liveDeleted = new Set();
+
+// Composer: inline message editing + reply target. renderMessages is the source
+// of truth — when a message's id == editingMessageId it draws an inline editor
+// (not body+actions) seeded from editDraft; editDraft + caret are captured and
+// restored across re-renders so an incoming event mid-edit can't blow the editor
+// away (see renderMessages).
 let editingMessageId = null;  // id of the message being edited inline, or null
 let editDraft = "";           // current text of the inline editor, preserved on re-render
 let editFocusPending = false; // focus the editor on the next render (it just opened)
 let replyingToId = null;      // id of the message the composer is replying to, or null
 
-// Which DMs are open is server-authoritative (the dm_open table): the channel
-// list endpoint only returns DMs the user has open, so state.channels holds just
-// those. Closing a DM (closeDM) hides it server-side for this user across every
-// device; starting one (startDM) or a fresh incoming message reopens it. This
-// replaced a per-browser localStorage set that reopened every DM on a new device.
+// Active-channel membership: member ids when the channel is private (incl. DMs);
+// null means "show everyone" (public channels have no membership rows). (Which
+// DMs are open is server-authoritative via the dm_open table: the channel list
+// endpoint only returns open DMs, so state.channels holds just those — closeDM
+// hides one per-user across devices, startDM / a fresh message reopens it.)
+let activeMemberIds = null;
 
-// Voice call state. ringState is set while a ring is in progress (either an
-// outgoing ring we sent, or an incoming ring we're showing the banner for).
-let ringState = null; // { channelId, direction: "outgoing"|"incoming", fromUserId }
+// Scrollback: messages load a page at a time as you scroll.
+const PAGE = 50;
+let loadingOlder = false; // guards overlapping back-paging fetches
+let loadingNewer = false; // guards overlapping forward-paging fetches
+const historyComplete = new Set(); // channelIds whose oldest message is loaded
+const viewingHistory = new Set();  // channelIds whose loaded bottom isn't the live tail
+let flashMessageId = null;         // id of a jumped-to message to highlight; survives re-renders
 
-// Secret-chat banner state now lives in secretui.js; app.js reads the pending
-// incoming request through secretUI.getSecretRequest() (see the DM list).
-// voiceCallState is the live state from voice.js (updated via callback).
-let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, videoMuted: true, participants: [] };
-// videoViewHidden: mobile user has tapped 💬 to view chat during a video call.
-// Cleared on call end, channel switch, or when both cameras go off.
-let videoViewHidden = false;
-// voiceRosters tracks voice participants per channel (sidebar display).
-// channelId → [{user_id, joined_at, muted}]
-let voiceRosters = {};
-// callParticipantIds is the set of user ids currently connected to our active
-// call (self included), derived from voiceCallState. Used to paint the on-call
-// cue in the member list and to detect joins/leaves for the greet/farewell tones.
-let callParticipantIds = new Set();
-// speakingIds is the set of user ids currently detected as speaking (voice.js
-// AnalyserNode metering, via onSpeaking). Used to pulse a ring on roster rows.
-let speakingIds = new Set();
-// voiceTelemetry is the rtcdebug capture hook when enabled (else null). Held so
-// app-side voice events (e.g. a server join denial) can be recorded alongside
-// voice.js's own lifecycle events.
-let voiceTelemetry = null;
+// Voice / call state. (Secret-chat banner state lives in secretui.js; app.js
+// reads the pending request via secretUI.getSecretRequest().)
+let ringState = null; // in-progress ring: { channelId, direction: "outgoing"|"incoming", fromUserId }
+let voiceCallState = { inCall: false, channelId: null, muted: false, deafened: false, videoMuted: true, participants: [] }; // live from voice.js (via callback)
+let videoViewHidden = false; // mobile user tapped 💬 to view chat mid video call; cleared on end / channel switch / both-cameras-off
+let voiceRosters = {};       // channelId → [{user_id, joined_at, muted}] for sidebar display
+let callParticipantIds = new Set(); // user ids on our active call (self incl.), from voiceCallState; drives the on-call cue + greet/farewell tones
+let speakingIds = new Set(); // user ids currently speaking (voice.js metering via onSpeaking); pulses a ring on roster rows
+let voiceTelemetry = null;   // rtcdebug capture hook when enabled, else null; records app-side voice events alongside voice.js's
 // DM partner volume: the header 🔊 toggles a compact slider for the other DM
-// participant (reusing voice.js per-user playout gain). dmVolumeChannelId/Open
-// track which DM the slider is bound to and whether it's expanded, so a re-render
-// (e.g. a voice.state update) doesn't collapse it mid-adjust, while a channel
-// switch or the partner leaving the call does reset it (see renderChannelHeader).
+// participant (reusing voice.js per-user playout gain). These track which DM it's
+// bound to and whether it's expanded, so a re-render doesn't collapse it
+// mid-adjust, while a channel switch / the partner leaving does reset it (see
+// renderChannelHeader).
 let dmVolumeChannelId = null;
 let dmVolumeOpen = false;
 
