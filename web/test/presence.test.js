@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { presenceClass, presenceDecision } from "../static/presence.js";
+import { presenceClass, presenceLabel, presenceDecision } from "../static/presence.js";
 
 // ---- presenceClass ----
 
@@ -24,6 +24,29 @@ test("presenceClass: online with no special status is online (green)", () => {
   assert.equal(presenceClass({ online: true }), "online");
   assert.equal(presenceClass({ online: true, status: "online" }), "online");
   assert.equal(presenceClass({ online: true, status: "anything-else" }), "online");
+});
+
+// ---- presenceLabel ----
+
+test("presenceLabel: offline wins regardless of status/idle", () => {
+  assert.equal(presenceLabel({ online: false }), "offline");
+  assert.equal(presenceLabel({ online: false, idle: true, status: "dnd" }), "offline");
+});
+
+test("presenceLabel: dnd reads as 'do not disturb', ahead of idle", () => {
+  assert.equal(presenceLabel({ online: true, status: "dnd" }), "do not disturb");
+  // dnd takes precedence over idle (unlike presenceClass, which folds idle to away)
+  assert.equal(presenceLabel({ online: true, status: "dnd", idle: true }), "do not disturb");
+});
+
+test("presenceLabel: auto-idle reads as 'idle' when not dnd", () => {
+  assert.equal(presenceLabel({ online: true, idle: true }), "idle");
+  assert.equal(presenceLabel({ online: true, idle: true, status: "online" }), "idle");
+});
+
+test("presenceLabel: otherwise the stored status word", () => {
+  assert.equal(presenceLabel({ online: true, status: "online" }), "online");
+  assert.equal(presenceLabel({ online: true, status: "away" }), "away");
 });
 
 // ---- presenceDecision ----

@@ -74,7 +74,7 @@ import { createAutocomplete } from "./autocomplete.js?v=__RIVENDELL_VERSION__";
 import { createSearch } from "./search.js?v=__RIVENDELL_VERSION__";
 import { createEmojiPicker } from "./emoji.js?v=__RIVENDELL_VERSION__";
 import { createChannelDrag } from "./channeldrag.js?v=__RIVENDELL_VERSION__";
-import { presenceClass, presenceDecision } from "./presence.js?v=__RIVENDELL_VERSION__";
+import { presenceClass, presenceLabel, presenceDecision } from "./presence.js?v=__RIVENDELL_VERSION__";
 import { createImageWarmer } from "./imagewarm.js?v=__RIVENDELL_VERSION__";
 import { createLinkPreviews } from "./linkpreview.js?v=__RIVENDELL_VERSION__";
 import { createAdminPanel } from "./admin.js?v=__RIVENDELL_VERSION__";
@@ -637,183 +637,189 @@ function onWindowFocus() {
 
 function startRealtime() {
   if (socket) socket.close();
-  socket = connectRealtime(
-    (evt) => {
-      // Presence is debounced (see schedulePresenceUpdate): a transient flip that
-      // reverts within ~1s never paints, so dots don't flicker on brief blips.
-      if (evt.type === "presence.update") { schedulePresenceUpdate(evt); return; }
-      // member.remove's side effects below need to know whether the channel was
-      // still present *before* applyEvent folds the removal in — so a removal we
-      // already did locally (leaveActiveChannel) doesn't trigger a redundant reload.
-      const hadChannel = evt.type === "member.remove" && !!state.channels[evt.payload.channel_id];
-      state = S.applyEvent(state, evt);
-      // Targeted re-renders based on event type.
-      if (evt.type.startsWith("presence") || evt.type === "user.update") {
-        if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
-          // Their avatar may have changed — force a re-fetch on next render.
-          avatarVersion[evt.payload.id] = Date.now();
-          imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
-        }
-        renderMembers();
-        renderMe();
-        renderDMs(); // a DM row shows the other participant's name + presence
-        // Author display name / avatar in the open message list may have changed.
-        if (evt.type === "user.update") renderMessages();
+  socket = connectRealtime(handleRealtimeEvent, onRealtimeConnChange);
+}
+
+// handleRealtimeEvent folds one inbound WS frame into `state` (via the pure
+// S.applyEvent / classifyIncomingMessage reducers) and routes the DOM consequences
+// by event type. The state-folding is total in state.js; what's left here is the
+// targeted re-render dispatch and the voice/secret hand-offs — DOM territory, not
+// a further pure carve (see docs/decomposition.md, "Realtime/sync").
+function handleRealtimeEvent(evt) {
+  // Presence is debounced (see schedulePresenceUpdate): a transient flip that
+  // reverts within ~1s never paints, so dots don't flicker on brief blips.
+  if (evt.type === "presence.update") { schedulePresenceUpdate(evt); return; }
+  // member.remove's side effects below need to know whether the channel was
+  // still present *before* applyEvent folds the removal in — so a removal we
+  // already did locally (leaveActiveChannel) doesn't trigger a redundant reload.
+  const hadChannel = evt.type === "member.remove" && !!state.channels[evt.payload.channel_id];
+  state = S.applyEvent(state, evt);
+  // Targeted re-renders based on event type.
+  if (evt.type.startsWith("presence") || evt.type === "user.update") {
+    if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
+      // Their avatar may have changed — force a re-fetch on next render.
+      avatarVersion[evt.payload.id] = Date.now();
+      imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
+    }
+    renderMembers();
+    renderMe();
+    renderDMs(); // a DM row shows the other participant's name + presence
+    // Author display name / avatar in the open message list may have changed.
+    if (evt.type === "user.update") renderMessages();
+  }
+  if (evt.type.startsWith("channel")) {
+    renderChannels();
+    renderDMs();
+    // Membership may have changed (e.g. someone was invited) — re-scope the
+    // members panel if the event concerns the channel we're viewing. A topic
+    // edit by another mod also arrives here, so repaint the header (unless I'm
+    // mid-edit, to avoid clobbering my own input).
+    if (evt.payload && evt.payload.id === state.activeChannelId) {
+      if (!$("#channel-topic").querySelector("input")) {
+        renderChannelHeader(state.channels[state.activeChannelId]);
       }
-      if (evt.type.startsWith("channel")) {
-        renderChannels();
-        renderDMs();
-        // Membership may have changed (e.g. someone was invited) — re-scope the
-        // members panel if the event concerns the channel we're viewing. A topic
-        // edit by another mod also arrives here, so repaint the header (unless I'm
-        // mid-edit, to avoid clobbering my own input).
-        if (evt.payload && evt.payload.id === state.activeChannelId) {
-          if (!$("#channel-topic").querySelector("input")) {
-            renderChannelHeader(state.channels[state.activeChannelId]);
-          }
-          refreshActiveMembers();
-        }
-      }
-      if (evt.type === "member.remove") {
-        const { channel_id, user_id } = evt.payload;
-        if (user_id === state.me.id) {
-          // applyEvent dropped the channel for me (non-admin); render the
-          // consequences — unless it was already gone before the fold (e.g.
-          // leaveActiveChannel handled it), which hadChannel guards.
-          if (hadChannel && !S.isAdmin(state.me)) {
-            renderChannels();
-            renderDMs();
-            renderNotificationTotal();
-            // removeChannel re-pointed activeChannelId; load the new active one.
-            if (state.activeChannelId) loadChannel(state.activeChannelId);
-          } else if (hadChannel && channel_id === state.activeChannelId) {
-            // Admin lost membership on the active channel (via another session or
-            // another admin) but keeps bypass access — hide the leave button and
-            // re-fetch so the roster is accurate.
-            $("#leave-btn").hidden = true;
-            refreshActiveMembers();
-          }
-        } else if (channel_id === state.activeChannelId && activeMemberIds) {
-          // Someone else left the channel I'm viewing — drop them from the roster
-          // immediately (no re-fetch).
-          activeMemberIds.delete(user_id);
-          renderMembers();
-        }
-      }
-      if (evt.type === "hello") {
-        // The server greets each connection with its version. If it differs from
-        // the build we loaded, a newer server is running (a deploy happened) —
-        // offer a graceful reload rather than yanking the page out from under.
-        if (appVersion && evt.payload && evt.payload.version && evt.payload.version !== appVersion) {
-          $("#update-banner").hidden = false;
-        }
-      }
-      if (evt.type === "read.update" || evt.type === "read.unread" || evt.type === "mute.update") {
-        // A session caught up on / marked unread / muted a channel (state.applyEvent
-        // already folded it in); reflect the badges and the global total.
+      refreshActiveMembers();
+    }
+  }
+  if (evt.type === "member.remove") {
+    const { channel_id, user_id } = evt.payload;
+    if (user_id === state.me.id) {
+      // applyEvent dropped the channel for me (non-admin); render the
+      // consequences — unless it was already gone before the fold (e.g.
+      // leaveActiveChannel handled it), which hadChannel guards.
+      if (hadChannel && !S.isAdmin(state.me)) {
         renderChannels();
         renderDMs();
         renderNotificationTotal();
-        // Keep 👁 button labels current in the open channel.
-        if ((evt.type === "read.update" || evt.type === "read.unread") &&
-            evt.payload.channel_id === state.activeChannelId) {
-          renderMessages();
-        }
+        // removeChannel re-pointed activeChannelId; load the new active one.
+        if (state.activeChannelId) loadChannel(state.activeChannelId);
+      } else if (hadChannel && channel_id === state.activeChannelId) {
+        // Admin lost membership on the active channel (via another session or
+        // another admin) but keeps bypass access — hide the leave button and
+        // re-fetch so the roster is accurate.
+        $("#leave-btn").hidden = true;
+        refreshActiveMembers();
       }
-      if (evt.type === "typing.update") {
-        if (evt.payload.channel_id === state.activeChannelId) renderTypingIndicator();
-      }
-      if (evt.type === "emoji.add" || evt.type === "emoji.delete") {
-        // The registry changed: re-render the open messages so :shortcode: tokens
-        // start/stop rendering as images, and refresh any open emoji surfaces.
-        renderMessages();
-        if (emojiPicker.isOpen()) emojiPicker.rerender();
-        refreshEmojiManagerIfOpen();
-      }
-      if (evt.type === "reaction.update") {
-        // applyEvent already folded the new groups into the message; just repaint
-        // the open channel (and the pins panel, which renders reactions too).
-        if (evt.payload.channel_id === state.activeChannelId) {
-          renderMessages();
-          refreshPinsIfOpen();
-        }
-      }
-      if (evt.type.startsWith("voice.")) {
-        onVoiceEvent(evt);
-      }
-      if (evt.type.startsWith("secret.")) {
-        handleSecretEvent(evt, (userId) => {
-          const u = state.users[userId];
-          return u ? u.identity_key || null : null;
-        }).catch((e) => console.warn("secret: event handler error:", e && e.message));
-      }
-      if (evt.type.startsWith("message")) {
-        // A delete seen live earns a tombstone (unlike already-deleted history).
-        if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
-        const cid = evt.payload.channel_id;
-        const ch = state.channels[cid];
-        const active = cid === state.activeChannelId;
-        const focused = !tabUnfocused();
-        // The unread/mention/ping decision matrix is a pure function of state +
-        // event + these three view booleans (see unread.js). isNewFromMe/Other
-        // come back too, for the DOM side effects below.
-        const d = classifyIncomingMessage(state, evt, {
-          active,
-          focused,
-          adminPanelOpen: !$("#admin-panel").hidden,
-        });
-        // applyEvent bumped last_message_at so the DM list stays sorted by
-        // recency; reflect a DM I just sent (ch is post-fold, already current).
-        if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
-        if (active) {
-          if (d.isNewFromMe && viewingHistory.has(cid)) {
-            // I sent while viewing a history window (below the live tail): reload
-            // the channel so my message shows at the bottom in proper context,
-            // not appended after a gap of unloaded messages.
-            loadChannel(cid);
-          } else {
-            renderMessages(d.isNewFromMe); // mine forces a jump to the newest
-          }
-          refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
-          if (focused && d.isNewFromOther) {
-            // You're looking right at it — keep the read cursor current. If the
-            // user is scrolled up, plant the marker at the current read position
-            // so they see where new messages begin when they scroll down.
-            if (!unread.markerFor(cid)) {
-              const ml = $("#message-list");
-              if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > 80) {
-                unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
-              }
-            }
-            markActiveChannelRead();
-          }
-        }
-        // Raise the unread badge for a message I won't immediately see read, and
-        // separately the mention badge so @-mentions stand out. (A message landing
-        // in a closed DM resurfaces it server-side, arriving as a channel.new just
-        // before this event — so the row is already back.)
-        if (d.countUnread) {
-          state = S.bumpUnread(state, cid);
-          if (d.countMention) state = S.bumpMention(state, cid);
-          renderChannels();
-          renderDMs();
-          renderNotificationTotal();
-        }
-        // Chime + (if opted in) an OS notification for pings; plain channel
-        // chatter stays silent with just the badge.
-        if (d.ping) firePing(evt, ch);
-      }
-    },
-    (online) => {
-      $("#conn-status").className = online ? "conn online" : "conn offline";
-      $("#conn-status").title = online ? "Connected" : "Reconnecting…";
-      // Reconnecting only resumes the *stream* of new events; anything that
-      // happened while we were dead is a gap. On a genuine reconnect (online
-      // after having been offline), resync so the view isn't stale.
-      if (online && wasOffline) resync();
-      wasOffline = !online;
+    } else if (channel_id === state.activeChannelId && activeMemberIds) {
+      // Someone else left the channel I'm viewing — drop them from the roster
+      // immediately (no re-fetch).
+      activeMemberIds.delete(user_id);
+      renderMembers();
     }
-  );
+  }
+  if (evt.type === "hello") {
+    // The server greets each connection with its version. If it differs from
+    // the build we loaded, a newer server is running (a deploy happened) —
+    // offer a graceful reload rather than yanking the page out from under.
+    if (appVersion && evt.payload && evt.payload.version && evt.payload.version !== appVersion) {
+      $("#update-banner").hidden = false;
+    }
+  }
+  if (evt.type === "read.update" || evt.type === "read.unread" || evt.type === "mute.update") {
+    // A session caught up on / marked unread / muted a channel (state.applyEvent
+    // already folded it in); reflect the badges and the global total.
+    renderChannels();
+    renderDMs();
+    renderNotificationTotal();
+    // Keep 👁 button labels current in the open channel.
+    if ((evt.type === "read.update" || evt.type === "read.unread") &&
+        evt.payload.channel_id === state.activeChannelId) {
+      renderMessages();
+    }
+  }
+  if (evt.type === "typing.update") {
+    if (evt.payload.channel_id === state.activeChannelId) renderTypingIndicator();
+  }
+  if (evt.type === "emoji.add" || evt.type === "emoji.delete") {
+    // The registry changed: re-render the open messages so :shortcode: tokens
+    // start/stop rendering as images, and refresh any open emoji surfaces.
+    renderMessages();
+    if (emojiPicker.isOpen()) emojiPicker.rerender();
+    refreshEmojiManagerIfOpen();
+  }
+  if (evt.type === "reaction.update") {
+    // applyEvent already folded the new groups into the message; just repaint
+    // the open channel (and the pins panel, which renders reactions too).
+    if (evt.payload.channel_id === state.activeChannelId) {
+      renderMessages();
+      refreshPinsIfOpen();
+    }
+  }
+  if (evt.type.startsWith("voice.")) {
+    onVoiceEvent(evt);
+  }
+  if (evt.type.startsWith("secret.")) {
+    handleSecretEvent(evt, (userId) => {
+      const u = state.users[userId];
+      return u ? u.identity_key || null : null;
+    }).catch((e) => console.warn("secret: event handler error:", e && e.message));
+  }
+  if (evt.type.startsWith("message")) {
+    // A delete seen live earns a tombstone (unlike already-deleted history).
+    if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
+    const cid = evt.payload.channel_id;
+    const ch = state.channels[cid];
+    const active = cid === state.activeChannelId;
+    const focused = !tabUnfocused();
+    // The unread/mention/ping decision matrix is a pure function of state +
+    // event + these three view booleans (see unread.js). isNewFromMe/Other
+    // come back too, for the DOM side effects below.
+    const d = classifyIncomingMessage(state, evt, {
+      active,
+      focused,
+      adminPanelOpen: !$("#admin-panel").hidden,
+    });
+    // applyEvent bumped last_message_at so the DM list stays sorted by
+    // recency; reflect a DM I just sent (ch is post-fold, already current).
+    if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
+    if (active) {
+      if (d.isNewFromMe && viewingHistory.has(cid)) {
+        // I sent while viewing a history window (below the live tail): reload
+        // the channel so my message shows at the bottom in proper context,
+        // not appended after a gap of unloaded messages.
+        loadChannel(cid);
+      } else {
+        renderMessages(d.isNewFromMe); // mine forces a jump to the newest
+      }
+      refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
+      if (focused && d.isNewFromOther) {
+        // You're looking right at it — keep the read cursor current. If the
+        // user is scrolled up, plant the marker at the current read position
+        // so they see where new messages begin when they scroll down.
+        if (!unread.markerFor(cid)) {
+          const ml = $("#message-list");
+          if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > 80) {
+            unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
+          }
+        }
+        markActiveChannelRead();
+      }
+    }
+    // Raise the unread badge for a message I won't immediately see read, and
+    // separately the mention badge so @-mentions stand out. (A message landing
+    // in a closed DM resurfaces it server-side, arriving as a channel.new just
+    // before this event — so the row is already back.)
+    if (d.countUnread) {
+      state = S.bumpUnread(state, cid);
+      if (d.countMention) state = S.bumpMention(state, cid);
+      renderChannels();
+      renderDMs();
+      renderNotificationTotal();
+    }
+    // Chime + (if opted in) an OS notification for pings; plain channel
+    // chatter stays silent with just the badge.
+    if (d.ping) firePing(evt, ch);
+  }
+}
+
+// onRealtimeConnChange paints the connection indicator and triggers a resync when
+// the socket comes back after a genuine drop (a reconnect resumes only the *stream*
+// of new events, so anything missed while dead is a gap resync closes).
+function onRealtimeConnChange(online) {
+  $("#conn-status").className = online ? "conn online" : "conn offline";
+  $("#conn-status").title = online ? "Connected" : "Reconnecting…";
+  if (online && wasOffline) resync();
+  wasOffline = !online;
 }
 
 // resync re-pulls server state after a reconnect: rosters (presence may have
@@ -933,6 +939,12 @@ function muteToggle(id) {
   }, muted ? "🔕" : "🔔");
 }
 
+// channelRowClass is the shared class string for a sidebar row (regular channel or
+// DM): active/unread/muted modifiers on the base "channel" class.
+function channelRowClass(id, active, unread) {
+  return "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
+}
+
 function renderChannels() {
   // Don't repaint mid-drag: we mutate the row order in the DOM live while a mod
   // is dragging, and a rebuild from state would yank the row out from under the
@@ -955,7 +967,7 @@ function renderChannels() {
         onclick: (e) => { e.stopPropagation(); deleteChannel(id); } }, "✕") : null);
     const unread = state.unread[id] || 0;
     const mentioned = state.mentions[id] || 0;
-    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
+    const cls = channelRowClass(id, active, unread);
     const roster = voiceRosters[id] || [];
     const voiceRow = roster.length ? el("span", { class: "ch-voice" },
       "🔊 " + roster.map(p => (state.users[p.user_id] || {}).display_name || "?").join(", ")
@@ -987,7 +999,7 @@ function renderDMs() {
     const unread = state.unread[id] || 0;
     const secretReq = secretUI.getSecretRequest();
     const hasSecretReq = !!(secretReq && secretReq.dmChannelId === id);
-    const cls = "channel" + (active ? " active" : "") + (unread ? " unread" : "") + (S.isMuted(state, id) ? " muted" : "");
+    const cls = channelRowClass(id, active, unread);
     list.append(
       el("li", { class: cls, onclick: () => selectChannel(id) },
         el("span", { class: `dot ${other ? presenceClass(other) : "offline"}` }),
@@ -1030,7 +1042,7 @@ function renderMembers() {
   });
   for (const u of users) {
     const isSelf = u.id === state.me.id;
-    const presence = !u.online ? "offline" : u.status === "dnd" ? "do not disturb" : u.idle ? "idle" : u.status;
+    const presence = presenceLabel(u);
     // Show the user's custom status text when they've set one; otherwise fall
     // back to the presence word. The title always carries the presence state.
     const statusLine = u.status_text ? u.status_text : presence;
@@ -1176,7 +1188,7 @@ async function leaveActiveChannel() {
   if (!ch || !ch.is_private || ch.is_dm) return;
   const isAdmin = S.isAdmin(state.me);
   if (!isAdmin && !confirm(`Leave #${ch.name}? You'll need an invite to rejoin.`)) return;
-  try {
+  await guard(async () => {
     await api.removeChannelMember(ch.id, state.me.id);
     if (isAdmin) {
       // Admins retain bypass access so the channel stays in their list, but they
@@ -1194,9 +1206,7 @@ async function leaveActiveChannel() {
       renderNotificationTotal();
       if (state.activeChannelId) await loadChannel(state.activeChannelId);
     }
-  } catch (ex) {
-    alert(ex.message);
-  }
+  });
 }
 
 // closeDM hides a DM from the sidebar. The close is server-authoritative and
@@ -1951,57 +1961,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   }
 
   if (inSecretView) {
-    if (secretSess.phase === "active") {
-      wrap.append(el("div", {
-        class: "secret-header" + (secretSess.verified ? " verified" : ""),
-        title: "View safety number",
-        onclick: () => openSafetyModal(state.activeChannelId, secretSess),
-      },
-        secretSess.verified
-          ? "🔒 End-to-end encrypted · verified — messages are not saved"
-          : "🔒 End-to-end encrypted — messages are not saved · safety number unverified"));
-    }
-    for (const m of secretSess.messages) {
-      const u = state.users[m.fromUserId];
-      const avatar = u && u.has_avatar
-        ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(m.fromUserId)})` })
-        : el("div", { class: "msg-avatar" }, initials(u ? u.display_name : "?"));
-      const body = el("div", { class: "msg-body" });
-      body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true, channels: state.channels, users: state.users });
-      wrap.append(
-        el("div", { class: "msg secret" },
-          avatar,
-          el("div", { class: "msg-main" },
-            el("div", { class: "msg-head" },
-              el("span", { class: "msg-author" }, u ? (u.display_name || u.username) : "?"),
-              el("span", { class: "msg-time" }, new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
-            body)));
-    }
-    if (secretSess.phase === "ended") {
-      const activeCh = state.channels[state.activeChannelId];
-      const otherId = activeCh && S.otherDMParticipant(activeCh, state.me && state.me.id);
-      const peer = otherId && state.users[otherId];
-      const peerName = peer ? (peer.display_name || peer.username) : "The other person";
-      wrap.append(el("div", { class: "secret-ended-notice" },
-        el("span", {}, "🔒 " + peerName + " has left this session — messages were not saved"),
-        el("button", {
-          class: "link small",
-          onclick: () => {
-            clearEndedSession(state.activeChannelId);
-            renderMessages(true);
-            renderChannelHeader(state.channels[state.activeChannelId]);
-            const inp = $("#composer-input");
-            if (inp) { inp.disabled = false; inp.placeholder = "Message…"; }
-          },
-        }, "Return to chat")));
-    }
-    const inp = $("#composer-input");
-    if (inp) {
-      inp.disabled = secretSess.phase === "ended";
-      inp.placeholder = secretSess.phase === "ended" ? "Session ended" : "Message…";
-    }
-    if (atBottom) wrap.scrollTop = wrap.scrollHeight;
-    else wrap.scrollTop = prevTop;
+    renderSecretView(wrap, secretSess, atBottom, prevTop);
     return;
   }
   const msgs = state.messages[state.activeChannelId] || [];
@@ -2063,7 +2023,6 @@ function renderMessages(forceBottom = false, holdPosition = false) {
         el("span", { class: "unread-marker-label" }, "New messages")));
     }
 
-    const author = state.users[m.user_id];
     const t = new Date(m.created_at).getTime();
     // A reply always starts a fresh (non-grouped) block so its quote sits cleanly
     // under the author header it belongs to, rather than being tucked under a
@@ -2071,79 +2030,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     const grouped = m.user_id === lastUser && t - lastTime < 5 * 60 * 1000 && !m.reply_to_id;
     lastUser = m.user_id;
     lastTime = t;
-
-    const editing = m.id === editingMessageId;
-    const replyQuote = editing ? null : buildReplyQuote(m);
-    const preview = editing ? null : buildLinkPreview(m.content);
-    const hideUrl = preview
-      ? (extractHideURL(m.content, location.origin) || preview._previewUrl || null)
-      : null;
-    const body = editing
-      ? editorFor(m)
-      : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
-    const mentionsMe = m.user_id !== state.me.id &&
-      (mentionsUser(m.content, state.me.username) || m.reply_to_user_id === state.me.id);
-
-    const isOwn = m.user_id === state.me.id;
-    const canDelete = isOwn || isMod; // non-mods can only delete their own
-    // Anyone who can see a message can react to it, so "react" is always present;
-    // edit/pin/delete stay conditional.
-    const isRead = m.id <= (state.lastRead[state.activeChannelId] || 0);
-    const actions = el("div", { class: "msg-actions" },
-      el("button", { class: "msg-act", title: "Add reaction",
-        onclick: (e) => { e.stopPropagation(); emojiPicker.openForReaction(m.id, e.currentTarget); } }, "😄"),
-      el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
-      !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
-      el("button", { class: "msg-act", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
-      isOwn ? el("button", { class: "msg-act", title: "Edit", onclick: () => startEdit(m) }, "✏") : null,
-      canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", onclick: () => togglePin(m) }, "📌") : null,
-      canDelete ? el("button", { class: "msg-act danger", title: "Delete", onclick: () => deleteMessage(m) }, "🗑") : null);
-    const reactions = editing ? null : reactionsRow(m);
-    const rowActions = editing ? null : actions;
-    const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
-    let cls = "msg";
-    if (m.pinned_at) cls += " pinned";
-    if (mentionsMe) cls += " mentioned";
-    if (m.id === flashMessageId) cls += " msg-anchor"; // jumped-to highlight, applied each render
-
-    const permalink = el("a", {
-      class: "msg-time",
-      href: permalinkHash(state.activeChannelId, m.id),
-      title: "Permalink",
-      onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
-    }, formatTime(m.created_at));
-
-    if (grouped) {
-      wrap.append(el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, replyQuote, body, preview, reactions, rowActions)));
-    } else {
-      // Clicking the avatar or name opens the author's profile card.
-      const openCard = author ? () => openUserCard(author.id) : null;
-      const avatarAttrs = author
-        ? { class: "msg-avatar clickable", title: "View profile", onclick: openCard }
-        : { class: "msg-avatar" };
-      const avatar = author && author.has_avatar
-        ? el("div", { ...avatarAttrs, style: `background-image:url(${avatarSrc(author.id)})` })
-        : el("div", avatarAttrs, initials(author ? author.display_name : "?"));
-      wrap.append(
-        el("div", { class: cls, "data-msg-id": m.id },
-          avatar,
-          el("div", { class: "msg-main" },
-            el("div", { class: "msg-head" },
-              el("span", author
-                ? { class: "msg-author clickable", title: "View profile", onclick: openCard }
-                : { class: "msg-author" }, author ? author.display_name : "unknown"),
-              permalink,
-              pinMark
-            ),
-            replyQuote,
-            body,
-            preview,
-            reactions,
-            rowActions
-          )
-        )
-      );
-    }
+    wrap.append(messageRow(m, { grouped, isMod, canPin }));
     i++;
   }
   // Zero-height sentinels at each end drive infinite scroll via IntersectionObserver
@@ -2175,6 +2062,149 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }
     editFocusPending = false;
   }
+}
+
+// renderSecretView paints the in-memory encrypted message list for an active or
+// ended OTR secret session (state.js holds none of it — secret.js owns it). The
+// caller early-returns on inSecretView; this owns the composer enable/placeholder
+// and final scroll restore for that mode.
+function renderSecretView(wrap, secretSess, atBottom, prevTop) {
+  if (secretSess.phase === "active") {
+    wrap.append(el("div", {
+      class: "secret-header" + (secretSess.verified ? " verified" : ""),
+      title: "View safety number",
+      onclick: () => openSafetyModal(state.activeChannelId, secretSess),
+    },
+      secretSess.verified
+        ? "🔒 End-to-end encrypted · verified — messages are not saved"
+        : "🔒 End-to-end encrypted — messages are not saved · safety number unverified"));
+  }
+  for (const m of secretSess.messages) {
+    const u = state.users[m.fromUserId];
+    const avatar = u && u.has_avatar
+      ? el("div", { class: "msg-avatar", style: `background-image:url(${avatarSrc(m.fromUserId)})` })
+      : el("div", { class: "msg-avatar" }, initials(u ? u.display_name : "?"));
+    const body = el("div", { class: "msg-body" });
+    body.innerHTML = formatMessage(m.text, state.me.username, state.emojis, { embedImages: true, channels: state.channels, users: state.users });
+    wrap.append(
+      el("div", { class: "msg secret" },
+        avatar,
+        el("div", { class: "msg-main" },
+          el("div", { class: "msg-head" },
+            el("span", { class: "msg-author" }, u ? (u.display_name || u.username) : "?"),
+            el("span", { class: "msg-time" }, new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
+          body)));
+  }
+  if (secretSess.phase === "ended") {
+    const activeCh = state.channels[state.activeChannelId];
+    const otherId = activeCh && S.otherDMParticipant(activeCh, state.me && state.me.id);
+    const peer = otherId && state.users[otherId];
+    const peerName = peer ? (peer.display_name || peer.username) : "The other person";
+    wrap.append(el("div", { class: "secret-ended-notice" },
+      el("span", {}, "🔒 " + peerName + " has left this session — messages were not saved"),
+      el("button", {
+        class: "link small",
+        onclick: () => {
+          clearEndedSession(state.activeChannelId);
+          renderMessages(true);
+          renderChannelHeader(state.channels[state.activeChannelId]);
+          const inp = $("#composer-input");
+          if (inp) { inp.disabled = false; inp.placeholder = "Message…"; }
+        },
+      }, "Return to chat")));
+  }
+  const inp = $("#composer-input");
+  if (inp) {
+    inp.disabled = secretSess.phase === "ended";
+    inp.placeholder = secretSess.phase === "ended" ? "Session ended" : "Message…";
+  }
+  if (atBottom) wrap.scrollTop = wrap.scrollHeight;
+  else wrap.scrollTop = prevTop;
+}
+
+// messageActions builds the hover action row for one message. React and Reply are
+// always present; Forward hides on a tombstone; Edit/Pin/Delete are gated by the
+// ownership/role flags the caller computed (isOwn/canPin/canDelete).
+function messageActions(m, { isOwn, canPin, canDelete, isRead }) {
+  return el("div", { class: "msg-actions" },
+    el("button", { class: "msg-act", title: "Add reaction",
+      onclick: (e) => { e.stopPropagation(); emojiPicker.openForReaction(m.id, e.currentTarget); } }, "😄"),
+    el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
+    !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
+    el("button", { class: "msg-act", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
+    isOwn ? el("button", { class: "msg-act", title: "Edit", onclick: () => startEdit(m) }, "✏") : null,
+    canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", onclick: () => togglePin(m) }, "📌") : null,
+    canDelete ? el("button", { class: "msg-act danger", title: "Delete", onclick: () => deleteMessage(m) }, "🗑") : null);
+}
+
+// messageRow builds one rendered message element — the grouped (continuation,
+// avatarless) or full (avatar + author header) shape, with reply quote, link
+// preview, reactions, and the hover action row. While this message is being edited
+// inline (m.id === editingMessageId) the body becomes the editor and the
+// quote/preview/reactions/actions are suppressed. isMod/canPin are computed once
+// per render by the caller and threaded through.
+function messageRow(m, { grouped, isMod, canPin }) {
+  const editing = m.id === editingMessageId;
+  const replyQuote = editing ? null : buildReplyQuote(m);
+  const preview = editing ? null : buildLinkPreview(m.content);
+  const hideUrl = preview
+    ? (extractHideURL(m.content, location.origin) || preview._previewUrl || null)
+    : null;
+  const body = editing
+    ? editorFor(m)
+    : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+  const mentionsMe = m.user_id !== state.me.id &&
+    (mentionsUser(m.content, state.me.username) || m.reply_to_user_id === state.me.id);
+
+  const isOwn = m.user_id === state.me.id;
+  const canDelete = isOwn || isMod; // non-mods can only delete their own
+  // Anyone who can see a message can react to it, so "react" is always present;
+  // edit/pin/delete stay conditional (see messageActions).
+  const isRead = m.id <= (state.lastRead[state.activeChannelId] || 0);
+  const rowActions = editing ? null : messageActions(m, { isOwn, canPin, canDelete, isRead });
+  const reactions = editing ? null : reactionsRow(m);
+  const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
+  let cls = "msg";
+  if (m.pinned_at) cls += " pinned";
+  if (mentionsMe) cls += " mentioned";
+  if (m.id === flashMessageId) cls += " msg-anchor"; // jumped-to highlight, applied each render
+
+  const permalink = el("a", {
+    class: "msg-time",
+    href: permalinkHash(state.activeChannelId, m.id),
+    title: "Permalink",
+    onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
+  }, formatTime(m.created_at));
+
+  if (grouped) {
+    return el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, replyQuote, body, preview, reactions, rowActions));
+  }
+  // Clicking the avatar or name opens the author's profile card.
+  const author = state.users[m.user_id];
+  const openCard = author ? () => openUserCard(author.id) : null;
+  const avatarAttrs = author
+    ? { class: "msg-avatar clickable", title: "View profile", onclick: openCard }
+    : { class: "msg-avatar" };
+  const avatar = author && author.has_avatar
+    ? el("div", { ...avatarAttrs, style: `background-image:url(${avatarSrc(author.id)})` })
+    : el("div", avatarAttrs, initials(author ? author.display_name : "?"));
+  return el("div", { class: cls, "data-msg-id": m.id },
+    avatar,
+    el("div", { class: "msg-main" },
+      el("div", { class: "msg-head" },
+        el("span", author
+          ? { class: "msg-author clickable", title: "View profile", onclick: openCard }
+          : { class: "msg-author" }, author ? author.display_name : "unknown"),
+        permalink,
+        pinMark
+      ),
+      replyQuote,
+      body,
+      preview,
+      reactions,
+      rowActions
+    )
+  );
 }
 
 // --- replies -----------------------------------------------------------------
@@ -2803,16 +2833,18 @@ function closeModal(m) {
 function wireDelegatedClicks() {
   document.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // closest is only on Elements; a text-node target (?.()) yields undefined.
+    const closest = (sel) => e.target.closest?.(sel);
     // Spoiler reveal: clicking an unrevealed spoiler reveals it; eats the click so
     // links inside the spoiler don't fire before the user has seen the content.
-    const spoiler = e.target.closest && e.target.closest(".spoiler");
+    const spoiler = closest(".spoiler");
     if (spoiler && !spoiler.classList.contains("revealed")) {
       e.preventDefault();
       spoiler.classList.add("revealed");
       return;
     }
     // Channel links (#channelname) navigate to the channel in-app.
-    const chLink = e.target.closest && e.target.closest("a.channel-link");
+    const chLink = closest("a.channel-link");
     if (chLink) {
       e.preventDefault();
       const id = parseInt(chLink.dataset.channelId, 10);
@@ -2823,13 +2855,13 @@ function wireDelegatedClicks() {
     // image is wrapped in an a.msg-image-link; intercept that anchor (unmodified
     // left clicks only — the modifier checks above already let new-tab intent
     // through) and show the lightbox instead of navigating.
-    const imgLink = e.target.closest && e.target.closest("a.msg-image-link");
+    const imgLink = closest("a.msg-image-link");
     if (imgLink) {
       e.preventDefault();
       openLightbox(imgLink.getAttribute("href"));
       return;
     }
-    const a = e.target.closest && e.target.closest("a[href]");
+    const a = closest("a[href]");
     if (!a) return;
     let u;
     try { u = new URL(a.href, location.href); } catch (_) { return; }
@@ -2905,7 +2937,7 @@ function wireProfileControls() {
     e.target.value = ""; // allow re-picking the same file after a rejection
     if (!file) return;
     if (fileTooLarge(file, maxAvatarBytes, "avatar")) return;
-    try {
+    await guard(async () => {
       await api.uploadAvatar(file);
       const me = await api.me();
       avatarVersion[me.id] = Date.now(); // bust the cache so the new avatar shows now
@@ -2913,9 +2945,7 @@ function wireProfileControls() {
       state = S.setMe(state, me);
       renderMe();
       renderMessages(); // my own messages in view should pick up the new avatar
-    } catch (ex) {
-      alert(ex.message);
-    }
+    });
   };
 }
 

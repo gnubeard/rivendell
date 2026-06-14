@@ -178,8 +178,11 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   now total over state-mutating events (the `message.new` last_message_at bump and
   `member.remove` channel drop moved in), and the unread/mention/ping decision
   matrix is a tested pure function (`classifyIncomingMessage` in `unread.js`) the
-  handler feeds three view booleans (active/focused/adminPanelOpen). What's left in
-  the handler is genuinely DOM-heavy: per-event-type re-render routing, scroll-
+  handler feeds three view booleans (active/focused/adminPanelOpen). The handler
+  itself is now the top-level `handleRealtimeEvent(evt)` (with `onRealtimeConnChange`
+  for the conn-status/resync side), so `startRealtime` is just socket lifecycle and
+  the dispatch is named/navigable rather than an anonymous closure argument. What's
+  left in it is genuinely DOM-heavy: per-event-type re-render routing, scroll-
   geometry marker placement, and `voice.*`/`secret.*` dispatch — e2e territory,
   not a further pure carve.
 
@@ -196,3 +199,12 @@ orchestration): the video grid, reactions (woven into message rendering + the
 rendering/loading, channel header/selection. The next worthwhile work here is
 different in kind — tightening that spine (e.g. leaning the realtime handler harder
 on `state.applyEvent`), not carving out more modules.
+
+That spine-tightening is ongoing and is a distinct axis from module extraction: it
+splits oversized orchestrator functions into named in-file helpers (same file, no
+`createX(deps)` surface, e2e stays the net) and lifts any pure fragment to its home
+module. Done so far: the realtime handler named out (above); `renderMessages` split
+into `renderSecretView` + `messageRow` + `messageActions`; the sidebar-row class
+string deduped into `channelRowClass`; the roster presence word lifted to a pure,
+unit-tested `presenceLabel` in `presence.js`; and the fire-and-alert API calls that
+don't self-recover routed through the shared `guard()` helper.

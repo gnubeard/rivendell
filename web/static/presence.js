@@ -19,6 +19,18 @@ export function presenceClass(u) {
   return "online";
 }
 
+// presenceLabel maps a user to the human-readable presence word shown in the
+// member roster (the title and the fallback status line). Unlike presenceClass
+// (the dot *color*, which folds idle into away's amber), this keeps the states
+// distinct: offline wins outright; then dnd reads as "do not disturb", auto-idle
+// as "idle"; otherwise the stored status word ("online"/"away").
+export function presenceLabel(u) {
+  if (!u.online) return "offline";
+  if (u.status === "dnd") return "do not disturb";
+  if (u.idle) return "idle";
+  return u.status;
+}
+
 // presenceDecision decides what to do with an incoming presence.update for some
 // user — the flicker-suppression rules. The caller supplies the facts; this is
 // the pure policy:
