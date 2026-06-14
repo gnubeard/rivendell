@@ -66,8 +66,15 @@ test("dragging a row reorders it, and the order persists across reload", async (
   // Sanity: fresh channels (position 0) sort by name → a, b, c.
   expect(await trioOrder()).toEqual([N1, N2, N3]);
 
-  const src = await page.locator("#channel-list .channel", { hasText: N3 }).boundingBox();
-  const dst = await page.locator("#channel-list .channel", { hasText: N1 }).boundingBox();
+  // The reused e2e database accumulates channels across runs; the trio can sit
+  // below the sidebar's scroll fold. Scroll it into view first so the drag
+  // coordinates land on real on-screen rows (the three are adjacent, so bringing
+  // N3 into view shows N1/N2 too).
+  const srcRow = page.locator("#channel-list .channel", { hasText: N3 });
+  const dstRow = page.locator("#channel-list .channel", { hasText: N1 });
+  await srcRow.scrollIntoViewIfNeeded();
+  const src = await srcRow.boundingBox();
+  const dst = await dstRow.boundingBox();
 
   // Drag N3 (bottom) to above N1 (top of the trio).
   await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
