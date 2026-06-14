@@ -137,3 +137,11 @@ API) only for hostnames on the allowlist: a hardcoded default set in `config.go`
 `404` (`http.NotFound`, no JSON — the allowlist isn't leaked), which `api.getLinkPreview`
 maps to a "no card" marker without throwing. An empty allowlist disables the feature.
 YouTube + message-permalink embeds are client-side only and were intentionally kept.
+SSRF hardening (`newPreviewClient`): the outbound fetch client refuses to dial any
+non-public IP (loopback/RFC1918/ULA/link-local incl. the 169.254.169.254 metadata
+endpoint) via a `net.Dialer.Control` hook — vetting the resolved IP at connect time, so
+DNS rebinding can't bypass it — AND re-applies the https + `domainAllowed` checks on
+**every** redirect hop, not just the entry URL, so an allowlisted host's open redirect
+can't pivot the fetch off-allowlist or inward. The allowlist alone is enforced once, at
+the door; these two guards keep it true end-to-end. Guarded by `TestIsPublicIP`,
+`TestCheckPreviewRedirect`, `TestPreviewClientRefusesInternal`.

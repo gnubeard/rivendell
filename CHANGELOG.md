@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-06-14
+
+### Security
+- Link-preview proxy now refuses to connect to non-public IP addresses (loopback, private, link-local including the cloud-metadata endpoint) and re-applies the https + domain allowlist on every redirect hop. Closes a server-side request forgery (SSRF) vector where an allowlisted host could redirect the fetch toward an internal address.
+
 ## [1.5.0] - 2026-06-14
 
 ### Added

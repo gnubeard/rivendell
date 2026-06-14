@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,11 +27,7 @@ func TestOGTagParsing(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	old := previewHTTPClient
-	previewHTTPClient = origin.Client()
-	defer func() { previewHTTPClient = old }()
-
-	lp, err := fetchOGTags(context.Background(), origin.URL+"/article")
+	lp, err := fetchOGTags(context.Background(), origin.Client(), origin.URL+"/article")
 	if err != nil {
 		t.Fatalf("fetchOGTags: %v", err)
 	}
@@ -61,11 +59,7 @@ func TestOGTagDescriptionFallback(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	old := previewHTTPClient
-	previewHTTPClient = origin.Client()
-	defer func() { previewHTTPClient = old }()
-
-	lp, err := fetchOGTags(context.Background(), origin.URL+"/")
+	lp, err := fetchOGTags(context.Background(), origin.Client(), origin.URL+"/")
 	if err != nil {
 		t.Fatalf("fetchOGTags: %v", err)
 	}
@@ -88,14 +82,10 @@ func TestWikipediaSummaryFetch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	old := previewHTTPClient
-	previewHTTPClient = srv.Client()
-	defer func() { previewHTTPClient = old }()
-
 	// Fake a wikipedia.org URL pointing at the test TLS server.
 	rawURL := srv.URL + "/wiki/Gopher"
 	u, _ := url.Parse(rawURL)
-	lp, err := fetchWikipediaSummary(context.Background(), rawURL, u)
+	lp, err := fetchWikipediaSummary(context.Background(), srv.Client(), rawURL, u)
 	if err != nil {
 		t.Fatalf("fetchWikipediaSummary: %v", err)
 	}
@@ -124,10 +114,6 @@ func TestFetchPreviewDispatches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	old := previewHTTPClient
-	previewHTTPClient = srv.Client()
-	defer func() { previewHTTPClient = old }()
-
 	// Simulate a *.wikipedia.org URL by constructing a URL whose hostname ends
 	// in ".wikipedia.org" — we swap the host after parsing so the TLS server
 	// is actually dialed, but the dispatch logic runs on the original string.
@@ -136,11 +122,93 @@ func TestFetchPreviewDispatches(t *testing.T) {
 	// Override hostname check by calling fetchWikipediaSummary directly with a
 	// crafted *url.URL that has a Wikipedia-shaped path.
 	u.Path = "/wiki/Python"
-	if _, err := fetchWikipediaSummary(context.Background(), rawURL, u); err != nil {
+	if _, err := fetchWikipediaSummary(context.Background(), srv.Client(), rawURL, u); err != nil {
 		t.Fatalf("fetchWikipediaSummary: %v", err)
 	}
 	if gotPath != "/api/rest_v1/page/summary/Python" {
 		t.Errorf("API path = %q, want /api/rest_v1/page/summary/Python", gotPath)
+	}
+}
+
+// TestIsPublicIP pins the SSRF dial-guard predicate: only routable public
+// addresses are allowed; loopback, private, link-local (incl. the cloud
+// metadata endpoint), unspecified, and multicast are refused.
+func TestIsPublicIP(t *testing.T) {
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"1.1.1.1", true},
+		{"140.82.112.3", true}, // github.com-ish public
+		{"2606:2800:220:1::1", true},
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"10.0.0.5", false},
+		{"172.16.0.1", false},
+		{"192.168.1.1", false},
+		{"169.254.169.254", false}, // cloud metadata
+		{"fe80::1", false},         // link-local
+		{"fc00::1", false},         // unique local
+		{"0.0.0.0", false},
+		{"224.0.0.1", false}, // multicast
+	}
+	for _, c := range cases {
+		ip := net.ParseIP(c.ip)
+		if ip == nil {
+			t.Fatalf("bad test IP %q", c.ip)
+		}
+		if got := isPublicIP(ip); got != c.want {
+			t.Errorf("isPublicIP(%s) = %v, want %v", c.ip, got, c.want)
+		}
+	}
+}
+
+// TestCheckPreviewRedirect verifies the per-hop redirect policy re-applies the
+// https + allowlist checks (an open redirect on an allowlisted host must not
+// bounce the fetch to an off-allowlist or downgraded destination).
+func TestCheckPreviewRedirect(t *testing.T) {
+	allowed := func(h string) bool { return h == "github.com" }
+	policy := checkPreviewRedirect(allowed)
+
+	mk := func(rawurl string) *http.Request {
+		u, _ := url.Parse(rawurl)
+		return &http.Request{URL: u}
+	}
+
+	if err := policy(mk("https://github.com/a"), nil); err != nil {
+		t.Errorf("allowlisted https hop should pass, got %v", err)
+	}
+	if err := policy(mk("https://evil.example.com/a"), nil); err == nil {
+		t.Error("redirect to non-allowlisted host should be refused")
+	}
+	if err := policy(mk("http://github.com/a"), nil); err == nil {
+		t.Error("redirect to non-https should be refused")
+	}
+	// Sixth hop (five prior) must be refused regardless of host.
+	via := make([]*http.Request, 5)
+	if err := policy(mk("https://github.com/a"), via); err == nil {
+		t.Error("redirect past the hop limit should be refused")
+	}
+}
+
+// TestPreviewClientRefusesInternal verifies the dial Control hook rejects a
+// connection to a loopback address even when the redirect/allowlist checks
+// would otherwise permit it — the end-to-end SSRF backstop.
+func TestPreviewClientRefusesInternal(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><head></head></html>"))
+	}))
+	defer origin.Close()
+
+	// allowed=true so only the dial guard can reject; the server is on 127.0.0.1.
+	client := newPreviewClient(func(string) bool { return true })
+	_, err := fetchOGTags(context.Background(), client, origin.URL+"/x")
+	if err == nil {
+		t.Fatal("expected dial to loopback address to be refused")
+	}
+	if !strings.Contains(err.Error(), "non-public") {
+		t.Errorf("error = %v, want a non-public-address refusal", err)
 	}
 }
 

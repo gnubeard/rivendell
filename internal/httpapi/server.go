@@ -41,17 +41,18 @@ const sessionCookie = "rivendell_session"
 type typingKey struct{ channelID, userID int64 }
 
 type Server struct {
-	cfg          config.Config
-	st           *store.Store
-	hub          *ws.Hub
-	blobStore    *blobs.FSStore
-	pusher       *push.Sender // nil if Web Push couldn't be initialised (push disabled)
-	telemetryLog *slog.Logger // dedicated logfmt logger for WebRTC debug telemetry
-	typingMu     sync.Mutex
-	typingTimers map[typingKey]*time.Timer
-	ringMu       sync.Mutex
-	rings        map[int64]*activeRing // DM channelID → pending ring
-	inFlight     sync.Map              // URL → struct{} for in-flight link-preview fetches
+	cfg           config.Config
+	st            *store.Store
+	hub           *ws.Hub
+	blobStore     *blobs.FSStore
+	pusher        *push.Sender // nil if Web Push couldn't be initialised (push disabled)
+	telemetryLog  *slog.Logger // dedicated logfmt logger for WebRTC debug telemetry
+	typingMu      sync.Mutex
+	typingTimers  map[typingKey]*time.Timer
+	ringMu        sync.Mutex
+	rings         map[int64]*activeRing // DM channelID → pending ring
+	inFlight      sync.Map              // URL → struct{} for in-flight link-preview fetches
+	previewClient *http.Client          // SSRF-guarded outbound client for link-preview fetches
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
@@ -74,6 +75,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 		}
 	}
 	s.initPush()
+	s.previewClient = newPreviewClient(s.domainAllowed)
 	return s
 }
 

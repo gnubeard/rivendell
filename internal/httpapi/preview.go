@@ -9,10 +9,12 @@ import (
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"rivendell/internal/store"
@@ -27,22 +29,73 @@ var (
 	attrRE = regexp.MustCompile(`(?i)([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 )
 
-// previewHTTPClient follows up to 5 redirects but refuses non-HTTPS hops.
-var previewHTTPClient = &http.Client{
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+// isPublicIP reports whether ip is a routable public address. The link-preview
+// fetcher refuses everything else — loopback, RFC1918/ULA private, link-local
+// (including the 169.254.169.254 cloud-metadata endpoint), unspecified, and
+// multicast — so an allowlisted host that redirects or resolves to an internal
+// address cannot be used to reach the server's own network. See the SSRF note
+// in CLAUDE.md.
+func isPublicIP(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast())
+}
+
+// checkPreviewRedirect builds a CheckRedirect policy that keeps the fetcher on
+// https and on allowlisted hosts for EVERY hop, not just the first. The entry
+// handler allowlists the initial URL, but an open redirect on an allowlisted
+// host would otherwise bounce the fetch to an arbitrary destination.
+func checkPreviewRedirect(allowed func(hostname string) bool) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("too many redirects")
 		}
 		if req.URL.Scheme != "https" {
-			return fmt.Errorf("redirect to non-https")
+			return fmt.Errorf("redirect to non-https %q", req.URL.Scheme)
+		}
+		if !allowed(req.URL.Hostname()) {
+			return fmt.Errorf("redirect to non-allowlisted host %q", req.URL.Hostname())
 		}
 		return nil
-	},
+	}
+}
+
+// newPreviewClient builds the outbound client for link-preview fetches with two
+// SSRF guards: a dial Control hook that refuses non-public IPs (catching DNS
+// rebinding and redirects to internal addresses at connect time, before TLS),
+// and a CheckRedirect policy that re-applies the https + allowlist checks on
+// every hop.
+func newPreviewClient(allowed func(hostname string) bool) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   8 * time.Second,
+		KeepAlive: 30 * time.Second,
+		// Control runs after DNS resolution with the concrete IP that will be
+		// dialed, so vetting here is immune to rebinding between resolve and connect.
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || !isPublicIP(ip) {
+				return fmt.Errorf("refusing to dial non-public address %s", address)
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext:           dialer.DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 8 * time.Second,
+		},
+		CheckRedirect: checkPreviewRedirect(allowed),
+	}
 }
 
 // fetchOGTags fetches rawURL and extracts og: meta-tag values. ExpiresAt is
 // intentionally left zero — the caller sets it based on success or failure.
-func fetchOGTags(ctx context.Context, rawURL string) (store.LinkPreview, error) {
+func fetchOGTags(ctx context.Context, client *http.Client, rawURL string) (store.LinkPreview, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return store.LinkPreview{}, err
@@ -50,7 +103,7 @@ func fetchOGTags(ctx context.Context, rawURL string) (store.LinkPreview, error) 
 	req.Header.Set("User-Agent", "rivendell/1.0 (+link-preview-bot)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
-	resp, err := previewHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return store.LinkPreview{}, err
 	}
@@ -164,7 +217,7 @@ func (s *Server) domainAllowed(hostname string) bool {
 
 // fetchWikipediaSummary calls the Wikipedia REST summary API for a /wiki/ URL.
 // It is invoked by fetchPreview and must not be called for non-Wikipedia URLs.
-func fetchWikipediaSummary(ctx context.Context, rawURL string, u *url.URL) (store.LinkPreview, error) {
+func fetchWikipediaSummary(ctx context.Context, client *http.Client, rawURL string, u *url.URL) (store.LinkPreview, error) {
 	title := strings.TrimPrefix(u.Path, "/wiki/")
 	apiURL := "https://" + u.Host + "/api/rest_v1/page/summary/" + title
 
@@ -175,7 +228,7 @@ func fetchWikipediaSummary(ctx context.Context, rawURL string, u *url.URL) (stor
 	req.Header.Set("User-Agent", "rivendell/1.0 (+link-preview-bot)")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := previewHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return store.LinkPreview{}, err
 	}
@@ -208,16 +261,16 @@ func fetchWikipediaSummary(ctx context.Context, rawURL string, u *url.URL) (stor
 
 // fetchPreview fetches a link preview for rawURL. Wikipedia article URLs use
 // the Wikipedia REST summary API; all other URLs use og: tag scraping.
-func fetchPreview(ctx context.Context, rawURL string) (store.LinkPreview, error) {
+func fetchPreview(ctx context.Context, client *http.Client, rawURL string) (store.LinkPreview, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return store.LinkPreview{}, err
 	}
 	if strings.HasSuffix(strings.ToLower(u.Hostname()), ".wikipedia.org") &&
 		strings.HasPrefix(u.Path, "/wiki/") && len(u.Path) > len("/wiki/") {
-		return fetchWikipediaSummary(ctx, rawURL, u)
+		return fetchWikipediaSummary(ctx, client, rawURL, u)
 	}
-	return fetchOGTags(ctx, rawURL)
+	return fetchOGTags(ctx, client, rawURL)
 }
 
 // fetchAndCache fetches og: tags for rawURL and saves the result. It uses
@@ -231,7 +284,7 @@ func (s *Server) fetchAndCache(rawURL string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	lp, err := fetchPreview(ctx, rawURL)
+	lp, err := fetchPreview(ctx, s.previewClient, rawURL)
 	if err != nil {
 		lp = store.LinkPreview{
 			URL:       rawURL,
