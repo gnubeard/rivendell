@@ -919,7 +919,12 @@ func (s *Server) handleSecretWSMessage(c *ws.Client, raw []byte, msgType string,
 const instanceNamePlaceholder = "__RIVENDELL_INSTANCE__"
 
 // versionPlaceholder is replaced with the running version in index.html and
-// app.js so that a version bump busts the browser cache for all JS modules.
+// every served .js module so that a version bump busts the browser cache. It
+// must be rewritten in ALL modules, not just app.js: ES modules are keyed by
+// resolved URL, so if app.js imports `secret.js?v=<version>` (templated) while a
+// sibling imports `secret.js?v=__RIVENDELL_VERSION__` (untemplated), the two URLs
+// load two separate instances of secret.js — fatal for a module with shared
+// mutable state (secret.js's session map / _myUserId). One token, one instance.
 const versionPlaceholder = "__RIVENDELL_VERSION__"
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
@@ -934,8 +939,10 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := filepath.Base(full)
-	// index.html and app.js are templated; all other assets are served as-is.
-	if base == "app.js" {
+	// index.html and every .js module are templated (the version placeholder
+	// powers cache-busting AND keeps each stateful module a single instance — see
+	// versionPlaceholder); all other assets are served as-is.
+	if strings.HasSuffix(base, ".js") {
 		s.serveTemplated(w, r, full, "application/javascript; charset=utf-8")
 		return
 	}
@@ -964,12 +971,13 @@ func (s *Server) serveTemplated(w http.ResponseWriter, r *http.Request, path, co
 		return
 	}
 	w.Header().Set("ETag", etag)
-	if filepath.Base(path) == "app.js" {
-		// URL includes the version (?v=X), so this exact response is immutable.
+	if r.URL.Query().Has("v") {
+		// Versioned URL (?v=X) — module imports always carry it, so this exact
+		// response is immutable; a version bump changes the URL.
 		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	} else {
-		// index.html URL has no version suffix; must revalidate to pick up new
-		// app.js references, but can short-circuit with a 304 via ETag.
+		// Unversioned (index.html, /sw.js) must revalidate to pick up new
+		// references, but can short-circuit with a 304 via ETag.
 		w.Header().Set("Cache-Control", "no-cache, private")
 	}
 	w.Header().Set("Content-Type", contentType)
