@@ -220,6 +220,24 @@ async function guard(action) {
   }
 }
 
+// safeLocalGet / safeLocalSet wrap localStorage, which throws when storage is
+// unavailable (private mode, blocked cookies, quota). The app-shell keys are always
+// best-effort — a failed read returns null, a failed write is a silent no-op — so
+// callers never carry their own try/catch. (prefs.js owns the *preferences* subset
+// through its injected-storage pattern; these cover the session keys app.js holds.)
+function safeLocalGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeLocalSet(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* best-effort */ }
+}
+
+// Storage key for the last-open channel (restored on next load). A single
+// constant so the write sites and the read site can't silently disagree on it —
+// a typo'd literal would persist under one key and read from another, quietly
+// breaking channel restore with no error.
+const ACTIVE_CHANNEL_KEY = "rivendell.activeChannel";
+
 // --- mobile viewport height --------------------------------------------------
 // Pin a --app-height var to the *visual* viewport so the app fits the area not
 // covered by the on-screen keyboard. Without this, focusing the composer makes
@@ -532,12 +550,7 @@ async function enterApp() {
   }
   // Restore the channel the user last had open (if it's still accessible);
   // otherwise prefer a real channel over a DM on first load.
-  let saved = null;
-  try {
-    saved = localStorage.getItem("rivendell.activeChannel");
-  } catch (e) {
-    /* localStorage may be unavailable (private mode / blocked) */
-  }
+  const saved = safeLocalGet(ACTIVE_CHANNEL_KEY);
   // Use the channel's own id (a number) — localStorage hands back a string,
   // which would fail the `===` comparisons used throughout rendering/realtime.
   // A closed DM isn't in state.channels (the server omits it), so it can't be
@@ -1310,11 +1323,7 @@ async function selectChannel(id) {
   replyingToId = null;
   renderReplyBanner();
   state = S.setActiveChannel(state, id);
-  try {
-    localStorage.setItem("rivendell.activeChannel", id);
-  } catch (e) {
-    /* non-fatal: persistence is best-effort */
-  }
+  safeLocalSet(ACTIVE_CHANNEL_KEY, id);
   // Snapshot whether there were unreads *before* clearing them, so we only
   // show the "New messages" marker when the user actually had unread messages.
   // Setting the cursor to 0 suppresses the marker entirely for channels the
@@ -1801,7 +1810,7 @@ async function jumpToMessage(channelId, messageId) {
   // Switch channel header/state if needed without triggering a full loadChannel.
   if (state.activeChannelId !== channelId) {
     state = S.setActiveChannel(state, channelId);
-    try { localStorage.setItem("rivendell.activeChannel", channelId); } catch (e) { /* non-fatal */ }
+    safeLocalSet(ACTIVE_CHANNEL_KEY, channelId);
     state = S.clearUnread(state, channelId);
     state = S.clearMention(state, channelId);
     renderSidebarBadges();

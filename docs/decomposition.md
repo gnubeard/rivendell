@@ -231,3 +231,13 @@ single-function-local magic numbers (swipe/long-press thresholds) were deliberat
 left inline: no cross-site sync hazard, and naming them is churn on hardened gesture
 code. All five are e2e-net-covered (full suite green); the ping-toast/OS-notification
 label paths have no e2e and rest on inspection (verbatim string moves).
+
+A follow-on cleaned up the `localStorage` access for the last-open channel: the
+repeated `try { … } catch` around `getItem`/`setItem` (3 sites) collapsed into
+`safeLocalGet` / `safeLocalSet` (best-effort wrappers next to `guard`; read returns
+null and write is a no-op when storage is blocked), and the `"rivendell.activeChannel"`
+key literal into a single `ACTIVE_CHANNEL_KEY` constant so the two write sites and the
+one read site can't silently disagree (a typo'd literal persists under one key and
+reads from another, breaking channel restore with no error). This is the app-shell
+analog of `prefs.js`'s injected-storage pattern — prefs owns the *preferences* subset
+(unit-tested with a Map-backed stub), these cover the session keys app.js holds.
