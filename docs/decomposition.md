@@ -150,17 +150,29 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   gate. Deeply wired to mutable module state (`state`, `replyingToId`, `socket`),
   so per the spine it stays in app.js rather than getting a getter/setter bag;
   e2e-covered (composer-paste). Only extract further if a clean pure core appears.
-- **Video grid + call strip** — `renderVideoGrid`/`renderDMVideoGrid`/
-  `renderGroupVideoGrid`, `videoAvatarTile`, `renderCallStrip` (~200 lines, now
-  its own section). On close reading this is a wireComposer-class entanglement,
-  not a clean widget: the renderers *write* shared mutable call state
-  (`videoViewHidden`, also touched by `selectChannel`/`renderChannelHeader`/the
-  header toggle/`onVoiceStateChange`) and *read* `voiceCallState`, `speakingIds`,
-  and the PTT flags, plus ~5 `voice.js` functions. A clean extraction would need
-  a ~12-entry deps bag including a `videoViewHidden` setter — exactly the
-  getter/setter indirection into hardened, e2e-only DOM code the spine says not
-  to add. So per our own rule it **stays in app.js** (honestly bannered and
-  findable); revisit only if a pure core emerges. (The pure `formatTime` that
+- **Video grid** — `renderVideoGrid` (single entry point, called from 3 sites:
+  `selectChannel`, `onVoiceStateChange`, the header-cam toggle) → `renderDMVideoGrid`/
+  `renderGroupVideoGrid`, `videoAvatarTile`, `showVideoGrid`/`hideVideoGrid`,
+  `appendFullscreenButton`, `setVideoActive` (~150 cohesive lines). **NOW A LIVE
+  CANDIDATE — this is the next chunk to lift.** An earlier reading (preserved for
+  the record) called it a wireComposer-class entanglement needing a "~12-entry deps
+  bag," and concluded it stays in app.js. That estimate was **stale**: it counted
+  the `voice.js` functions (`getVideoEl`/`getLocalVideoEl`) as deps, but per the
+  feature-module convention already-modular helpers are *imported directly* — and
+  those are already imported from `voice.js` at the top of app.js, so a video-grid
+  module imports them the same way and they leave the bag entirely. Re-tallying, the
+  real surface is ~9: `el`, `$`, `getState`, `getVoiceCallState`, `getSpeakingIds`,
+  `avatarSrc` + `initials` (both already passed as deps to `modals`/`imagewarm`, so
+  precedent), and `getVideoViewHidden` + `setVideoViewHidden`. That's on par with
+  `mobilectx` (~11). The one real wart is the `videoViewHidden` **setter** — but a
+  single write-back callback for one boolean has direct precedent in `channeldrag`'s
+  `setChannels`, and app.js keeps *owning* `videoViewHidden` (header/selection/voice
+  still touch it directly; the module just gets get/set), so nothing else moves.
+  **Scope and method:** lift the grid ONLY, not `renderCallStrip` — the strip reads
+  the PTT flags (`pttEnabled`/`pttTransmitting`/`pttKeyCode`) and is genuinely more
+  coupled; leave it in app.js. Per the iron rule, write a `web/e2e/video-grid.spec`
+  (the `dm-call`/`group-call` specs already exercise the tiles, so model it on those)
+  and run it GREEN against the un-extracted code first. (The pure `formatTime` that
   used to sit under this banner was mis-filed and has moved to `util.js`.)
 - **Inline message editing** — `editorFor`/`startEdit`/`cancelEdit`/`autoGrowEdit`
   (+ `commitEdit`), the other half of the old "emoji picker" section, now under
@@ -186,19 +198,27 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   geometry marker placement, and `voice.*`/`secret.*` dispatch — e2e territory,
   not a further pure carve.
 
-**Feature-module candidates: all extracted.** The 2026-06 re-audit catalogued the
-DOM-carrying feature sections that write little or no shared state — forward, pins,
-the modal cluster, and the mobile long-press sheet — and each has since been lifted
-behind a `createX(deps)` surface with an e2e net (and the long-press extraction
-also fixed a latent `activeCh` ReferenceError that only non-mod members hit). What
-remains in `app.js` is the orchestrator proper.
+**Feature-module candidates: nearly all extracted — one remains.** The 2026-06
+re-audit catalogued the DOM-carrying feature sections that write little or no shared
+state — forward, pins, the modal cluster, and the mobile long-press sheet — and each
+has since been lifted behind a `createX(deps)` surface with an e2e net (and the
+long-press extraction also fixed a latent `activeCh` ReferenceError that only non-mod
+members hit). A later re-tally (this branch) reopened **the video grid** as a live
+candidate — the earlier "stays in app.js" verdict rested on a stale deps-bag estimate
+that double-counted `voice.js` imports (see the Video grid bullet above). **That is
+the next chunk to lift**, e2e-first, scoped to the grid (not `renderCallStrip`).
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
-orchestration): the video grid, reactions (woven into message rendering + the
-`mine` invariant), control wiring, bootstrapping, realtime/sync, message
-rendering/loading, channel header/selection. The next worthwhile work here is
-different in kind — tightening that spine (e.g. leaning the realtime handler harder
-on `state.applyEvent`), not carving out more modules.
+orchestration): inline message editing (the edit-state capture/restore is interleaved
+into the renderMessages loop — the realistic move is an in-file
+`captureEditState`/`restoreEditState` split, NOT a module), `wireComposer` (the most
+coupled surface in the file: `state`, `replyingToId`, `sendWS`, `composerTray`,
+`drafts`, `editingMessageId`, the secret-session gate, autocomplete, attachments),
+reactions (woven into message rendering + the `mine` invariant), the call strip (PTT
+flags), control wiring, bootstrapping, realtime/sync, message rendering/loading,
+channel header/selection. After the video grid lands, the next worthwhile work is
+different in kind — tightening that spine (in-file helper splits, leaning the realtime
+handler harder on `state.applyEvent`), not carving out more modules.
 
 That spine-tightening is ongoing and is a distinct axis from module extraction: it
 splits oversized orchestrator functions into named in-file helpers (same file, no
