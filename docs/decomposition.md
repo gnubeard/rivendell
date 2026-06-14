@@ -139,6 +139,7 @@ Conventions specific to this kind of module:
 | Pinned-messages panel (list + jump + in-panel unpin; LWW refresh guard) | `pins.js` | e2e (pins, 2) | ✅ done |
 | Modal cluster (new-channel, edit-profile, invite, read-only user card) | `modals.js` | e2e (modals, 4) | ✅ done |
 | Mobile long-press action sheet (+ reactions sub-panel) | `mobilectx.js` | e2e (mobile-ctx, 5) | ✅ done |
+| In-call video grid (DM 2-tile + group gallery, show/hide, fullscreen) | `videogrid.js` | e2e (video-grid, 3) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -150,30 +151,22 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   gate. Deeply wired to mutable module state (`state`, `replyingToId`, `socket`),
   so per the spine it stays in app.js rather than getting a getter/setter bag;
   e2e-covered (composer-paste). Only extract further if a clean pure core appears.
-- **Video grid** — `renderVideoGrid` (single entry point, called from 3 sites:
-  `selectChannel`, `onVoiceStateChange`, the header-cam toggle) → `renderDMVideoGrid`/
-  `renderGroupVideoGrid`, `videoAvatarTile`, `showVideoGrid`/`hideVideoGrid`,
-  `appendFullscreenButton`, `setVideoActive` (~150 cohesive lines). **NOW A LIVE
-  CANDIDATE — this is the next chunk to lift.** An earlier reading (preserved for
-  the record) called it a wireComposer-class entanglement needing a "~12-entry deps
-  bag," and concluded it stays in app.js. That estimate was **stale**: it counted
-  the `voice.js` functions (`getVideoEl`/`getLocalVideoEl`) as deps, but per the
-  feature-module convention already-modular helpers are *imported directly* — and
-  those are already imported from `voice.js` at the top of app.js, so a video-grid
-  module imports them the same way and they leave the bag entirely. Re-tallying, the
-  real surface is ~9: `el`, `$`, `getState`, `getVoiceCallState`, `getSpeakingIds`,
-  `avatarSrc` + `initials` (both already passed as deps to `modals`/`imagewarm`, so
-  precedent), and `getVideoViewHidden` + `setVideoViewHidden`. That's on par with
-  `mobilectx` (~11). The one real wart is the `videoViewHidden` **setter** — but a
-  single write-back callback for one boolean has direct precedent in `channeldrag`'s
-  `setChannels`, and app.js keeps *owning* `videoViewHidden` (header/selection/voice
-  still touch it directly; the module just gets get/set), so nothing else moves.
-  **Scope and method:** lift the grid ONLY, not `renderCallStrip` — the strip reads
-  the PTT flags (`pttEnabled`/`pttTransmitting`/`pttKeyCode`) and is genuinely more
-  coupled; leave it in app.js. Per the iron rule, write a `web/e2e/video-grid.spec`
-  (the `dm-call`/`group-call` specs already exercise the tiles, so model it on those)
-  and run it GREEN against the un-extracted code first. (The pure `formatTime` that
-  used to sit under this banner was mis-filed and has moved to `util.js`.)
+- **Video grid** — ✅ **DONE** (this branch): lifted to `videogrid.js` behind
+  `createVideoGrid(deps)`, e2e net `web/e2e/video-grid.spec.js` (3 specs: grid
+  reveal + fullscreen + `body.video-active`, the mobile chat↔video toggle, and
+  both-cameras-off hide), written and run GREEN against the un-extracted code
+  first per the iron rule. The earlier "stays in app.js" verdict had rested on a
+  stale deps-bag estimate that double-counted the `voice.js` imports
+  (`getVideoEl`/`getLocalVideoEl`, which the module imports directly, not via the
+  bag). The real surface came in at 9 deps — `el`, `$`, `getState`,
+  `getVoiceCallState`, `getSpeakingIds`, `avatarSrc`, `initials`,
+  `getVideoViewHidden` + `setVideoViewHidden` — on par with `mobilectx`. app.js
+  keeps *owning* `videoViewHidden` (header label, channel selection, and call
+  lifecycle still touch it directly; the module only gets the get/set pair, the
+  one-boolean-setter precedent being `channeldrag`'s `setChannels`). Scoped to the
+  grid: `renderCallStrip` stayed in app.js (it reads the PTT flags and is more
+  coupled). (The pure `formatTime` that once sat under this banner was mis-filed
+  and has moved to `util.js`.)
 - **Inline message editing** — `editorFor`/`startEdit`/`cancelEdit`/`autoGrowEdit`
   (+ `commitEdit`), the other half of the old "emoji picker" section, now under
   its own banner. Stays in app.js: it calls `renderMessages` and owns
@@ -198,15 +191,16 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
   geometry marker placement, and `voice.*`/`secret.*` dispatch — e2e territory,
   not a further pure carve.
 
-**Feature-module candidates: nearly all extracted — one remains.** The 2026-06
-re-audit catalogued the DOM-carrying feature sections that write little or no shared
-state — forward, pins, the modal cluster, and the mobile long-press sheet — and each
-has since been lifted behind a `createX(deps)` surface with an e2e net (and the
-long-press extraction also fixed a latent `activeCh` ReferenceError that only non-mod
-members hit). A later re-tally (this branch) reopened **the video grid** as a live
-candidate — the earlier "stays in app.js" verdict rested on a stale deps-bag estimate
-that double-counted `voice.js` imports (see the Video grid bullet above). **That is
-the next chunk to lift**, e2e-first, scoped to the grid (not `renderCallStrip`).
+**Feature-module candidates: all extracted.** The 2026-06 re-audit catalogued the
+DOM-carrying feature sections that write little or no shared state — forward, pins,
+the modal cluster, and the mobile long-press sheet — and each was lifted behind a
+`createX(deps)` surface with an e2e net (and the long-press extraction also fixed a
+latent `activeCh` ReferenceError that only non-mod members hit). A later re-tally
+(this branch) reopened **the video grid** — the earlier "stays in app.js" verdict
+had rested on a stale deps-bag estimate that double-counted `voice.js` imports — and
+it too has now been lifted to `videogrid.js` (see the Video grid bullet above),
+e2e-first, scoped to the grid (not `renderCallStrip`). With that, the DOM-carrying
+feature-module well is dry; the remaining work is spine-tightening, not carving.
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
 orchestration): inline message editing (the edit-state capture/restore is interleaved
@@ -216,7 +210,7 @@ coupled surface in the file: `state`, `replyingToId`, `sendWS`, `composerTray`,
 `drafts`, `editingMessageId`, the secret-session gate, autocomplete, attachments),
 reactions (woven into message rendering + the `mine` invariant), the call strip (PTT
 flags), control wiring, bootstrapping, realtime/sync, message rendering/loading,
-channel header/selection. After the video grid lands, the next worthwhile work is
+channel header/selection. With the video grid lifted, the next worthwhile work is
 different in kind — tightening that spine (in-file helper splits, leaning the realtime
 handler harder on `state.applyEvent`), not carving out more modules.
 

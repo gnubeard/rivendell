@@ -42,7 +42,6 @@ import {
   cameraErrorMessage,
   loadCameraPreference,
   getVideoEl,
-  getLocalVideoEl,
   isVoiceMuted,
   isVoiceDeafened,
   isInCall,
@@ -83,6 +82,7 @@ import { createForward } from "./forward.js?v=__RIVENDELL_VERSION__";
 import { createPins } from "./pins.js?v=__RIVENDELL_VERSION__";
 import { createModals } from "./modals.js?v=__RIVENDELL_VERSION__";
 import { createMobileCtx } from "./mobilectx.js?v=__RIVENDELL_VERSION__";
+import { createVideoGrid } from "./videogrid.js?v=__RIVENDELL_VERSION__";
 
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
@@ -3676,6 +3676,23 @@ function initials(name) {
 // there. avatarSrc is passed by reference (it closes over avatarVersion/state).
 const imageWarm = createImageWarmer({ getState: () => state, api, avatarSrc });
 
+// In-call video grid — videogrid.js, e2e/video-grid.spec. app.js keeps owning
+// videoViewHidden (header label, channel selection, and call lifecycle touch it
+// directly); the grid only gets a get/set pair. voiceCallState/speakingIds are
+// read through getters because they're reassigned/mutated on every voice update.
+const videoGrid = createVideoGrid({
+  el,
+  $,
+  getState: () => state,
+  getVoiceCallState: () => voiceCallState,
+  getSpeakingIds: () => speakingIds,
+  avatarSrc,
+  initials,
+  getVideoViewHidden: () => videoViewHidden,
+  setVideoViewHidden: (v) => { videoViewHidden = v; },
+});
+const renderVideoGrid = videoGrid.renderVideoGrid;
+
 // --- loading screen ----------------------------------------------------------
 
 function dismissLoadingScreen() {
@@ -4064,170 +4081,9 @@ function onSpeaking(userId, speaking) {
   if (tile) tile.classList.toggle("speaking", speaking);
 }
 
-// --- video grid + call strip -------------------------------------------------
-
-// setVideoActive toggles body.video-active (which hides the composer/message list
-// behind the video grid). The composer needs no re-size on reveal: it's a
-// contenteditable div that sizes itself from content (the old textarea needed
-// a JS autosize pass here to undo a height:0px written while it was hidden).
-function setVideoActive(on) {
-  document.body.classList.toggle("video-active", on);
-}
-
-// appendFullscreenButton adds the corner ⛶ control that toggles fullscreen on
-// the grid (covers the mobile "replace chat with video" case too).
-function appendFullscreenButton(grid) {
-  const fsBtn = el("button", { class: "video-fullscreen-btn", title: "Fullscreen" }, "⛶");
-  fsBtn.onclick = () => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      grid.requestFullscreen().catch(() => {});
-    }
-  };
-  grid.appendChild(fsBtn);
-}
-
-// hideVideoGrid collapses #video-grid and clears the body video-active state — the
-// shared "no video to show" teardown across renderVideoGrid and both renderers.
-function hideVideoGrid(grid) {
-  grid.classList.remove("group-grid");
-  grid.hidden = true;
-  setVideoActive(false);
-}
-
-// showVideoGrid reveals a freshly-built grid (with its fullscreen control) and
-// flips the body into video-active — the shared tail of both renderers.
-function showVideoGrid(grid) {
-  appendFullscreenButton(grid);
-  grid.hidden = false;
-  setVideoActive(true);
-}
-
-// videoAvatarTile builds the dark camera-off placeholder for one participant:
-// their avatar (or initials) plus their name. Used by both the DM and group
-// layouts wherever a participant has no live video.
-function videoAvatarTile(userId, user) {
-  const avatarDiv = el("div", { class: "video-avatar" });
-  if (user && user.has_avatar) {
-    avatarDiv.appendChild(el("img", { class: "video-avatar-img", src: avatarSrc(userId), alt: "" }));
-  } else {
-    avatarDiv.appendChild(el("div", { class: "video-avatar-initials" }, initials((user || {}).display_name)));
-  }
-  avatarDiv.appendChild(el("span", { class: "video-avatar-name" }, (user || {}).display_name || ""));
-  return avatarDiv;
-}
-
-// renderVideoGrid paints #video-grid for the active call when we're viewing its
-// channel. DMs use the 2-tile phone layout (remote tile + local PiP); group
-// voice channels use an N-tile gallery (one tile per participant). Hidden when
-// not in a call, viewing a different channel, or nobody has a camera on.
-function renderVideoGrid() {
-  const grid = $("#video-grid");
-  const ch = voiceCallState.inCall && voiceCallState.channelId !== null
-    ? state.channels[voiceCallState.channelId]
-    : null;
-
-  if (!ch || voiceCallState.channelId !== state.activeChannelId) {
-    hideVideoGrid(grid);
-    return;
-  }
-  if (ch.is_dm) renderDMVideoGrid(grid, ch);
-  else renderGroupVideoGrid(grid, ch);
-}
-
-// renderDMVideoGrid is the original 2-tile DM layout: remote tile (video when
-// the camera is on, dark avatar tile when off) plus a local PiP when our camera
-// is on (decision: no self-preview when our camera is off).
-function renderDMVideoGrid(grid, ch) {
-  grid.classList.remove("group-grid");
-  const otherId = S.otherDMParticipant(ch, state.me && state.me.id);
-  const otherP = voiceCallState.participants.find(p => p.user_id === otherId);
-  const remoteVideoMuted = !otherP || otherP.video_muted;
-
-  // When both cameras are off there's no video to show; also clear any mobile
-  // view-override so the toggle button disappears cleanly.
-  if (voiceCallState.videoMuted && remoteVideoMuted) {
-    videoViewHidden = false;
-    hideVideoGrid(grid);
-    return;
-  }
-
-  // On mobile the user may have chosen to view chat instead of video.
-  if (videoViewHidden) {
-    hideVideoGrid(grid);
-    return;
-  }
-  const remoteVideo = otherId != null ? getVideoEl(otherId) : null;
-
-  grid.innerHTML = "";
-
-  const remoteTile = el("div", { class: "video-tile" });
-  if (remoteVideo && !remoteVideoMuted) {
-    remoteTile.appendChild(remoteVideo);
-    remoteVideo.play().catch(() => {});
-  } else {
-    remoteTile.appendChild(videoAvatarTile(otherId, otherId != null ? state.users[otherId] : null));
-  }
-  grid.appendChild(remoteTile);
-
-  // Local PiP only when camera is on
-  if (!voiceCallState.videoMuted) {
-    const localVid = getLocalVideoEl();
-    if (localVid) {
-      localVid.className = "video-tile-local";
-      grid.appendChild(localVid);
-      localVid.play().catch(() => {});
-    }
-  }
-
-  showVideoGrid(grid);
-}
-
-// renderGroupVideoGrid is the 1.4.0 N-tile gallery: one tile per call
-// participant (self included), in join order. A participant with their camera
-// on shows live video; otherwise a dark avatar tile. The grid only appears once
-// at least one participant has a camera on — a camera-off voice call is
-// represented by the members roster, not a wall of avatar tiles. The active
-// speaker is highlighted live by onSpeaking toggling each tile's `.speaking`.
-function renderGroupVideoGrid(grid, ch) {
-  const meId = state.me && state.me.id;
-  const anyVideo = !voiceCallState.videoMuted ||
-    voiceCallState.participants.some(p => p.user_id !== meId && !p.video_muted);
-
-  if (!anyVideo) {
-    videoViewHidden = false;
-    hideVideoGrid(grid);
-    return;
-  }
-  if (videoViewHidden) {
-    hideVideoGrid(grid);
-    return;
-  }
-
-  grid.innerHTML = "";
-  grid.classList.add("group-grid");
-
-  for (const p of voiceCallState.participants) {
-    const isSelf = p.user_id === meId;
-    const videoOn = isSelf ? !voiceCallState.videoMuted : !p.video_muted;
-    const videoEl = videoOn ? (isSelf ? getLocalVideoEl() : getVideoEl(p.user_id)) : null;
-
-    const tile = el("div", { class: "video-tile", "data-user-id": String(p.user_id) });
-    if (speakingIds.has(p.user_id)) tile.classList.add("speaking");
-    if (videoEl) {
-      videoEl.className = ""; // shed any PiP styling from a prior DM render
-      tile.appendChild(videoEl);
-      videoEl.play().catch(() => {});
-    } else {
-      const user = isSelf ? (state.users[meId] || state.me) : state.users[p.user_id];
-      tile.appendChild(videoAvatarTile(p.user_id, user));
-    }
-    grid.appendChild(tile);
-  }
-
-  showVideoGrid(grid);
-}
+// --- call strip --------------------------------------------------------------
+// The video grid itself lives in videogrid.js (createVideoGrid above); what
+// stays here is the call strip, which reads the PTT flags and is more coupled.
 
 function renderCallStrip() {
   const strip = $("#call-strip");
