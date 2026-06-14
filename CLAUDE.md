@@ -29,13 +29,13 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               autocomplete.js, prefs.js, previews.js, util.js,
                               search.js, emoji.js, channeldrag.js, presence.js,
                               imagewarm.js, linkpreview.js, admin.js, secretui.js,
-                              forward.js, pins.js, modals.js
+                              forward.js, pins.js, modals.js, mobilectx.js
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites (one per pure JS module)
 web/e2e/                      Playwright specs (composer-paste, dm-call,
                               group-call, search, emoji-picker, channel-reorder,
                               link-previews, admin, secret-chat, forward, pins,
-                              modals); dev-only, run via `make test-e2e`
+                              modals, mobile-ctx); dev-only, run via `make test-e2e`
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,

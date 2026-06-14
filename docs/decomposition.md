@@ -132,6 +132,7 @@ Conventions specific to this kind of module:
 | Forward-message modal (+ pure `forwardBody`/`forwardTargets`/`makeCanSee`) | `forward.js` | unit (9) + e2e (forward, 3) | ✅ done |
 | Pinned-messages panel (list + jump + in-panel unpin; LWW refresh guard) | `pins.js` | e2e (pins, 2) | ✅ done |
 | Modal cluster (new-channel, edit-profile, invite, read-only user card) | `modals.js` | e2e (modals, 4) | ✅ done |
+| Mobile long-press action sheet (+ reactions sub-panel) | `mobilectx.js` | e2e (mobile-ctx, 5) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -169,15 +170,16 @@ Rough inventory of what still lives in `app.js`, for planning. Order TBD.
 - **Realtime/sync** — `startRealtime`, `resync`, the WS event handler. Folds into
   `state.applyEvent` already; the handler's routing is DOM-heavy.
 
-**Feature-module candidates** (a 2026-06 re-audit of the whole file, not just the
-state-owning features the earlier list tracked — several large DOM-carrying
-sections write *zero* shared state and were simply never catalogued). Ranked by
-leverage; each needs a fresh e2e spec first:
-
-- **Mobile long-press context menu** — `openMobileCtx` & friends (~89 lines). A
-  self-contained gesture widget, zero state writes.
+**Feature-module candidates: all extracted.** The 2026-06 re-audit catalogued the
+DOM-carrying feature sections that write little or no shared state — forward, pins,
+the modal cluster, and the mobile long-press sheet — and each has since been lifted
+behind a `createX(deps)` surface with an e2e net (and the long-press extraction
+also fixed a latent `activeCh` ReferenceError that only non-mod members hit). What
+remains in `app.js` is the orchestrator proper.
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
 orchestration): the video grid, reactions (woven into message rendering + the
 `mine` invariant), control wiring, bootstrapping, realtime/sync, message
-rendering/loading, channel header/selection.
+rendering/loading, channel header/selection. The next worthwhile work here is
+different in kind — tightening that spine (e.g. leaning the realtime handler harder
+on `state.applyEvent`), not carving out more modules.

@@ -82,6 +82,7 @@ import { createSecretUI } from "./secretui.js?v=__RIVENDELL_VERSION__";
 import { createForward } from "./forward.js?v=__RIVENDELL_VERSION__";
 import { createPins } from "./pins.js?v=__RIVENDELL_VERSION__";
 import { createModals } from "./modals.js?v=__RIVENDELL_VERSION__";
+import { createMobileCtx } from "./mobilectx.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -2754,11 +2755,14 @@ async function toggleReaction(messageId, emoji, knownMine) {
   }
 }
 
-// --- forward message ---------------------------------------------------------
+// --- feature-module wiring ---------------------------------------------------
+//
+// Each of these features lives in its own module behind a createX(deps) surface;
+// app.js instantiates it here and re-exports the handful of methods the call sites
+// and wire* functions use. Full contracts live in each module's header comment.
 
-// The forward modal (target picker + filter + send-then-jump) and its pure cores
-// (forwardBody, forwardTargets, makeCanSee) live in forward.js; e2e/forward.spec
-// nets the DOM behavior, web/test/forward.test the cores.
+// Forward modal + pure cores (forwardBody/forwardTargets/makeCanSee) — forward.js,
+// e2e/forward.spec, web/test/forward.test.
 const forward = createForward({
   el,
   $,
@@ -2768,101 +2772,26 @@ const forward = createForward({
 });
 const openForwardModal = forward.openForwardModal;
 
-// --- mobile long-press context menu ------------------------------------------
+// Mobile long-press action sheet — mobilectx.js, e2e/mobile-ctx.spec. The gesture
+// detection + backdrop wiring stay in app.js (wireMobileContextMenu).
+const mobileCtx = createMobileCtx({
+  el,
+  $,
+  getState: () => state,
+  api,
+  emojiPicker,
+  startReply,
+  openForwardModal,
+  startEdit,
+  togglePin,
+  toggleMessageRead,
+  deleteMessage,
+});
+const openMobileCtx = mobileCtx.openMobileCtx;
+const closeMobileCtx = mobileCtx.closeMobileCtx;
 
-// openMobileCtx shows the bottom-sheet action menu for a message. Called when
-// the user long-presses a message row on a touch device.
-function openMobileCtx(m) {
-  document.getElementById("mobile-ctx").hidden = false;
-  showMobileCtxActions(m);
-}
-
-function showMobileCtxActions(m) {
-  const isMod = state.me.role === "admin" || state.me.role === "moderator";
-  const isOwn = m.user_id === state.me.id;
-  const canDelete = isOwn || isMod;
-  const isDeleted = !!m.deleted_at;
-  const inner = document.getElementById("mobile-ctx-inner");
-  inner.innerHTML = "";
-
-  const closeBtn = (label, handler, cls) => el("button", {
-    class: "mobile-ctx-btn" + (cls ? " " + cls : ""),
-    onclick: () => { closeMobileCtx(); handler(); },
-  }, label);
-
-  // stopPropagation prevents the document-level click handler that dismisses the
-  // emoji picker from firing on the same event that opens it.
-  inner.append(el("button", {
-    class: "mobile-ctx-btn",
-    onclick: (e) => {
-      e.stopPropagation();
-      closeMobileCtx();
-      emojiPicker.openForReaction(m.id, {
-        getBoundingClientRect: () => ({
-          left: window.innerWidth / 2 - 119,
-          right: window.innerWidth / 2 + 119,
-          top: window.innerHeight - 60,
-          bottom: window.innerHeight - 40,
-        }),
-      });
-    },
-  }, "😊  React"));
-
-  if (!isDeleted) inner.append(closeBtn("↩  Reply", () => startReply(m)));
-  if (!isDeleted) inner.append(closeBtn("↪  Forward", () => openForwardModal(m)));
-  if (!isDeleted) inner.append(closeBtn("📋  Copy", () => navigator.clipboard.writeText(m.content)));
-  if (isOwn && !isDeleted) inner.append(closeBtn("✏  Edit", () => startEdit(m)));
-  if ((isMod || !!(activeCh && activeCh.is_dm)) && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
-  const isRead = m.id <= (state.lastRead[m.channel_id] || 0);
-  inner.append(closeBtn(isRead ? "👁  Mark unread" : "👁  Mark read", () => toggleMessageRead(m)));
-
-  if (canDelete && !isDeleted) {
-    inner.append(el("div", { class: "mobile-ctx-sep" }));
-    inner.append(closeBtn("🗑  Delete", () => deleteMessage(m), "danger"));
-  }
-
-  if (m.reactions && m.reactions.length > 0) {
-    inner.append(el("div", { class: "mobile-ctx-sep" }));
-    inner.append(el("button", {
-      class: "mobile-ctx-btn",
-      onclick: () => showMobileCtxReactions(m),
-    }, "👁  Reactions (" + m.reactions.length + ")"));
-  }
-}
-
-function showMobileCtxReactions(m) {
-  const inner = document.getElementById("mobile-ctx-inner");
-  inner.innerHTML = "";
-  inner.append(el("button", { class: "mobile-ctx-btn", onclick: () => showMobileCtxActions(m) }, "← Back"));
-  inner.append(el("div", { class: "mobile-ctx-sep" }));
-  const panel = el("div", { class: "mobile-ctx-reactions" });
-  if (!m.reactions || !m.reactions.length) {
-    panel.append(el("p", { class: "mobile-ctx-no-reactions" }, "No reactions"));
-  } else {
-    for (const g of m.reactions) {
-      const ids = g.user_ids || [];
-      const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
-      const glyph = state.emojis[g.emoji]
-        ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:`, style: "height:1.3rem;width:auto;" })
-        : el("span", {}, g.emoji);
-      panel.append(el("div", { class: "mobile-ctx-reaction-row" },
-        el("span", { class: "mobile-ctx-reaction-emoji" }, glyph),
-        el("span", { class: "mobile-ctx-reaction-names" }, names || "—")));
-    }
-  }
-  inner.append(panel);
-}
-
-function closeMobileCtx() {
-  document.getElementById("mobile-ctx").hidden = true;
-}
-
-// --- pinned messages ---------------------------------------------------------
-
-// The pins panel (list + jump links + in-panel unpin, with the last-writer-wins
-// refresh guard) lives in pins.js; e2e/pins.spec nets it. togglePin (the 📌
-// message action) stays above with message rendering. reactionsRow is injected
-// because reactions deliberately stay in app.js (the `mine` invariant).
+// Pinned-messages panel — pins.js, e2e/pins.spec. reactionsRow is injected because
+// reactions stay in app.js (the `mine` invariant); togglePin stays with rendering.
 const pins = createPins({
   el,
   $,
@@ -2875,12 +2804,8 @@ const pins = createPins({
 const openPinsModal = pins.openPinsModal;
 const refreshPinsIfOpen = pins.refreshPinsIfOpen;
 
-// --- message search ----------------------------------------------------------
-
-// The search modal is its own controller (search.js); it owns its racy state
-// (generation token, query, keyset cursor, debounce) and renders hits. We give
-// it the element builder and the navigation hooks it needs; wireSearchControls
-// binds the DOM events to its methods.
+// Message-search modal — search.js, e2e/search.spec. Owns its racy state
+// (generation token, query, keyset cursor, debounce); wireSearchControls binds it.
 const search = createSearch({
   el,
   $,
