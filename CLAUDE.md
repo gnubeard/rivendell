@@ -48,14 +48,18 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               linkpreview.js, admin.js, secretui.js, forward.js,
                               pins.js, modals.js, mobilectx.js, videogrid.js,
                               voiceui.js (call/ring UI over voice.js: call strip,
-                              ring banner, PTT, volume slider, video toggle)
+                              ring banner, PTT, volume slider, video toggle),
+                              notifyui.js (foreground-notification UX over notify.js:
+                              missed-count badge/title, ping toast, Web Push
+                              subscription lifecycle, profile opt-in control)
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites for the pure JS modules
                               (DOM-carrying modules are covered by e2e instead)
 web/e2e/                      Playwright specs (composer-paste, dm-call,
                               group-call, search, emoji-picker, channel-reorder,
                               link-previews, admin, secret-chat, forward, pins,
-                              modals, mobile-ctx, video-grid, non-admin); dev-only, run via `make test-e2e`
+                              modals, mobile-ctx, video-grid, notifications,
+                              non-admin); dev-only, run via `make test-e2e`
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,

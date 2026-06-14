@@ -296,6 +296,13 @@ test("totalUnread and totalMentions sum the maps", () => {
   assert.equal(S.totalMentions(S.initialState()), 0);
 });
 
+test("displayNameOf returns the roster display name, or 'Someone' for an unknown id", () => {
+  const s = S.setUsers(S.initialState(), [{ id: 7, display_name: "Frodo" }]);
+  assert.equal(S.displayNameOf(s, 7), "Frodo");
+  assert.equal(S.displayNameOf(s, 999), "Someone");
+  assert.equal(S.displayNameOf(S.initialState(), 7), "Someone");
+});
+
 test("setMutedChannels / setMuted / isMuted", () => {
   let s = S.setMutedChannels(S.initialState(), [1, 2]);
   assert.equal(S.isMuted(s, 1), true);

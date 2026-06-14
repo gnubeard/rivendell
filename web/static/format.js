@@ -240,6 +240,15 @@ export function parsePermalink(hash) {
   return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
 }
 
+// pingLabel formats the "who" line shared by the ping toast and the OS ping
+// notification (notifyui.js): a DM is just the sender's name; a channel message
+// reads "<sender> in #<channel>". `who` is the already-resolved display name (see
+// state.displayNameOf); `ch` is the channel record (may be absent). One source of
+// truth so the toast and the OS alert never drift apart. Pure.
+export function pingLabel(who, ch) {
+  return ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
+}
+
 // YOUTUBE_ID_RE extracts the 11-char video ID from youtube.com/watch, youtu.be,
 // youtube.com/shorts, and youtube.com/embed URLs.
 const YOUTUBE_ID_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
