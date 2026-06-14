@@ -80,6 +80,7 @@ import { createLinkPreviews } from "./linkpreview.js?v=__RIVENDELL_VERSION__";
 import { createAdminPanel } from "./admin.js?v=__RIVENDELL_VERSION__";
 import { createSecretUI } from "./secretui.js?v=__RIVENDELL_VERSION__";
 import { createForward } from "./forward.js?v=__RIVENDELL_VERSION__";
+import { createPins } from "./pins.js?v=__RIVENDELL_VERSION__";
 
 let state = S.initialState();
 let socket = null;
@@ -136,7 +137,6 @@ let activeMemberIds = null;
 const PAGE = 50;
 let loadingOlder = false; // guards against overlapping back-paging fetches
 let loadingNewer = false; // guards against overlapping forward-paging fetches
-let pinsRefreshSeq = 0; // last-writer-wins token for concurrent refreshPins() calls
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
 const viewingHistory = new Set(); // channelIds whose loaded bottom isn't the live tail
 let flashMessageId = null; // id of a jumped-to message to highlight; survives re-renders
@@ -2858,73 +2858,21 @@ function closeMobileCtx() {
 
 // --- pinned messages ---------------------------------------------------------
 
-async function openPinsModal() {
-  if (!state.channels[state.activeChannelId]) return;
-  closeDrawers();
-  $("#pins-modal").hidden = false;
-  await refreshPins();
-}
-
-function refreshPinsIfOpen() {
-  if (!$("#pins-modal").hidden) refreshPins();
-}
-
-async function refreshPins() {
-  const ch = state.channels[state.activeChannelId];
-  const list = $("#pins-list");
-  if (!ch) {
-    list.innerHTML = "";
-    return;
-  }
-  // A pin/unpin triggers both an explicit refresh and a realtime message.update,
-  // so two refreshPins() can run at once. Build off-screen and only swap in if
-  // we're still the latest call — otherwise concurrent runs double the list
-  // (clear, clear, append, append) and you'd see the survivors rendered twice.
-  const seq = ++pinsRefreshSeq;
-  const rows = [];
-  let pins;
-  try {
-    pins = await api.pinnedMessages(ch.id);
-  } catch (ex) {
-    if (seq !== pinsRefreshSeq) return;
-    list.innerHTML = "";
-    list.append(el("li", { class: "notice" }, ex.message));
-    return;
-  }
-  if (seq !== pinsRefreshSeq) return; // a newer refresh superseded us
-  if (!pins.length) {
-    list.innerHTML = "";
-    list.append(el("li", { class: "notice" }, "No pinned messages yet."));
-    return;
-  }
-  const isMod = state.me.role === "admin" || state.me.role === "moderator";
-  const canPin = isMod || ch.is_dm; // DM participants may unpin too
-  for (const m of pins) {
-    const author = state.users[m.user_id];
-    rows.push(
-      el("li", { class: "pin-row" },
-        el("div", { class: "pin-head" },
-          el("span", { class: "msg-author" }, author ? author.display_name : "unknown"),
-          el("a", {
-            class: "msg-time",
-            href: permalinkHash(ch.id, m.id),
-            title: "Jump to message",
-            onclick: (e) => { e.preventDefault(); $("#pins-modal").hidden = true; jumpToMessage(ch.id, m.id); },
-          }, formatTime(m.created_at)),
-          canPin
-            ? el("button", {
-                class: "link", onclick: async () => {
-                  try { await api.unpinMessage(m.id); await refreshPins(); } catch (ex) { alert(ex.message); }
-                },
-              }, "unpin")
-            : null),
-        el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { channels: state.channels, users: state.users }) }),
-        reactionsRow(m))
-    );
-  }
-  list.innerHTML = "";
-  list.append(...rows);
-}
+// The pins panel (list + jump links + in-panel unpin, with the last-writer-wins
+// refresh guard) lives in pins.js; e2e/pins.spec nets it. togglePin (the 📌
+// message action) stays above with message rendering. reactionsRow is injected
+// because reactions deliberately stay in app.js (the `mine` invariant).
+const pins = createPins({
+  el,
+  $,
+  getState: () => state,
+  api,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+  closeDrawers,
+  reactionsRow,
+});
+const openPinsModal = pins.openPinsModal;
+const refreshPinsIfOpen = pins.refreshPinsIfOpen;
 
 // --- message search ----------------------------------------------------------
 

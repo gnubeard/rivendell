@@ -130,6 +130,7 @@ Conventions specific to this kind of module:
 | Admin/moderator settings panel (stats, users, invites, tokens, emojis) | `admin.js` | e2e (admin, 5) | ✅ done |
 | Secret-chat UX (request banner, 🔒 button, safety-number modal) | `secretui.js` | e2e (secret-chat, 2) | ✅ done |
 | Forward-message modal (+ pure `forwardBody`/`forwardTargets`/`makeCanSee`) | `forward.js` | unit (9) + e2e (forward, 3) | ✅ done |
+| Pinned-messages panel (list + jump + in-panel unpin; LWW refresh guard) | `pins.js` | e2e (pins, 2) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -176,9 +177,6 @@ leverage; each needs a fresh e2e spec first:
   (~145 lines). A cluster of independent modal builders; one `modals.js` or split.
 - **Mobile long-press context menu** — `openMobileCtx` & friends (~89 lines). A
   self-contained gesture widget, zero state writes.
-- **Pinned messages** — `openPinsModal`/`refreshPins(IfOpen)` (~70 lines). Modal +
-  fetch-then-render, self-contained. The likely next pick: smallest remaining
-  feature module, e2e-first per the method.
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
 orchestration): the video grid, reactions (woven into message rendering + the
