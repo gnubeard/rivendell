@@ -151,6 +151,11 @@ let activeMemberIds = null;
 
 // Scrollback: messages load a page at a time as you scroll.
 const PAGE = 50;
+// Distance-from-bottom (px) within which the reader counts as "pinned to the live
+// tail" — the threshold that decides whether a new message auto-follows or holds
+// position. Shared by every scroll-geometry check (viewport resize, incoming
+// message, re-render) so they agree on what "at the bottom" means.
+const NEAR_BOTTOM_PX = 80;
 let loadingOlder = false; // guards overlapping back-paging fetches
 let loadingNewer = false; // guards overlapping forward-paging fetches
 const historyComplete = new Set(); // channelIds whose oldest message is loaded
@@ -226,7 +231,7 @@ function trackViewportHeight() {
     // viewport for the on-screen keyboard otherwise leaves the newest messages
     // hidden behind it. Measure before applying the new height.
     const ml = $("#message-list");
-    const atBottom = ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight < 80;
+    const atBottom = ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight < NEAR_BOTTOM_PX;
     const h = Math.round(vv ? vv.height : window.innerHeight);
     document.documentElement.style.setProperty("--app-height", `${h}px`);
     if (atBottom && ml) {
@@ -569,7 +574,7 @@ async function enterApp() {
   imageWarm.startBackgroundImageWarm(); // fire-and-forget; warms blob images across all channels
   // Voice: init module with our user id and the socket send function. Ice servers
   // are fetched in the background — they'll be ready well before any call starts.
-  initVoice(state.me.id, (msg) => socket && socket.send(msg), onVoiceStateChange, greetTone, farewellTone);
+  initVoice(state.me.id, sendWS, onVoiceStateChange, greetTone, farewellTone);
   // WebRTC debug telemetry: opt-in per client (?rtcdebug=1 / localStorage) or
   // forced on for everyone by the server flag. When enabled, capture batches
   // getStats() + lifecycle events to POST /api/debug/telemetry (logged server-side).
@@ -582,7 +587,7 @@ async function enterApp() {
   fetchIceServers(); // best-effort; falls back to public STUN on error
   wireVoiceControls();
   // Secret chat: init module, wire controls, check browser support.
-  initSecret(state.me.id, (msg) => socket && socket.send(msg), onSecretEvent);
+  initSecret(state.me.id, sendWS, onSecretEvent);
   wireSecretControls();
   isSecretSupported().then((ok) => {
     const btn = $("#secret-btn");
@@ -617,7 +622,7 @@ async function enterApp() {
     if (isInCall()) {
       const chId = voiceChannelId();
       if (chId !== null) {
-        try { socket && socket.send({ type: "voice.leave", channel_id: chId }); } catch {}
+        sendWS({ type: "voice.leave", channel_id: chId });
       }
     }
   });
@@ -638,6 +643,14 @@ function onWindowFocus() {
 function startRealtime() {
   if (socket) socket.close();
   socket = connectRealtime(handleRealtimeEvent, onRealtimeConnChange);
+}
+
+// sendWS sends a frame over the realtime socket when one exists. `socket` is null
+// until startRealtime() runs, so every send must guard on it. ws.js's own send()
+// already drops frames when the socket isn't OPEN and never throws (readyState
+// check + internal try/catch), so this needs only the null-guard — no try/catch.
+function sendWS(msg) {
+  if (socket) socket.send(msg);
 }
 
 // handleRealtimeEvent folds one inbound WS frame into `state` (via the pure
@@ -688,9 +701,7 @@ function handleRealtimeEvent(evt) {
       // consequences — unless it was already gone before the fold (e.g.
       // leaveActiveChannel handled it), which hadChannel guards.
       if (hadChannel && !S.isAdmin(state.me)) {
-        renderChannels();
-        renderDMs();
-        renderNotificationTotal();
+        renderSidebarBadges();
         // removeChannel re-pointed activeChannelId; load the new active one.
         if (state.activeChannelId) loadChannel(state.activeChannelId);
       } else if (hadChannel && channel_id === state.activeChannelId) {
@@ -718,9 +729,7 @@ function handleRealtimeEvent(evt) {
   if (evt.type === "read.update" || evt.type === "read.unread" || evt.type === "mute.update") {
     // A session caught up on / marked unread / muted a channel (state.applyEvent
     // already folded it in); reflect the badges and the global total.
-    renderChannels();
-    renderDMs();
-    renderNotificationTotal();
+    renderSidebarBadges();
     // Keep 👁 button labels current in the open channel.
     if ((evt.type === "read.update" || evt.type === "read.unread") &&
         evt.payload.channel_id === state.activeChannelId) {
@@ -788,7 +797,7 @@ function handleRealtimeEvent(evt) {
         // so they see where new messages begin when they scroll down.
         if (!unread.markerFor(cid)) {
           const ml = $("#message-list");
-          if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > 80) {
+          if (ml && ml.scrollHeight - ml.scrollTop - ml.clientHeight > NEAR_BOTTOM_PX) {
             unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
           }
         }
@@ -802,9 +811,7 @@ function handleRealtimeEvent(evt) {
     if (d.countUnread) {
       state = S.bumpUnread(state, cid);
       if (d.countMention) state = S.bumpMention(state, cid);
-      renderChannels();
-      renderDMs();
-      renderNotificationTotal();
+      renderSidebarBadges();
     }
     // Chime + (if opted in) an OS notification for pings; plain channel
     // chatter stays silent with just the badge.
@@ -864,7 +871,7 @@ async function resync() {
     }
     // A reconnect is a fresh connection (server defaults it to active); re-signal
     // idle over the new socket so the dot stays correct.
-    if (isIdle) socket && socket.send({ type: "idle", idle: true });
+    if (isIdle) sendWS({ type: "idle", idle: true });
     // If we were in a call when the WS dropped, verify the server still has us
     // listed. voice.end is a targeted send — it's lost if our WS was dead when
     // it was sent. Checking here closes that gap: if the server ended the call
@@ -1092,6 +1099,17 @@ function rerenderSidebar() {
   renderMembers();
 }
 
+// renderSidebarBadges repaints the three surfaces that reflect unread/mention
+// counts (and channel membership): the channel-list rows, the DM rows, and the
+// global notification total in the title/sidebar badge. It's the trio every
+// count- or membership-changing path fires together; unlike rerenderSidebar it
+// leaves the members panel alone (a count change never touches the roster).
+function renderSidebarBadges() {
+  renderChannels();
+  renderDMs();
+  renderNotificationTotal();
+}
+
 // volumeSlider builds the per-user playout-volume control shown under an on-call
 // remote member's name. Clicks are kept off the row (which would open a DM); the
 // title tracks the live percentage. The value is applied + persisted by voice.js.
@@ -1165,17 +1183,13 @@ async function toggleMute(id) {
     state = S.clearUnread(state, id);
     state = S.clearMention(state, id);
   }
-  renderChannels();
-  renderDMs();
-  renderNotificationTotal();
+  renderSidebarBadges();
   try {
     if (wasMuted) await api.unmuteChannel(id);
     else await api.muteChannel(id);
   } catch (ex) {
     state = S.setMuted(state, id, wasMuted); // revert
-    renderChannels();
-    renderDMs();
-    renderNotificationTotal();
+    renderSidebarBadges();
     alert(ex.message);
   }
 }
@@ -1201,9 +1215,7 @@ async function leaveActiveChannel() {
       }
     } else {
       state = S.removeChannel(state, ch.id); // also re-points activeChannelId
-      renderChannels();
-      renderDMs();
-      renderNotificationTotal();
+      renderSidebarBadges();
       if (state.activeChannelId) await loadChannel(state.activeChannelId);
     }
   });
@@ -1313,9 +1325,7 @@ async function selectChannel(id) {
   // Place the "New messages" divider and lift any earlier mark-unread suppression
   // (re-opening honors that mark by jumping to the divider, then marks read from here).
   unread.openChannel(id, hadUnreads, state.lastRead[id]);
-  renderChannels();
-  renderDMs();
-  renderNotificationTotal();
+  renderSidebarBadges();
   videoViewHidden = false;
   renderVideoGrid();
   closeDrawers(); // on mobile, reveal the conversation after a pick
@@ -1353,9 +1363,7 @@ async function markActiveChannelRead() {
   if (state.unread[cid] || state.mentions[cid]) {
     state = S.clearUnread(state, cid);
     state = S.clearMention(state, cid);
-    renderChannels();
-    renderDMs();
-    renderNotificationTotal();
+    renderSidebarBadges();
   }
   if (unread.alreadyMarked(cid, newest)) return; // server already knows
   unread.recordMarked(cid, newest);
@@ -1392,9 +1400,7 @@ async function toggleMessageRead(m) {
     if (cid === state.activeChannelId) {
       state = S.clearUnread(state, cid);
       state = S.clearMention(state, cid);
-      renderChannels();
-      renderDMs();
-      renderNotificationTotal();
+      renderSidebarBadges();
       // Advance the "New messages" divider to the new cursor. Dismiss it entirely
       // if the next unread message is already visible in the viewport.
       const loadedMsgs = state.messages[cid] || [];
@@ -1430,9 +1436,7 @@ async function toggleMessageRead(m) {
     unread.setManualUnread(cid);
     const unreadCount = unreadCountAfter(state.messages[cid], newCursor, state.me && state.me.id);
     state = S.setUnread(state, cid, unreadCount);
-    renderChannels();
-    renderDMs();
-    renderNotificationTotal();
+    renderSidebarBadges();
     if (cid === state.activeChannelId) {
       unread.setMarker(cid, newCursor);
       renderMessages();
@@ -1462,6 +1466,20 @@ function updateLeaveBtn() {
   const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
   const adminNonMember = S.isAdmin(state.me) && !!(activeMemberIds && !activeMemberIds.has(state.me.id));
   $("#leave-btn").hidden = !realPrivate || adminNonMember;
+}
+
+// applyChannelAffordances sets the header-adjacent controls whose visibility is a
+// pure function of the channel being opened: the invite/leave/pins buttons and the
+// body.dm-active class (which collapses the members column for a 1:1 DM). Shared by
+// loadChannel and jumpToMessage, the two paths that switch the open channel. The
+// leave button here is the coarse first pass (realPrivate only); refreshActiveMembers
+// → updateLeaveBtn refines it for the admin-non-member bypass case afterward.
+function applyChannelAffordances(ch) {
+  const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
+  $("#invite-btn").hidden = !realPrivate || !isModPlus();
+  $("#leave-btn").hidden = !realPrivate;
+  $("#pins-btn").hidden = !ch;
+  document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
 }
 
 // renderChannelHeader paints the active channel's title + topic into the header.
@@ -1669,15 +1687,8 @@ async function loadChannel(id) {
   const ch = state.channels[id];
   renderChannelHeader(ch);
   renderSecretBanner();
-  // Invite + leave affordances only make sense for a real private channel
-  // (not DMs/public). Inviting is moderator+ only.
-  const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
-  $("#invite-btn").hidden = !realPrivate || !isModPlus();
-  $("#leave-btn").hidden = !realPrivate;
-  $("#pins-btn").hidden = !ch;
-  // A DM is 1:1 — there's no roster worth showing, so collapse the members
-  // column and hide its toggle (CSS keys off body.dm-active).
-  document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
+  // Invite/leave/pins buttons + the dm-active members-column collapse (see helper).
+  applyChannelAffordances(ch);
   // Reset scroll/history flags immediately so sentinels can't fire while in-flight.
   loadingOlder = false;
   loadingNewer = false;
@@ -1793,17 +1804,11 @@ async function jumpToMessage(channelId, messageId) {
     try { localStorage.setItem("rivendell.activeChannel", channelId); } catch (e) { /* non-fatal */ }
     state = S.clearUnread(state, channelId);
     state = S.clearMention(state, channelId);
-    renderChannels();
-    renderDMs();
-    renderNotificationTotal();
+    renderSidebarBadges();
     closeDrawers();
     const ch = state.channels[channelId];
     renderChannelHeader(ch);
-    const realPrivate = !!(ch && ch.is_private && !ch.is_dm);
-    $("#invite-btn").hidden = !realPrivate || !isModPlus();
-    $("#leave-btn").hidden = !realPrivate;
-    $("#pins-btn").hidden = !ch;
-    document.body.classList.toggle("dm-active", !!(ch && ch.is_dm));
+    applyChannelAffordances(ch);
     await refreshActiveMembers();
   }
   try {
@@ -1950,7 +1955,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   // holdPosition wins over both: when paging forward through history (or jumping)
   // we must NOT snap to the bottom — that would strand the reader past the content
   // they just loaded. The caller restores/sets the scroll position itself.
-  const atBottom = !holdPosition && (forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80);
+  const atBottom = !holdPosition && (forceBottom || wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < NEAR_BOTTOM_PX);
   const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
   // Capture an in-progress inline edit before innerHTML wipes the textarea, so a
   // re-render triggered by an incoming event keeps the draft, caret, and focus.
@@ -2378,7 +2383,7 @@ function wireComposer() {
       const now = Date.now();
       if (now - lastTypingSent >= TYPING_INTERVAL_MS) {
         lastTypingSent = now;
-        socket && socket.send({ type: "typing", channel_id: state.activeChannelId });
+        sendWS({ type: "typing", channel_id: state.activeChannelId });
       }
     }
   });
@@ -3294,14 +3299,14 @@ function wireIdleDetection() {
   function goIdle() {
     if (isIdle) return;
     isIdle = true;
-    socket && socket.send({ type: "idle", idle: true });
+    sendWS({ type: "idle", idle: true });
   }
 
   function onActivity() {
     clearTimeout(idleTimer);
     if (isIdle) {
       isIdle = false;
-      socket && socket.send({ type: "idle", idle: false });
+      sendWS({ type: "idle", idle: false });
     }
     idleTimer = setTimeout(goIdle, IDLE_MS);
   }
@@ -3383,6 +3388,22 @@ function renderNotificationTotal() {
   document.title = n > 0 ? `(${n}) ${baseTitle}` : baseTitle;
 }
 
+// displayNameOf returns a user's display name, or "Someone" when the user isn't in
+// the roster — the generic actor for a notification/ring where we hold only an id.
+function displayNameOf(userId) {
+  const u = state.users[userId];
+  return u ? u.display_name : "Someone";
+}
+
+// pingLabel formats the "who" line shared by the ping toast and the OS ping
+// notification: a DM is just the sender's name; a channel message reads
+// "<sender> in #<channel>". One source of truth so the toast and the OS alert
+// never drift apart.
+function pingLabel(evt, ch) {
+  const who = displayNameOf(evt.payload.user_id);
+  return ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
+}
+
 // showPingToast renders a brief top-of-screen toast for a ping that arrives while
 // the tab is focused (where OS notifications are suppressed). Auto-dismisses after
 // 4 s; tapping navigates to the channel. Mobile only — on desktop the toast is more
@@ -3392,9 +3413,7 @@ function showPingToast(evt, ch) {
   if (!window.matchMedia("(max-width: 720px)").matches) return;
   const container = $("#ping-toasts");
   if (!container) return;
-  const author = state.users[evt.payload.user_id];
-  const who = author ? author.display_name : "Someone";
-  const label = ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
+  const label = pingLabel(evt, ch);
   const body = (evt.payload.content || "").replace(/\n+/g, " ");
   const toast = el("div", { class: "ping-toast" },
     el("span", { class: "ping-toast-who" }, label),
@@ -3422,8 +3441,7 @@ function firePing(evt, ch) {
     return;
   }
   const author = state.users[evt.payload.user_id];
-  const who = author ? author.display_name : "Someone";
-  const title = ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
+  const title = pingLabel(evt, ch);
   const body = evt.payload.content || "";
   const tag = `rivendell-ch-${evt.payload.channel_id}`;
   const icon = author && author.has_avatar ? api.avatarURL(author.id) : undefined;
@@ -3452,8 +3470,7 @@ function fireRingNotification(fromUserId, dmChannelId) {
     return;
   }
   const caller = state.users[fromUserId];
-  const who = caller ? caller.display_name : "Someone";
-  const title = "📞 Call from " + who;
+  const title = "📞 Call from " + displayNameOf(fromUserId);
   const icon = caller && caller.has_avatar ? api.avatarURL(caller.id) : undefined;
   // messageId 0 = "just open the channel" (real ids start at 1); the SW click
   // routing in initPushRouting treats it as selectChannel rather than a jump.
@@ -3696,7 +3713,7 @@ function wireVoiceControls() {
     stopRingSound();
     clearRingNotification();
     // Send acceptance before joining so the caller gets the signal promptly.
-    socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: true });
+    sendWS({ type: "voice.ring_response", dm_channel_id: chId, accept: true });
     ringState = null;
     renderRingBanner();
     try {
@@ -3716,7 +3733,7 @@ function wireVoiceControls() {
     stopRingSound();
     stopPendingSound();
     clearRingNotification();
-    socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
+    sendWS({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
     ringState = null;
     renderRingBanner();
     renderChannelHeader(state.channels[state.activeChannelId]);
@@ -3748,7 +3765,7 @@ function wireVoiceControls() {
       // Cancel the outgoing ring.
       const chId = ringState.channelId;
       stopPendingSound();
-      socket && socket.send({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
+      sendWS({ type: "voice.ring_response", dm_channel_id: chId, accept: false });
       ringState = null;
       renderRingBanner();
       renderChannelHeader(ch);
@@ -3758,7 +3775,7 @@ function wireVoiceControls() {
       await leaveVoiceChannel();
       return;
     }
-    socket && socket.send({ type: "voice.ring", dm_channel_id: ch.id });
+    sendWS({ type: "voice.ring", dm_channel_id: ch.id });
     ringState = { channelId: ch.id, direction: "outgoing", fromUserId: state.me.id };
     renderChannelHeader(ch);
     renderRingBanner();
@@ -3973,9 +3990,7 @@ function renderRingBanner() {
   const { direction, fromUserId, channelId } = ringState;
   const bannerText = $("#ring-banner-text");
   if (direction === "incoming") {
-    const caller = state.users[fromUserId];
-    const name = caller ? caller.display_name : "Someone";
-    bannerText.textContent = name + " is calling…";
+    bannerText.textContent = displayNameOf(fromUserId) + " is calling…";
     $("#ring-accept-btn").hidden = false;
     $("#ring-decline-btn").textContent = "Decline";
   } else {

@@ -213,3 +213,21 @@ triplicated mobile video/chat-toggle label into `applyHeaderCamLabel`), deduped 
 video-grid show/hide teardown into `showVideoGrid` / `hideVideoGrid`, and lifted the
 reaction-pill tooltip string to a pure, unit-tested `reactionTooltip` in `format.js`
 (the `isCustom`/`isOrphan`/`mine` computation stays in `reactionsRow`).
+
+A further pass tightened five repeated idioms: the `renderChannels()` +
+`renderDMs()` + `renderNotificationTotal()` trio that every count/membership change
+fired (11 sites) collapsed into `renderSidebarBadges()` (distinct from
+`rerenderSidebar`, which also paints the roster); the invite/leave/pins-button +
+`dm-active` block duplicated by `loadChannel` and `jumpToMessage` into
+`applyChannelAffordances(ch)`; the `80`px "pinned to the live tail" scroll threshold,
+which three independent geometry checks must agree on, into a named `NEAR_BOTTOM_PX`
+constant; the `state.users[id]?.display_name ?? "Someone"` lookup and the
+`"<who> in #<channel>"` notification label into `displayNameOf()` / `pingLabel()`
+(shared by the ping toast, the OS ping notification, and the ring banner); and the
+`socket && socket.send(...)` send idiom (11 sites) into `sendWS(msg)` — a pure
+null-guard, since `ws.js`'s own `send()` already drops non-OPEN frames and never
+throws, which also let a now-redundant `try/catch` at the unload site go. The
+single-function-local magic numbers (swipe/long-press thresholds) were deliberately
+left inline: no cross-site sync hazard, and naming them is churn on hardened gesture
+code. All five are e2e-net-covered (full suite green); the ping-toast/OS-notification
+label paths have no e2e and rest on inspection (verbatim string moves).
