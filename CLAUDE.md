@@ -35,7 +35,7 @@ web/test/                     node:test unit suites (one per pure JS module)
 web/e2e/                      Playwright specs (composer-paste, dm-call,
                               group-call, search, emoji-picker, channel-reorder,
                               link-previews, admin, secret-chat, forward, pins,
-                              modals, mobile-ctx); dev-only, run via `make test-e2e`
+                              modals, mobile-ctx, non-admin); dev-only, run via `make test-e2e`
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
