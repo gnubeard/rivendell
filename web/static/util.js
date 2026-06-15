@@ -34,3 +34,11 @@ export function formatTime(iso) {
   const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return sameDay ? time : `${d.toLocaleDateString()} ${time}`;
 }
+
+// initials reduces a display name to the avatar-placeholder glyph shown when a
+// user has no uploaded avatar: the first letters of the first two whitespace-
+// separated words, uppercased. Empty/blank names fall back to "?". Used by the
+// sidebar, message rows, the user card (modals.js), and the video grid.
+export function initials(name) {
+  return (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+}

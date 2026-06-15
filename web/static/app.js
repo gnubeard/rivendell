@@ -36,7 +36,7 @@ import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage, shouldI
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
 import { upgradeComposerField } from "./composer-field.js";
-import { humanBytes, formatTime, overSizeLimit } from "./util.js";
+import { humanBytes, formatTime, overSizeLimit, initials } from "./util.js";
 import { createPrefs, normalizeTheme } from "./prefs.js";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js";
 import { createAutocomplete } from "./autocomplete.js";
@@ -3092,7 +3092,6 @@ const modals = createModals({
   api,
   closeDrawers,
   avatarSrc,
-  initials,
   startDM,
   onProfileOpen: () => { notifUI.renderNotifControl(); voiceUI.onProfileOpen(); },
   onActiveMembersChanged: (memberIds) => { activeMemberIds = memberIds; renderMembers(); },
@@ -3210,10 +3209,6 @@ function avatarSrc(userId) {
   return api.avatarURL(userId);
 }
 
-function initials(name) {
-  return (name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-}
-
 // Image cache warming (avatars, viewport images, background blob sweep). See
 // imagewarm.js for the contract; the pure newest-first URL scan is unit-tested
 // there. avatarSrc is passed by reference (it closes over avatarVersion/state).
@@ -3244,7 +3239,6 @@ const videoGrid = createVideoGrid({
   getVoiceCallState: () => voiceUI.getVoiceCallState(),
   getSpeakingIds: () => voiceUI.getSpeakingIds(),
   avatarSrc,
-  initials,
   getVideoViewHidden: () => voiceUI.getVideoViewHidden(),
   setVideoViewHidden: (v) => voiceUI.setVideoViewHidden(v),
 });

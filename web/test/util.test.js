@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { humanBytes, formatTime, overSizeLimit } from "../static/util.js";
+import { humanBytes, formatTime, overSizeLimit, initials } from "../static/util.js";
 
 test("humanBytes shows whole bytes below 1 KB", () => {
   assert.equal(humanBytes(0), "0 B");
@@ -70,4 +70,30 @@ test("formatTime prefixes the date for an other-day timestamp", () => {
   assert.equal(formatTime(then), expected);
   // and the other-day form is strictly longer than the bare time
   assert.ok(formatTime(then).length > time.length);
+});
+
+test("initials takes the first letter of the first two words, uppercased", () => {
+  assert.equal(initials("Frodo Baggins"), "FB");
+  assert.equal(initials("samwise gamgee"), "SG");
+});
+
+test("initials uses a single letter for a one-word name", () => {
+  assert.equal(initials("Gandalf"), "G");
+});
+
+test("initials stops at two words for longer names", () => {
+  assert.equal(initials("Aragorn son of Arathorn"), "AS");
+});
+
+test("initials collapses surrounding and interior whitespace", () => {
+  assert.equal(initials("  Bilbo   Baggins  "), "BB");
+});
+
+test("initials falls back to ? for an empty or nullish name", () => {
+  assert.equal(initials(""), "?");
+  assert.equal(initials(null), "?");
+  assert.equal(initials(undefined), "?");
+  // A whitespace-only name is truthy, so it skips the `|| "?"` fallback and
+  // trims to the empty string — documenting the actual behavior, not changing it.
+  assert.equal(initials("   "), "");
 });

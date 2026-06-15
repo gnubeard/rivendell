@@ -127,7 +127,7 @@ Conventions specific to this kind of module:
 | Sidebar ordering + drag-reorder diff | `channelorder.js` | unit (12) | ✅ done |
 | Per-channel composer scratch (draft text + attachments) | `drafts.js` | unit (12) | ✅ done |
 | Composer field facade (textarea-on-div) | `composer-field.js` | e2e (composer-paste) | ✅ done |
-| Small pure helpers (`humanBytes`, `formatTime`, `overSizeLimit`) | `util.js` | unit (11) | ✅ done |
+| Small pure helpers (`humanBytes`, `formatTime`, `overSizeLimit`, `initials`) | `util.js` | unit (16) | ✅ done |
 | Theme allow-list + browser-local prefs (notif, PTT) | `prefs.js` | unit (10) | ✅ done |
 | Link/embed preview cache state machine | `previews.js` | unit (8) | ✅ done |
 | Composer attachment-upload tray (+ pure message-body assembly) | `attachments.js` | unit (8) + e2e | ✅ done |
@@ -391,3 +391,34 @@ DOM (glyph element, reactor-name join, the editor textarea) stays in app.js. New
 cores are unit-tested in `web/test/format.test.js` / `web/test/unread.test.js`; the
 DOM-bound edit/reaction behavior rests on the `emoji-picker`, `mobile-ctx`, and
 `history` e2e nets (all green). With that, the sequenced message-pane pass is complete.
+
+## Where the effort lands (the carve is complete)
+
+A closing re-scan (2026-06) confirms there is no remaining module to carve. Two axes
+were checked:
+
+- **Realtime / `state.applyEvent` — closed.** `applyEvent` is total over the
+  state-mutating events (`state.js`), and `handleRealtimeEvent` is a clean per-event
+  re-render dispatch. The handler's only inline state writes — `bumpUnread`/`bumpMention`
+  — are gated by `classifyIncomingMessage`'s view booleans (`active`/`focused`/
+  `adminPanelOpen`), which are DOM-derived; pushing them into `applyEvent` would drag
+  view state down into the pure layer, so they correctly stay in the handler. Nothing
+  further to lean down here.
+
+- **Oversized functions — all blessed retentions.** The only large functions left are
+  the entanglements this doc already lists as deliberately retained: `wireComposer`,
+  `handleRealtimeEvent` (clean dispatch), `enterApp` (boot), `renderMessages`, and the
+  `render*`/`wire*`/`boot*` families. No new god-function has formed.
+
+The one loose pure fragment the re-scan surfaced — `initials(name)`, an avatar-placeholder
+helper that was still in `app.js` and injected into `modals.js`/`videogrid.js` — was lifted
+to `util.js` (its home beside `humanBytes`/`formatTime`), unit-tested, and dropped from both
+deps bags (they import it directly now). That was the last pure-fragment sweep.
+
+What stays in `app.js` is, by design, the orchestrator spine: `wireComposer` and the other
+control wiring, inline message editing, the reactions render path (pure core in `format.js`),
+the call strip, boot/auth, the realtime/sync dispatch, message rendering/loading, and the
+channel header/selection. These are the wireComposer-class entanglements a module would
+*relocate* rather than isolate — extracting them is explicitly out of scope. **The
+decomposition effort is complete; further work on these is ordinary maintenance, not a
+carve.**

@@ -17,15 +17,16 @@
 //     channel's member set + re-rendered the members panel
 //
 // Deps: el, $, getState (() => state, read fresh), api, closeDrawers, avatarSrc,
-// initials, startDM, plus the two callbacks above. presenceClass/normalizeTheme/
-// formatMessage are imported directly.
+// startDM, plus the two callbacks above. presenceClass/normalizeTheme/
+// formatMessage/initials are imported directly.
 
 import { presenceClass } from "./presence.js";
 import { normalizeTheme } from "./prefs.js";
 import { formatMessage } from "./format.js";
+import { initials } from "./util.js";
 
 export function createModals({
-  el, $, getState, api, closeDrawers, avatarSrc, initials, startDM,
+  el, $, getState, api, closeDrawers, avatarSrc, startDM,
   onProfileOpen, onActiveMembersChanged,
 }) {
   // openInviteModal lists everyone and lets you add non-members to the active

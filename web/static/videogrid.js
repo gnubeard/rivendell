@@ -16,13 +16,15 @@
 // element builder `el` and `$` as deps and reads reassigned module state through
 // getters (`getState`, `getVoiceCallState` — both are reassigned on every update,
 // so capturing the value would go stale). Already-modular helpers are imported
-// directly: the video elements from voice.js, otherDMParticipant from state.js.
+// directly: the video elements from voice.js, otherDMParticipant from state.js,
+// initials from util.js.
 //
 // Tested by web/e2e/video-grid.spec.js (grid show/hide, fullscreen control, the
 // mobile chat↔video toggle) plus the live-tile assertions in dm-call/group-call.
 
 import { getVideoEl, getLocalVideoEl } from "./voice.js";
 import { otherDMParticipant, anyVideoPresent } from "./state.js";
+import { initials } from "./util.js";
 
 export function createVideoGrid({
   el,
@@ -31,7 +33,6 @@ export function createVideoGrid({
   getVoiceCallState,
   getSpeakingIds,
   avatarSrc,
-  initials,
   getVideoViewHidden,
   setVideoViewHidden,
 }) {
