@@ -51,7 +51,13 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               ring banner, PTT, volume slider, video toggle),
                               notifyui.js (foreground-notification UX over notify.js:
                               missed-count badge/title, ping toast, Web Push
-                              subscription lifecycle, profile opt-in control)
+                              subscription lifecycle, profile opt-in control),
+                              history.js (message-pane history/paging + scroll
+                              sub-system: createHistoryPaging factory owns the
+                              older/newer paging, sentinels, history-window flags +
+                              banner; free exports PAGE/NEAR_BOTTOM_PX/isNearBottom/
+                              scrollToBottom; loadChannel/jumpToMessage stay in app.js
+                              and drive it via accessors)
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites for the pure JS modules
                               (DOM-carrying modules are covered by e2e instead)

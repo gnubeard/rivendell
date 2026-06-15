@@ -207,7 +207,9 @@ latent `activeCh` ReferenceError that only non-mod members hit). A later re-tall
 had rested on a stale deps-bag estimate that double-counted `voice.js` imports — and
 it too has now been lifted to `videogrid.js` (see the Video grid bullet above),
 e2e-first, scoped to the grid (not `renderCallStrip`). With that, the DOM-carrying
-feature-module well is dry; the remaining work is spine-tightening, not carving.
+feature-module well is dry; the remaining work is spine-tightening, plus the one
+sanctioned sub-system carve from the sequenced message-pane pass below (`history.js`,
+now done) — not more feature modules.
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
 orchestration): inline message editing (the edit-state capture/restore is interleaved
@@ -225,7 +227,10 @@ handler harder on `state.applyEvent`), not carving out more modules.
 
 Two more carves were on deck. They are very different in kind, and the order matters.
 The first — **notifyui.js** — is now done (see the status row above); the second — the
-**message pane** — is recorded here as the live plan, NOT yet started.
+**message pane** — is a sequenced pass whose step 3 (`history.js`, the history/paging +
+scroll sub-system) is now done; its step 1 remainder (grouping + unread-divider pure
+cores) and step 2 (the inline-edit / reactions untangle) are still open. See the
+sequencing below.
 
 **notifyui.js — the foreground-notification glue (done, low risk).** The pure
 core already left long ago: `notify.js` owns the decision predicate (`shouldNotify`)
@@ -261,25 +266,27 @@ remaining glue and shrank app.js by one more concern (~160 lines).
 
 **Message pane — NOT a single lift; a sequenced pass.** The "main message pane" is not a
 feature module — it is the orchestrator spine itself (`renderMessages`/`messageRow`/
-`messageActions`/`renderSecretView`/`renderTypingIndicator`, the `loadChannel`/`loadOlder`/
-`loadNewer` history machinery, `jumpToMessage`, and the scroll geometry), and its
-constituents are exactly the wireComposer-class entanglements this doc already lists as
-deliberately retained. A monolithic `messagepane.js` would need a 15+ entry deps bag of
-mutable session state (`editingMessageId`/`editDraft`/`editFocusPending`, `replyingToId`,
-`flashMessageId`, `liveDeleted`, `loadingOlder`/`loadingNewer`, `historyComplete`/
-`viewingHistory`, the `unread` tracker, `NEAR_BOTTOM_PX`, `state`, `socket`, plus
-cross-calls to `selectChannel`/`jumpToMessage`/`markActiveChannelRead`/linkpreview/emoji)
-— which would *relocate* the tangle behind a bigger, harder-to-follow seam rather than
-isolate it, and would churn the riskiest DOM in the app with e2e as the only net. That
-violates the spine's "don't move the call sites' job into the module" rule. So the value
-the owner wants (isolated + tested) is real, but it comes from the **pure-core +
-untangle** axis, sequenced:
+`messageActions`/`renderSecretView`/`renderTypingIndicator`, the `loadChannel`/
+`jumpToMessage` channel-open/jump orchestrators, and — until step 3 carved it out — the
+`loadOlder`/`loadNewer` history machinery and scroll geometry), and its constituents are
+exactly the wireComposer-class entanglements this doc already lists as deliberately
+retained. A monolithic `messagepane.js` would need a 15+ entry deps bag of mutable
+session state (`editingMessageId`/`editDraft`/`editFocusPending`, `replyingToId`,
+`flashMessageId`, `liveDeleted`, the `unread` tracker, `state`, `socket`, plus cross-calls
+to `selectChannel`/`jumpToMessage`/`markActiveChannelRead`/linkpreview/emoji — and, before
+step 3, the `loadingOlder`/`loadingNewer`/`historyComplete`/`viewingHistory`/`NEAR_BOTTOM_PX`
+paging set now isolated in `history.js`) — which would *relocate* the tangle behind a
+bigger, harder-to-follow seam rather than isolate it, and would churn the riskiest DOM in
+the app with e2e as the only net. That violates the spine's "don't move the call sites'
+job into the module" rule. So the value the owner wants (isolated + tested) is real, but
+it comes from the **pure-core + untangle** axis, sequenced:
 
 1. **Lift the pure decision cores and unit-test them** (their homes already exist):
    message *grouping* (consecutive same-author within the time window → the `grouped`
    flag), the *unread-divider* placement decision, and the *near-bottom* scroll-anchor
-   decision (`NEAR_BOTTOM_PX` is already named). These are genuinely pure and currently
-   untested.
+   decision. **The near-bottom decision is done** — `isNearBottom` in `history.js`,
+   unit-tested — lifted as the groundwork for step 3. Grouping and the unread-divider
+   placement are the genuinely-pure, still-untested remainder.
 2. **Untangle the woven sub-concerns first** — the prerequisite that makes the pane
    legible: inline editing via the in-file `captureEditState`/`restoreEditState` split
    already prescribed above (NOT a module), and reactions (preserving the `mine`
@@ -325,7 +332,9 @@ fired (11 sites) collapsed into `renderSidebarBadges()` (distinct from
 `dm-active` block duplicated by `loadChannel` and `jumpToMessage` into
 `applyChannelAffordances(ch)`; the `80`px "pinned to the live tail" scroll threshold,
 which three independent geometry checks must agree on, into a named `NEAR_BOTTOM_PX`
-constant; the `state.users[id]?.display_name ?? "Someone"` lookup and the
+constant (both since lifted into `history.js` as the unit-tested `isNearBottom`
+predicate, the three checks now its callers); the
+`state.users[id]?.display_name ?? "Someone"` lookup and the
 `"<who> in #<channel>"` notification label into `displayNameOf()` / `pingLabel()`
 (shared by the ping toast, the OS ping notification, and the ring banner); and the
 `socket && socket.send(...)` send idiom (11 sites) into `sendWS(msg)` — a pure
