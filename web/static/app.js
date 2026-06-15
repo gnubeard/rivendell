@@ -3,7 +3,7 @@
 
 import { api } from "./api.js";
 import { connectRealtime } from "./ws.js";
-import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip } from "./format.js";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip, classifyReaction, shouldGroupMessage } from "./format.js";
 import * as S from "./state.js";
 import {
   initSecret,
@@ -32,7 +32,7 @@ import {
 } from "./voice.js";
 import { rtcDebugEnabled, createTelemetry } from "./rtcdebug.js";
 import { primeAudio, greetTone, farewellTone } from "./tones.js";
-import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "./unread.js";
+import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage, shouldInsertUnreadMarker } from "./unread.js";
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
 import { upgradeComposerField } from "./composer-field.js";
@@ -1704,15 +1704,9 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   const atBottom = !holdPosition && (forceBottom || isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight));
   const prevTop = wrap.scrollTop; // clearing innerHTML resets scrollTop; restore it below
   // Capture an in-progress inline edit before innerHTML wipes the textarea, so a
-  // re-render triggered by an incoming event keeps the draft, caret, and focus.
-  let editRestore = null;
-  if (editingMessageId != null) {
-    const live = wrap.querySelector(".msg-edit-input");
-    if (live) {
-      editDraft = live.value;
-      editRestore = { focused: document.activeElement === live, start: live.selectionStart, end: live.selectionEnd };
-    }
-  }
+  // re-render triggered by an incoming event keeps the draft, caret, and focus
+  // (restoreEditState re-establishes it after the rebuild, below).
+  const editRestore = captureEditState(wrap);
   wrap.innerHTML = "";
   const activeCh = state.channels[state.activeChannelId];
   const secretSess = activeCh && activeCh.is_dm ? getSession(state.activeChannelId) : null;
@@ -1784,18 +1778,19 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     }
 
     // Insert the "New messages" divider before the first message that is newer
-    // than the read cursor captured when this channel was opened.
-    if (!markerInserted && markerAt > 0 && m.id > markerAt) {
+    // than the read cursor captured when this channel was opened (the decision is
+    // the pure shouldInsertUnreadMarker; the loop keeps markerInserted).
+    if (shouldInsertUnreadMarker(markerInserted, markerAt, m.id)) {
       markerInserted = true;
       wrap.append(el("div", { class: "unread-marker" },
         el("span", { class: "unread-marker-label" }, "New messages")));
     }
 
     const t = new Date(m.created_at).getTime();
-    // A reply always starts a fresh (non-grouped) block so its quote sits cleanly
-    // under the author header it belongs to, rather than being tucked under a
-    // same-author run above it.
-    const grouped = m.user_id === lastUser && t - lastTime < 5 * 60 * 1000 && !m.reply_to_id;
+    // Grouping (same author, within the window, non-reply) is a pure decision —
+    // see shouldGroupMessage in format.js. The loop keeps the lastUser/lastTime
+    // accumulators (reset by dividers/system/tombstones above, which break a run).
+    const grouped = shouldGroupMessage(lastUser, lastTime, m, t);
     lastUser = m.user_id;
     lastTime = t;
     wrap.append(messageRow(m, { grouped, isMod, canPin }));
@@ -1812,24 +1807,42 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   // reader's position (loadOlderMessages adjusts further for prepended history).
   if (atBottom) scrollToBottom(wrap);
   else wrap.scrollTop = prevTop;
-  // Re-establish the inline editor's size and (if it was focused, or just opened)
-  // its focus + caret after the rebuild. If the edited message is gone (e.g. a mod
-  // deleted it mid-edit), drop the pending-focus flag.
-  if (editingMessageId != null) {
-    const ta = wrap.querySelector(".msg-edit-input");
-    if (ta) {
-      autoGrowEdit(ta);
-      if (editFocusPending) {
-        ta.focus();
-        const end = ta.value.length;
-        ta.setSelectionRange(end, end);
-      } else if (editRestore && editRestore.focused) {
-        ta.focus();
-        ta.setSelectionRange(editRestore.start, editRestore.end);
-      }
+  // Re-establish the inline editor's size, focus, and caret after the rebuild.
+  restoreEditState(wrap, editRestore);
+}
+
+// captureEditState snapshots an in-progress inline edit before renderMessages wipes
+// innerHTML: it stashes the live draft into editDraft (so the text survives the
+// rebuild) and returns the focus + caret state for restoreEditState to re-apply.
+// Returns null when nothing is being edited or the editor isn't in the DOM yet.
+function captureEditState(wrap) {
+  if (editingMessageId == null) return null;
+  const live = wrap.querySelector(".msg-edit-input");
+  if (!live) return null;
+  editDraft = live.value;
+  return { focused: document.activeElement === live, start: live.selectionStart, end: live.selectionEnd };
+}
+
+// restoreEditState re-sizes the rebuilt inline editor and restores focus + caret
+// after a re-render. A freshly opened editor (editFocusPending) takes focus with the
+// caret at the end; an editor that merely survived an incidental re-render restores
+// the snapshot if it had focus. Always clears editFocusPending. If the edited
+// message is gone (e.g. a mod deleted it mid-edit) there's nothing to restore.
+function restoreEditState(wrap, snap) {
+  if (editingMessageId == null) return;
+  const ta = wrap.querySelector(".msg-edit-input");
+  if (ta) {
+    autoGrowEdit(ta);
+    if (editFocusPending) {
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    } else if (snap && snap.focused) {
+      ta.focus();
+      ta.setSelectionRange(snap.start, snap.end);
     }
-    editFocusPending = false;
   }
+  editFocusPending = false;
 }
 
 // renderSecretView paints the in-memory encrypted message list for an active or
@@ -2441,28 +2454,21 @@ function findMessage(messageId) {
   return arr.find((m) => m.id === messageId) || null;
 }
 
-// SHORTCODE_RE matches the custom-emoji shortcode namespace: [a-z0-9_]{2,32}.
-// Used to distinguish orphaned shortcodes (in reactions but no longer in the
-// registry) from literal Unicode graphemes, which don't match this pattern.
-const SHORTCODE_RE = /^[a-z0-9_]{2,32}$/;
-
 // reactionsRow renders the pill row under a message, or null if it has none. Each
 // pill shows the emoji (custom shortcode → image, else the literal Unicode glyph)
 // and its count, is highlighted when I'm among the reactors, and toggles on click.
 // When the backing custom emoji has been deleted the pill shows a 🪦 tombstone:
 // mine reactors may still click to remove (the server now allows it); non-mine
-// pills are disabled since adding a deleted emoji would be rejected anyway.
+// pills are disabled since adding a deleted emoji would be rejected anyway. The
+// per-pill classification (mine/isCustom/isOrphan/disabled) is the pure
+// classifyReaction (format.js); the glyph element and name join stay here.
 function reactionsRow(m) {
   if (!m.reactions || !m.reactions.length) return null;
   const row = el("div", { class: "reactions" });
   for (const g of m.reactions) {
     const ids = g.user_ids || [];
-    const mine = ids.includes(state.me.id);
+    const { mine, isCustom, isOrphan, disabled } = classifyReaction(g, state.emojis, state.me.id);
     const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
-    // An orphaned reaction: value looks like a shortcode but is no longer in the
-    // emoji registry (the custom emoji was deleted after the reaction was placed).
-    const isCustom = !!state.emojis[g.emoji];
-    const isOrphan = !isCustom && SHORTCODE_RE.test(g.emoji);
     const glyph = isCustom
       ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:` })
       : isOrphan
@@ -2474,10 +2480,10 @@ function reactionsRow(m) {
     row.append(el("button", {
       class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
       title: titleText,
-      disabled: isOrphan && !mine,
+      disabled,
       // Pass the rendered "mine" so the toggle is correct even when the message
       // isn't in the active window (the pins modal renders pins it fetched itself).
-      onclick: isOrphan && !mine ? null : () => toggleReaction(m.id, g.emoji, mine),
+      onclick: disabled ? null : () => toggleReaction(m.id, g.emoji, mine),
     }, glyph, el("span", { class: "r-count" }, String(ids.length))));
   }
   return row;

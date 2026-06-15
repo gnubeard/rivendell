@@ -249,6 +249,22 @@ export function pingLabel(who, ch) {
   return ch && ch.is_dm ? who : `${who} in #${ch ? ch.name : "channel"}`;
 }
 
+// GROUP_WINDOW_MS is the gap within which consecutive same-author messages render
+// as one grouped block (avatarless continuations under a single author header).
+export const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+// shouldGroupMessage decides whether `msg` renders as a grouped continuation of the
+// message above it: same author, within GROUP_WINDOW_MS of that message, and not a
+// reply. A reply always starts a fresh block so its quote sits cleanly under the
+// author header it belongs to, rather than tucked under a same-author run above it.
+// Pure: prevUserId/prevTime are the running accumulators the render loop keeps —
+// reset (to null/0) by dividers, system messages, and tombstones, which break a run.
+// `msgTime` is the message's epoch-ms time (the loop already computes it to update
+// the accumulator), passed in so this stays free of date parsing.
+export function shouldGroupMessage(prevUserId, prevTime, msg, msgTime, windowMs = GROUP_WINDOW_MS) {
+  return msg.user_id === prevUserId && msgTime - prevTime < windowMs && !msg.reply_to_id;
+}
+
 // YOUTUBE_ID_RE extracts the 11-char video ID from youtube.com/watch, youtu.be,
 // youtube.com/shorts, and youtube.com/embed URLs.
 const YOUTUBE_ID_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
@@ -351,6 +367,30 @@ export const BUILTIN_EMOJI = {
 const BUILTIN_GLYPH_TO_NAME = Object.fromEntries(
   Object.entries(BUILTIN_EMOJI).map(([name, glyph]) => [glyph, name]),
 );
+
+// SHORTCODE_RE matches the custom-emoji shortcode namespace: [a-z0-9_]{2,32}. Used
+// to tell an orphaned shortcode (in a reaction but no longer in the registry) from a
+// literal Unicode grapheme, which doesn't match this pattern.
+const SHORTCODE_RE = /^[a-z0-9_]{2,32}$/;
+
+// classifyReaction decides how one reaction group renders, purely from the group,
+// the live emoji registry, and my user id:
+//   mine     — am I among the reactors. This is the value toggleReaction must
+//              receive (the `mine` invariant: the pill's known state, never a
+//              re-lookup), so classify it once here and thread it through.
+//   isCustom — the value is a live custom emoji (image pill).
+//   isOrphan — a shortcode-shaped value whose custom emoji was deleted (🪦 pill).
+//   disabled — an orphan I haven't reacted with: adding a deleted emoji would be
+//              rejected, so its click is dead; mine reactors may still click to
+//              remove (the same disabled flag also nulls the onclick in reactionsRow).
+// Pure; the DOM glyph and the reactor-name join stay in reactionsRow.
+export function classifyReaction(group, emojis, meId) {
+  const ids = group.user_ids || [];
+  const mine = ids.includes(meId);
+  const isCustom = !!emojis[group.emoji];
+  const isOrphan = !isCustom && SHORTCODE_RE.test(group.emoji);
+  return { mine, isCustom, isOrphan, disabled: isOrphan && !mine };
+}
 
 // reactionTooltip builds the hover-title string for one reaction pill: the emoji's
 // identity, an em-dash, the reactor names, and an "(emoji deleted…)" note for

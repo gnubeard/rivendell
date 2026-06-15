@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, BUILTIN_EMOJI } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 // ---- reactionTooltip ----
@@ -37,6 +37,42 @@ test("reactionTooltip: an orphan adds the deleted note; mine adds the remove hin
     reactionTooltip("goneblob", "Alice", { isCustom: false, isOrphan: true, mine: true }),
     ":goneblob: — Alice (emoji deleted — click to remove)",
   );
+});
+
+// ---- classifyReaction ----
+
+test("classifyReaction: a live custom emoji is isCustom, not orphan, enabled", () => {
+  assert.deepEqual(
+    classifyReaction({ emoji: "partyblob", user_ids: [2] }, { partyblob: {} }, 1),
+    { mine: false, isCustom: true, isOrphan: false, disabled: false });
+});
+
+test("classifyReaction: a Unicode glyph is neither custom nor orphan, enabled", () => {
+  assert.deepEqual(
+    classifyReaction({ emoji: "🔥", user_ids: [2] }, {}, 1),
+    { mine: false, isCustom: false, isOrphan: false, disabled: false });
+});
+
+test("classifyReaction: mine reflects my id among the reactors", () => {
+  assert.equal(classifyReaction({ emoji: "🔥", user_ids: [1, 2] }, {}, 1).mine, true);
+  assert.equal(classifyReaction({ emoji: "🔥", user_ids: [2, 3] }, {}, 1).mine, false);
+});
+
+test("classifyReaction: a shortcode-shaped value absent from the registry is an orphan", () => {
+  // Not mine ⇒ disabled (adding a deleted emoji would be rejected).
+  assert.deepEqual(
+    classifyReaction({ emoji: "goneblob", user_ids: [2] }, {}, 1),
+    { mine: false, isCustom: false, isOrphan: true, disabled: true });
+  // Mine ⇒ still clickable to remove.
+  assert.deepEqual(
+    classifyReaction({ emoji: "goneblob", user_ids: [1] }, {}, 1),
+    { mine: true, isCustom: false, isOrphan: true, disabled: false });
+});
+
+test("classifyReaction: a missing user_ids array is treated as no reactors", () => {
+  assert.deepEqual(
+    classifyReaction({ emoji: "🔥" }, {}, 1),
+    { mine: false, isCustom: false, isOrphan: false, disabled: false });
 });
 
 test("escapes HTML to prevent XSS", () => {
@@ -606,6 +642,48 @@ test("pingLabel: a DM is just the sender's name; a channel reads '<who> in #<nam
   assert.equal(pingLabel("Frodo", { is_dm: false, name: "shire" }), "Frodo in #shire");
   // A missing channel record falls back to a generic "#channel".
   assert.equal(pingLabel("Frodo", null), "Frodo in #channel");
+});
+
+// ---- shouldGroupMessage ----
+
+test("shouldGroupMessage: same author within the window groups", () => {
+  assert.equal(
+    shouldGroupMessage(7, 1000, { user_id: 7, reply_to_id: null }, 1000 + 60_000),
+    true);
+});
+
+test("shouldGroupMessage: a different author breaks the group", () => {
+  assert.equal(
+    shouldGroupMessage(7, 1000, { user_id: 8, reply_to_id: null }, 1000 + 1000),
+    false);
+});
+
+test("shouldGroupMessage: a gap at or beyond the window breaks the group", () => {
+  // Strictly-less-than: exactly GROUP_WINDOW_MS apart is NOT grouped.
+  assert.equal(
+    shouldGroupMessage(7, 1000, { user_id: 7, reply_to_id: null }, 1000 + GROUP_WINDOW_MS),
+    false);
+  assert.equal(
+    shouldGroupMessage(7, 1000, { user_id: 7, reply_to_id: null }, 1000 + GROUP_WINDOW_MS - 1),
+    true);
+});
+
+test("shouldGroupMessage: a reply always starts a fresh block", () => {
+  assert.equal(
+    shouldGroupMessage(7, 1000, { user_id: 7, reply_to_id: 42 }, 1000 + 1000),
+    false);
+});
+
+test("shouldGroupMessage: a null previous author (run reset) never groups", () => {
+  assert.equal(
+    shouldGroupMessage(null, 0, { user_id: 7, reply_to_id: null }, 1000),
+    false);
+});
+
+test("shouldGroupMessage: a custom window overrides the default", () => {
+  const msg = { user_id: 7, reply_to_id: null };
+  assert.equal(shouldGroupMessage(7, 1000, msg, 1000 + 5000, 10_000), true);
+  assert.equal(shouldGroupMessage(7, 1000, msg, 1000 + 5000, 1000), false);
 });
 
 test("parsePermalink parses a valid hash", () => {

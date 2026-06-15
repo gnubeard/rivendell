@@ -143,6 +143,17 @@ export function createUnreadTracker() {
   };
 }
 
+// shouldInsertUnreadMarker decides whether the "New messages" divider is inserted
+// BEFORE this message in the render loop: only once per render (markerInserted
+// guards the first qualifying message), only when a divider cursor exists
+// (markerAt > 0 — a 0 cursor means "suppressed", per openChannel/seedMarker), and
+// only for a message strictly newer than that cursor. Pure; the loop keeps the
+// markerInserted accumulator and owns the DOM insert. markerAt comes from
+// markerFor(cid).
+export function shouldInsertUnreadMarker(markerInserted, markerAt, msgId) {
+  return !markerInserted && markerAt > 0 && msgId > markerAt;
+}
+
 // unreadCountAfter counts loaded messages newer than the cursor that aren't mine
 // — the tally the mark-unread action shows immediately (the server re-syncs the
 // exact figure on next load). Pure; mirrors the read.unread reducer in state.js.

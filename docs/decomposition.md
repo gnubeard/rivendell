@@ -212,16 +212,18 @@ sanctioned sub-system carve from the sequenced message-pane pass below (`history
 now done) — not more feature modules.
 
 Still deliberately retained in `app.js` (wireComposer-class entanglements or pure
-orchestration): inline message editing (the edit-state capture/restore is interleaved
-into the renderMessages loop — the realistic move is an in-file
-`captureEditState`/`restoreEditState` split, NOT a module), `wireComposer` (the most
-coupled surface in the file: `state`, `replyingToId`, `sendWS`, `composerTray`,
-`drafts`, `editingMessageId`, the secret-session gate, autocomplete, attachments),
-reactions (woven into message rendering + the `mine` invariant), the call strip (PTT
-flags), control wiring, bootstrapping, realtime/sync, message rendering/loading,
-channel header/selection. With the video grid lifted, the next worthwhile work is
-different in kind — tightening that spine (in-file helper splits, leaning the realtime
-handler harder on `state.applyEvent`), not carving out more modules.
+orchestration): inline message editing (the edit-state capture/restore has since been
+split into the in-file `captureEditState`/`restoreEditState` pair — a legibility split,
+NOT a module; the `editingMessageId`/`editDraft`/`editFocusPending` state stays in
+app.js), `wireComposer` (the most coupled surface in the file: `state`, `replyingToId`,
+`sendWS`, `composerTray`, `drafts`, `editingMessageId`, the secret-session gate,
+autocomplete, attachments), reactions (the `reactionsRow` DOM stays here woven into
+message rendering; the pure `classifyReaction` core and the `mine` invariant are now
+spelled out in `format.js`), the call strip (PTT flags), control wiring, bootstrapping,
+realtime/sync, message rendering/loading, channel header/selection. With the video grid
+lifted, the next worthwhile work is different in kind — tightening that spine (in-file
+helper splits, leaning the realtime handler harder on `state.applyEvent`), not carving
+out more modules.
 
 ### notifyui.js (✅ done), then a sequenced message-pane pass
 
@@ -284,13 +286,29 @@ it comes from the **pure-core + untangle** axis, sequenced:
 1. **Lift the pure decision cores and unit-test them** (their homes already exist):
    message *grouping* (consecutive same-author within the time window → the `grouped`
    flag), the *unread-divider* placement decision, and the *near-bottom* scroll-anchor
-   decision. **The near-bottom decision is done** — `isNearBottom` in `history.js`,
-   unit-tested — lifted as the groundwork for step 3. Grouping and the unread-divider
-   placement are the genuinely-pure, still-untested remainder.
+   decision. **✅ done.** All three are now pure + unit-tested: the near-bottom
+   decision is `isNearBottom` in `history.js` (lifted earlier as step-3 groundwork);
+   grouping is `shouldGroupMessage` (+ `GROUP_WINDOW_MS`) in `format.js`, with the
+   render loop keeping only the `lastUser`/`lastTime` accumulators; and the
+   unread-divider placement is `shouldInsertUnreadMarker` in `unread.js` (its home,
+   beside `markerFor`/`unreadCountAfter`), the loop keeping the `markerInserted`
+   accumulator and the DOM insert. Tested in `web/test/format.test.js` /
+   `web/test/unread.test.js`.
 2. **Untangle the woven sub-concerns first** — the prerequisite that makes the pane
    legible: inline editing via the in-file `captureEditState`/`restoreEditState` split
    already prescribed above (NOT a module), and reactions (preserving the `mine`
-   invariant) out of the `renderMessages` loop.
+   invariant) out of the `renderMessages` loop. **✅ done.** The inline-edit
+   capture/restore is now the in-file `captureEditState(wrap)` / `restoreEditState(wrap,
+   snap)` pair (`captureEditState` also stashes the live draft into `editDraft`),
+   leaving `renderMessages` with two one-line calls around the `innerHTML` wipe instead
+   of two interleaved blocks. Reactions were already a clean seam (`reactionsRow`, out
+   of the loop via `messageRow`, injected into `pins.js`); this pass lifted the one
+   remaining pure core — the per-pill `mine`/`isCustom`/`isOrphan`/`disabled`
+   classification — to `classifyReaction` in `format.js` (the `SHORTCODE_RE` orphan
+   test moving with it), explicitly preserving the `mine` invariant: `classifyReaction`
+   computes `mine` once and `reactionsRow` threads that exact value into
+   `toggleReaction`, no `findMessage` re-lookup. The glyph element and reactor-name join
+   stay in `reactionsRow`; e2e net is `emoji-picker` + `mobile-ctx`.
 3. **Only then, if a module still earns its keep, carve the history/paging + scroll
    sub-system** (`loadOlderMessages`/`loadNewerMessages`/`observeScrollSentinels`/
    `renderHistoryBanner`/`scrollToBottom` + `historyComplete`/`viewingHistory`/
@@ -354,3 +372,22 @@ one read site can't silently disagree (a typo'd literal persists under one key a
 reads from another, breaking channel restore with no error). This is the app-shell
 analog of `prefs.js`'s injected-storage pattern — prefs owns the *preferences* subset
 (unit-tested with a Map-backed stub), these cover the session keys app.js holds.
+
+The message-pane pass then closed out its steps 1 and 2 (the remainder after
+`history.js`). Step 1's two still-untested pure cores moved to their homes:
+`shouldGroupMessage` (+ `GROUP_WINDOW_MS`) in `format.js` — the same-author/within-window/
+non-reply `grouped` decision, the render loop keeping only the `lastUser`/`lastTime`
+accumulators — and `shouldInsertUnreadMarker` in `unread.js` (beside `markerFor`/
+`unreadCountAfter`), the loop keeping the `markerInserted` accumulator and the DOM
+insert. Step 2 made `renderMessages` legible without a module: the inline-edit
+capture/restore, previously two blocks interleaved through the `innerHTML` wipe, became
+the in-file `captureEditState(wrap)` / `restoreEditState(wrap, snap)` pair (capture also
+stashes the live draft into `editDraft`), and the last pure fragment of the reactions
+path — the per-pill `mine`/`isCustom`/`isOrphan`/`disabled` classification (with
+`SHORTCODE_RE`) — lifted to `classifyReaction` in `format.js`. `classifyReaction`
+computes `mine` once and `reactionsRow` threads that exact value into `toggleReaction`,
+so the `mine` invariant is now spelled out and unit-tested rather than implicit. The
+DOM (glyph element, reactor-name join, the editor textarea) stays in app.js. New pure
+cores are unit-tested in `web/test/format.test.js` / `web/test/unread.test.js`; the
+DOM-bound edit/reaction behavior rests on the `emoji-picker`, `mobile-ctx`, and
+`history` e2e nets (all green). With that, the sequenced message-pane pass is complete.

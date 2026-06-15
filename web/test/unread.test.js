@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage } from "../static/unread.js";
+import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage, shouldInsertUnreadMarker } from "../static/unread.js";
 
 test("markerFor is 0 for an untouched channel", () => {
   const u = createUnreadTracker();
@@ -118,6 +118,24 @@ test("unreadCountAfter counts loaded messages past the cursor that aren't mine",
 test("unreadCountAfter tolerates a null/empty message list", () => {
   assert.equal(unreadCountAfter(null, 0, 1), 0);
   assert.equal(unreadCountAfter([], 5, 1), 0);
+});
+
+// --- shouldInsertUnreadMarker: the "New messages" divider placement decision ---
+
+test("shouldInsertUnreadMarker fires for the first message past the cursor", () => {
+  assert.equal(shouldInsertUnreadMarker(false, 10, 11), true);
+  assert.equal(shouldInsertUnreadMarker(false, 10, 10), false); // not strictly newer
+  assert.equal(shouldInsertUnreadMarker(false, 10, 9), false);
+});
+
+test("shouldInsertUnreadMarker fires at most once per render", () => {
+  // markerInserted already true ⇒ never again, even for a qualifying message.
+  assert.equal(shouldInsertUnreadMarker(true, 10, 99), false);
+});
+
+test("shouldInsertUnreadMarker is suppressed when there's no divider cursor", () => {
+  // markerAt 0 means "no unreads when the channel opened" — no divider at all.
+  assert.equal(shouldInsertUnreadMarker(false, 0, 5), false);
 });
 
 // --- classifyIncomingMessage: the unread/mention/ping decision matrix ---
