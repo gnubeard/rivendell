@@ -10,6 +10,10 @@ rivendell
 # by design; see Makefile.local.example.
 Makefile.local
 
+# Per-host setup helpers (e.g. the WebKit e2e native-stack provisioning) — the
+# tracked recipe lives in docs/webkit-e2e.md; the executable copy is host-local.
+scripts/*.local.sh
+
 # sensitive credentials
 .creds
 

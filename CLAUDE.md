@@ -65,11 +65,15 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               group-call, search, emoji-picker, channel-reorder,
                               link-previews, admin, secret-chat, forward, pins,
                               modals, mobile-ctx, video-grid, notifications,
-                              non-admin); dev-only, run via `make test-e2e`
+                              non-admin, bot-dm, history); Chromium by default,
+                              dev-only, run via `make test-e2e`. Plus webkit-smoke
+                              (Safari-engine), opt-in via E2E_WEBKIT — see
+                              docs/webkit-e2e.md
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
-                              call-drop-investigation.md, bridge-dm-update-note.md
+                              call-drop-investigation.md, bridge-dm-update-note.md,
+                              webkit-e2e.md
 ```
 
 Module path `rivendell`; Go 1.26. Imports `rivendell/internal/...`.

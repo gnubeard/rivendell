@@ -256,6 +256,19 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   if (activeChannelId === channelId) return;
   if (activeChannelId !== null) await leaveVoiceChannel();
 
+  // Preflight: if the context can't reach capture at all — an insecure (non-HTTPS)
+  // origin strips navigator.mediaDevices, and some embedded WebViews never expose
+  // it — bail with a clear, actionable line instead of letting getUserMedia throw
+  // an opaque TypeError ("undefined is not an object"). The standalone-PWA caveat
+  // is NOT blocked here (mediaDevices exists there); it rides on the failure
+  // message via micErrorMessage/cameraErrorMessage. See preflightMediaError.
+  const envErr = preflightMediaError(detectMediaEnv());
+  if (envErr) {
+    const e = new Error(envErr);
+    e.name = "UnsupportedMediaContextError";
+    throw e;
+  }
+
   cameraEnabled = enableVideo;
   const audioConstraints = AUDIO_CONSTRAINTS;
   const videoConstraint = cameraEnabled ? VIDEO_CONSTRAINTS : false;
@@ -596,30 +609,90 @@ export function pttKeyLabel(code) {
   return code;
 }
 
+// detectMediaEnv snapshots the ambient capabilities that decide whether a
+// getUserMedia attempt can possibly succeed, read defensively (every global is
+// optional, so this is safe under Node's test runner). navigator.standalone is
+// the iOS-only flag that we were launched from the home screen in a standalone
+// WebView (true) rather than an ordinary Safari tab. Internal; the pure helpers
+// below take the snapshot as an argument so they unit-test without a DOM.
+function detectMediaEnv() {
+  const nav = typeof navigator !== "undefined" ? navigator : undefined;
+  const md = nav && nav.mediaDevices;
+  return {
+    hasMediaDevices: !!(md && typeof md.getUserMedia === "function"),
+    // isSecureContext is undefined under Node — treat that as "secure" so the
+    // preflight never false-positives in tests; in a browser it's a real bool.
+    isSecureContext: typeof isSecureContext === "undefined" ? true : !!isSecureContext,
+    standalone: !!(nav && nav.standalone),
+  };
+}
+
+// preflightMediaError returns a complete, user-facing reason the mic/camera
+// CANNOT be reached in the current context, or null when a getUserMedia attempt
+// is worth making. Pure (env injected) — unit-tested without a DOM. We only hard
+// block when capture is provably unreachable: an insecure origin (non-HTTPS,
+// non-localhost) strips navigator.mediaDevices entirely, and some embedded
+// WebViews never expose it, so calling getUserMedia would throw an opaque
+// TypeError. We do NOT block iOS standalone here — mediaDevices IS present in a
+// home-screen app and the call often works; that caveat rides on the FAILURE
+// message instead (see mediaErrorHint), since we can't know up front it'll fail.
+export function preflightMediaError(env) {
+  if (!env || env.hasMediaDevices) return null;
+  if (!env.isSecureContext) {
+    return "Voice and video need a secure (HTTPS) connection. Open this site over https:// and try again.";
+  }
+  return "This browser can't reach the microphone or camera. Try a current Safari, Chrome, or Firefox; if you added this app to your home screen, open it in the browser instead.";
+}
+
+// mediaErrorHint returns a context-specific sentence appended to a getUserMedia
+// FAILURE message, or "" when none applies. iOS standalone (home-screen) web
+// apps have a long-standing WebKit defect where getUserMedia rejects — or the
+// audio device fails to start — with no actionable cause (it can surface as
+// NotAllowed / NotFound / NotReadable); the reliable fix is to open the site in
+// Safari proper. Pure; env injected.
+export function mediaErrorHint(env) {
+  if (env && env.standalone) {
+    return " (On iPhone/iPad, open this in Safari rather than the home-screen app — installed web apps can't reliably reach the mic or camera.)";
+  }
+  return "";
+}
+
 // micErrorMessage maps a getUserMedia rejection to a friendly, specific,
 // actionable sentence (instead of dumping the raw exception text at the user).
 // The error's .name is the stable cross-browser discriminator; we fall back to
-// a generic line for anything unrecognized. Pure; unit-tested.
-export function micErrorMessage(err) {
+// a generic line for anything unrecognized. The optional env defaults to a live
+// snapshot so call sites need not thread it through; pass it explicitly in
+// tests. Pure given env (mediaErrorHint is the only ambient read). Unit-tested.
+export function micErrorMessage(err, env = detectMediaEnv()) {
+  let base;
   switch (err && err.name) {
+  case "UnsupportedMediaContextError": // our own preflight rejection
+    return err.message;                // already a complete, friendly sentence
   case "NotAllowedError":      // permission denied (prompt dismissed or blocked)
   case "SecurityError":
-    return "Microphone access was blocked. Allow the mic for this site in your browser's settings, then try again.";
+    base = "Microphone access was blocked. Allow the mic for this site in your browser's settings, then try again.";
+    break;
   case "NotFoundError":        // no input device at all
   case "OverconstrainedError":
-    return "No microphone was found. Plug one in (or check your input device) and try again.";
+    base = "No microphone was found. Plug one in (or check your input device) and try again.";
+    break;
   case "NotReadableError":     // device held by another app / OS-level error
   case "AbortError":           // device failed to start (e.g. Android "Starting audioinput failed")
-    return "Your microphone is in use by another app (or unavailable). Close anything else using it and try again.";
+    base = "Your microphone is in use by another app (or unavailable). Close anything else using it and try again.";
+    break;
   default:
-    return "Could not access the microphone" + (err && err.message ? ": " + err.message : ".");
+    base = "Could not access the microphone" + (err && err.message ? ": " + err.message : ".");
   }
+  return base + mediaErrorHint(env);
 }
 
 // cameraErrorMessage maps a getUserMedia camera rejection to a friendly sentence.
-// Mirrors micErrorMessage but for video; pure, unit-tested.
-export function cameraErrorMessage(err) {
+// Mirrors micErrorMessage but for video; pure given env, unit-tested.
+export function cameraErrorMessage(err, env = detectMediaEnv()) {
+  let base;
   switch (err && err.name) {
+  case "UnsupportedMediaContextError": // our own preflight rejection
+    return err.message;
   case "NotAllowedError":
   case "SecurityError":
     // No prompt + "blocked" despite the OS granting the browser camera access
@@ -627,16 +700,20 @@ export function cameraErrorMessage(err) {
     // On Firefox/Chrome for Android that's behind the shield/lock icon in the
     // address bar → Permissions → Camera; clearing "Blocked" there re-enables
     // the prompt. Point at that, not the OS-level app permission people check.
-    return "Camera blocked for this site. Tap the lock/shield icon in the address bar → Permissions → Camera, clear the block, then reload and try again.";
+    base = "Camera blocked for this site. Tap the lock/shield icon in the address bar → Permissions → Camera, clear the block, then reload and try again.";
+    break;
   case "NotFoundError":
   case "OverconstrainedError":
-    return "No camera was found. Plug one in (or check your input device) and try again.";
+    base = "No camera was found. Plug one in (or check your input device) and try again.";
+    break;
   case "NotReadableError":
   case "AbortError":           // device failed to start (Android "Starting videoinput failed")
-    return "Your camera couldn't be started (it may be in use by another app). Close anything else using it, or leave and rejoin the call.";
+    base = "Your camera couldn't be started (it may be in use by another app). Close anything else using it, or leave and rejoin the call.";
+    break;
   default:
-    return "Could not access the camera" + (err && err.message ? ": " + err.message : ".");
+    base = "Could not access the camera" + (err && err.message ? ": " + err.message : ".");
   }
+  return base + mediaErrorHint(env);
 }
 
 // shouldRetryRelaxed decides whether a failed camera getUserMedia is worth

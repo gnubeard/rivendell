@@ -405,6 +405,90 @@ test("shouldRetryRelaxed retries everything except a permission denial", () => {
   assert.equal(voice.shouldRetryRelaxed({}), true);
 });
 
+// --- media-environment preflight --------------------------------------------
+// A context with no usable navigator.mediaDevices (insecure origin / WebView)
+// must be caught BEFORE getUserMedia so the user gets an actionable line, not an
+// opaque TypeError. iOS standalone is NOT hard-blocked (capture often works);
+// its caveat rides on the failure message instead.
+
+test("preflightMediaError: a context with getUserMedia is allowed through", () => {
+  assert.equal(
+    voice.preflightMediaError({ hasMediaDevices: true, isSecureContext: true, standalone: false }),
+    null,
+  );
+  // standalone still proceeds — mediaDevices is present in a home-screen app.
+  assert.equal(
+    voice.preflightMediaError({ hasMediaDevices: true, isSecureContext: true, standalone: true }),
+    null,
+  );
+});
+
+test("preflightMediaError: insecure origin is blocked with an HTTPS hint", () => {
+  const msg = voice.preflightMediaError({ hasMediaDevices: false, isSecureContext: false, standalone: false });
+  assert.match(msg, /HTTPS|https:/i);
+});
+
+test("preflightMediaError: a context with no mediaDevices (but secure) is blocked generically", () => {
+  const msg = voice.preflightMediaError({ hasMediaDevices: false, isSecureContext: true, standalone: false });
+  assert.match(msg, /can't reach the microphone or camera/i);
+  // A null/absent env is treated as "worth attempting" (don't false-block).
+  assert.equal(voice.preflightMediaError(null), null);
+});
+
+// --- mediaErrorHint (iOS standalone caveat) ---------------------------------
+
+test("mediaErrorHint: only standalone gets the open-in-Safari caveat", () => {
+  assert.match(voice.mediaErrorHint({ standalone: true }), /Safari/);
+  assert.equal(voice.mediaErrorHint({ standalone: false }), "");
+  assert.equal(voice.mediaErrorHint(null), "");
+});
+
+// --- env-aware error messages -----------------------------------------------
+
+test("micErrorMessage surfaces the preflight rejection verbatim", () => {
+  const e = new Error("Voice and video need a secure (HTTPS) connection. Open this site over https:// and try again.");
+  e.name = "UnsupportedMediaContextError";
+  // No generic "Could not access" prefix — the preflight message is already complete.
+  assert.equal(voice.micErrorMessage(e), e.message);
+  assert.doesNotMatch(voice.micErrorMessage(e), /Could not access/);
+});
+
+test("micErrorMessage appends the standalone caveat when env.standalone is set", () => {
+  const env = { standalone: true };
+  // The WebKit standalone defect can surface as NotAllowed / NotFound / NotReadable —
+  // each should still carry the open-in-Safari pointer.
+  assert.match(voice.micErrorMessage({ name: "NotAllowedError" }, env), /blocked.*Safari/is);
+  assert.match(voice.micErrorMessage({ name: "NotFoundError" }, env), /Safari/);
+  assert.match(voice.micErrorMessage({ name: "NotReadableError" }, env), /Safari/);
+  // Without standalone, no caveat is appended (default desktop case).
+  assert.doesNotMatch(voice.micErrorMessage({ name: "NotAllowedError" }, { standalone: false }), /Safari/);
+});
+
+test("cameraErrorMessage is env-aware too (preflight + standalone caveat)", () => {
+  const e = new Error("nope"); e.name = "UnsupportedMediaContextError";
+  assert.equal(voice.cameraErrorMessage(e), "nope");
+  assert.match(voice.cameraErrorMessage({ name: "NotAllowedError" }, { standalone: true }), /Safari/);
+  assert.doesNotMatch(voice.cameraErrorMessage({ name: "NotAllowedError" }, { standalone: false }), /Safari/);
+});
+
+test("joinVoiceChannel preflight rejects (and never joins) when getUserMedia is unavailable", async () => {
+  setup();
+  const orig = navigator.mediaDevices.getUserMedia;
+  navigator.mediaDevices.getUserMedia = undefined; // simulate insecure origin / WebView
+  try {
+    await assert.rejects(
+      () => voice.joinVoiceChannel(99),
+      (e) => e.name === "UnsupportedMediaContextError" && /microphone or camera|HTTPS/i.test(e.message),
+    );
+    // The preflight throws BEFORE any state is set, so we're not half-joined.
+    assert.equal(voice.voiceChannelId(), null);
+    assert.equal(voice.isInCall(), false);
+  } finally {
+    navigator.mediaDevices.getUserMedia = orig;
+    restoreGetUserMedia();
+  }
+});
+
 // --- camera toggle lifecycle ------------------------------------------------
 // When joining with camera off, track.enabled is not set for video. When camera
 // is toggled on later, the video track becomes enabled. This is the state

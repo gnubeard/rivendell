@@ -21,7 +21,14 @@ RIVENDELL_WEB_DIR         ?= ./web
 #   Ubuntu only). If a freshly downloaded browser won't launch, install the OS libs
 #   once per host out of band (Debian: `cd web && npx playwright install-deps`).
 E2E_DB_RESET_CMD     ?=
-PLAYWRIGHT_INSTALL   ?= npx playwright install chromium
+# E2E_WEBKIT — opt in to the WebKit (Safari-engine) smoke project. Empty by
+#   default so `make test-e2e` is Chromium-only and green on any host. This box
+#   sets it (plus the host-setup hook) in Makefile.local.
+E2E_WEBKIT           ?=
+# Chromium is always installed; WebKit only when the opt-in WebKit smoke is
+# enabled (E2E_WEBKIT=1) — it's a separate ~100 MB download and needs a
+# provisioned native stack (see docs/webkit-e2e.md).
+PLAYWRIGHT_INSTALL   ?= npx playwright install chromium $(if $(E2E_WEBKIT),webkit)
 
 # Per-host overrides (container names, ports, reset command) live here, untracked.
 -include Makefile.local
@@ -78,7 +85,7 @@ test-web: ## Run frontend unit tests (Node built-in test runner)
 test-e2e: build ## Playwright WebRTC e2e (needs a DISPOSABLE chat_e2e db + ~1.5 GB browser download on first run)
 	cd web && npm install
 	cd web && $(PLAYWRIGHT_INSTALL)
-	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) E2E_DB_RESET_CMD='$(E2E_DB_RESET_CMD)' npx playwright test
+	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) E2E_DB_RESET_CMD='$(E2E_DB_RESET_CMD)' E2E_WEBKIT='$(E2E_WEBKIT)' npx playwright test
 
 vet: ## go vet
 	go vet ./...
