@@ -69,11 +69,25 @@ test("a blank stored keycode falls back to Backquote", () => {
   assert.equal(p.loadPttKeyCode(), "Backquote");
 });
 
+test("rich-text pref defaults ON and only an explicit '0' disables it", () => {
+  const s = fakeStorage();
+  const p = createPrefs(s);
+  assert.equal(p.loadRichText(), true); // missing → default on
+  p.saveRichText(false);
+  assert.equal(s._dump()["rivendell.richtext"], "0");
+  assert.equal(p.loadRichText(), false);
+  p.saveRichText(true);
+  assert.equal(p.loadRichText(), true);
+  // any non-"0" value (incl. junk) stays on — only "0" turns it off
+  assert.equal(createPrefs(fakeStorage({ "rivendell.richtext": "whatever" })).loadRichText(), true);
+});
+
 test("reads return defaults when storage throws (private mode / blocked)", () => {
   const p = createPrefs(throwingStorage);
   assert.equal(p.loadNotif(), false);
   assert.equal(p.loadPttEnabled(), false);
   assert.equal(p.loadPttKeyCode(), "Backquote");
+  assert.equal(p.loadRichText(), true); // default on even when storage is blocked
 });
 
 test("writes are best-effort and never throw when storage is blocked", () => {

@@ -42,7 +42,10 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               Web Audio synthesis: chime + greet/farewell +
                               ring/pending), style.css; modules carved out of
                               app.js: unread.js, channelorder.js, drafts.js,
-                              composer-field.js, attachments.js, autocomplete.js,
+                              composer-field.js, composer-richtext.js (live
+                              markdown decoration in the composer: createComposerRichText
+                              owns highlight()+Ctrl-B/I, free export decorate),
+                              attachments.js, autocomplete.js,
                               prefs.js, previews.js, util.js, search.js, emoji.js,
                               channeldrag.js, presence.js, imagewarm.js,
                               linkpreview.js, admin.js, secretui.js, forward.js,
@@ -65,7 +68,8 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               group-call, search, emoji-picker, channel-reorder,
                               link-previews, admin, secret-chat, forward, pins,
                               modals, mobile-ctx, video-grid, notifications,
-                              non-admin, bot-dm, history); Chromium by default,
+                              non-admin, bot-dm, history, composer-richtext);
+                              Chromium by default,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
                               (Safari-engine), opt-in via E2E_WEBKIT — see
                               docs/webkit-e2e.md
@@ -73,7 +77,8 @@ docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
                               call-drop-investigation.md, bridge-dm-update-note.md,
-                              webkit-e2e.md
+                              webkit-e2e.md, richtext.md (composer live-markdown
+                              decoration — invariant, undo, Gecko lessons)
 ```
 
 Module path `rivendell`; Go 1.26. Imports `rivendell/internal/...`.
@@ -108,6 +113,9 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - `users.status` is durable — `onPresenceChange` must **never** write it. `TestStatusDurableAcrossReconnect` guards this.
 - Presence debounce (~1s, `schedulePresenceUpdate`) — don't "simplify" to immediate apply. Own user is exempt.
 - `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last.
+- `composer-richtext.js`: live composer decoration **mirrors** `format.js`'s inline rules (bold before italic, code pulled out first) — keep them in lockstep; the parity test guards it. Load-bearing invariant: `decorate` only WRAPS runs (markers kept, dimmed), never adds/removes a character, so `.value` stays the exact markdown source and the facade's text-offset caret math holds. The composer's `input` handler captures the caret offsets BEFORE its image-harvest/flatten mutations and threads them to `rich.onInput(start,end)` — those mutations destroy the live Selection but not the offsets.
+  - **Decoration toggle is ORTHOGONAL to behavior.** `prefs.loadRichText()` (default ON, profile checkbox `#richtext-enable`) only controls whether markdown is *rendered styled*; Ctrl-B/I and undo/redo work either way. Don't re-couple them.
+  - **Undo/redo is OURS, always-on.** Because both the decoration rewrite and Ctrl-B/I mutate the field programmatically (innerHTML / `.value`), the browser's native history is desynced and unreliable — so `createUndoHistory` (pure, unit-tested) replaces it wholesale and `handleKeydown` preventDefaults Ctrl/Cmd-Z, Cmd-Shift-Z, Ctrl-Y. Typing coalesces into word-ish steps; Ctrl-B/I and the URL-wrap paste (`rich.commit()`) are discrete steps. Any out-of-band `.value` set (channel switch, send-clear, error-restore) must call `rich.resetHistory()` so undo can't bridge that boundary.
 - CSS: `[hidden] { display: none !important; }` must stay. Wire controls before `startRealtime()`.
 - Frontend ES modules import siblings with **bare relative specifiers** (`./api.js`,
   no version suffix). Cache-busting is **path-based**: index.html loads the entry from

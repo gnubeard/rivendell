@@ -21,6 +21,7 @@ const NOTIF_KEY = "rivendell.notifications";
 const PTT_KEY = "rivendell.ptt";
 const PTT_CODE_KEY = "rivendell.pttKey";
 const DEFAULT_PTT_CODE = "Backquote"; // layout-independent KeyboardEvent.code
+const RICHTEXT_KEY = "rivendell.richtext";
 
 export function createPrefs(storage = globalThis.localStorage) {
   // Booleans persist as "1"/"0". Any storage error (private mode, blocked,
@@ -46,5 +47,13 @@ export function createPrefs(storage = globalThis.localStorage) {
       setBool(PTT_KEY, enabled);
       try { storage.setItem(PTT_CODE_KEY, keyCode); } catch { /* best-effort */ }
     },
+
+    // Live markdown decoration in the composer (composer-richtext.js). Unlike
+    // the others this defaults ON: only an explicit "0" disables it, so a fresh
+    // browser (or one with storage blocked) gets the feature.
+    loadRichText() {
+      try { return storage.getItem(RICHTEXT_KEY) !== "0"; } catch { return true; }
+    },
+    saveRichText(on) { setBool(RICHTEXT_KEY, on); },
   };
 }

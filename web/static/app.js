@@ -3,7 +3,7 @@
 
 import { api } from "./api.js";
 import { connectRealtime } from "./ws.js";
-import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip, classifyReaction, shouldGroupMessage } from "./format.js";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip, classifyReaction, shouldGroupMessage, BUILTIN_EMOJI } from "./format.js";
 import * as S from "./state.js";
 import {
   initSecret,
@@ -36,6 +36,7 @@ import { createUnreadTracker, unreadCountAfter, classifyIncomingMessage, shouldI
 import { regularChannelOrder, sidebarChannelOrder, dmDisplayName } from "./channelorder.js";
 import { createDraftStore } from "./drafts.js";
 import { upgradeComposerField } from "./composer-field.js";
+import { createComposerRichText, toggleMarker } from "./composer-richtext.js";
 import { humanBytes, formatTime, overSizeLimit, initials } from "./util.js";
 import { createPrefs, normalizeTheme } from "./prefs.js";
 import { createAttachmentTray, composeMessageBody } from "./attachments.js";
@@ -87,6 +88,7 @@ const prefs = createPrefs();
 const unread = createUnreadTracker(); // divider cursor, mark-unread suppression, mark-read POST dedupe
 const drafts = createDraftStore();    // per-channel composer scratch (draft text + pending uploads)
 let composerTray = null;              // attachments.js upload tray; null until wireComposer builds it (guard with ?.)
+let composerRich = null;              // composer-richtext.js live decoration; null until wireComposer builds it (guard with ?.)
 // Per-user avatar cache-bust token: bumped on user.update(avatar) to force a
 // re-fetch of the otherwise-stable, cached avatar URL.
 const avatarVersion = {};
@@ -1204,6 +1206,8 @@ async function selectChannel(id) {
   // Restore any saved draft and attachments for this channel.
   const composerInput = $("#composer-input");
   composerInput.value = drafts.restoreText(id);
+  composerRich?.highlight();     // decorate the restored draft's markdown
+  composerRich?.resetHistory();  // undo baseline = this channel's draft (no cross-channel undo)
   composerTray?.unstash(id);
   // (No JS sizing: the contenteditable composer auto-grows between its CSS
   // min/max-height.)
@@ -2072,6 +2076,21 @@ const mkAutocomplete = (input, popup) =>
 
 // --- contenteditable composer wiring (facade in composer-field.js) -----------
 
+// richContext supplies composer-richtext.js the live sets it needs to tint only
+// REAL @mentions / #channels / :emoji: (matching format.js), rebuilt per render
+// (cheap at this roster size). null before login so decoration stays inert.
+function richContext() {
+  if (!state.me) return null;
+  const usernames = new Set();
+  for (const u of Object.values(state.users)) if (u && u.username) usernames.add(u.username.toLowerCase());
+  const channels = new Set();
+  for (const c of Object.values(state.channels)) if (c && !c.is_dm && c.name) channels.add(c.name);
+  const emojis = new Set(Object.keys(BUILTIN_EMOJI));
+  for (const code of Object.keys(state.emojis)) emojis.add(code);
+  const meUser = (state.users[state.me.id] || state.me).username;
+  return { meLower: meUser ? meUser.toLowerCase() : null, usernames, channels, emojis };
+}
+
 // The composer is a contenteditable="plaintext-only" <div>, not a <textarea>:
 // GeckoView (Firefox for Android) never delivers image clipboard content to a
 // textarea through any mechanism — no DOM event, no long-press paste for
@@ -2093,6 +2112,11 @@ function wireComposer() {
   // @-mention / :emoji inline completion, shared with the inline edit boxes.
   // The composer's keydown defers to ac.handleKeydown before its own send logic.
   const ac = mkAutocomplete(input, popup);
+  // Live markdown decoration: **bold**/*italic*/`code`/etc. render their effect
+  // as you type, markers kept but dimmed. highlight() is driven from the input
+  // handler below (one DOM-rewrite path); handleKeydown owns Ctrl-B / Ctrl-I.
+  const rich = createComposerRichText({ el: input, enabled: prefs.loadRichText(), getContext: richContext });
+  composerRich = rich; // module-scope handle so channel switches + the prefs toggle can reach it
   const TYPING_INTERVAL_MS = 1500;
   let lastTypingSent = 0;
 
@@ -2104,7 +2128,11 @@ function wireComposer() {
     return !!(sess && sess.phase === "active");
   };
 
-  input.addEventListener("input", () => {
+  input.addEventListener("input", (e) => {
+    // Fallback caret (text offsets) for synthetic input events that carry no
+    // beforeinput — e.g. autocomplete's pick. For real edits rich.onInput
+    // resolves the caret from the beforeinput snapshot instead.
+    const selStart = input.selectionStart, selEnd = input.selectionEnd;
     // Channel 3 of the image-paste harvest (channels 1 and 2 are the paste and
     // beforeinput handlers below): the browser natively inserted the pasted
     // image as an <img> node while every event carried empty data. Capture the
@@ -2130,14 +2158,20 @@ function wireComposer() {
       }
       // Any other scheme: stripped above, never fetched.
     }
-    // Legacy fallback only (plaintext-only unsupported → full contenteditable):
-    // flatten any other element a rich paste smuggled in to its text.
-    for (const n of [...input.children]) {
-      if (n.nodeName !== "BR") n.replaceWith(document.createTextNode(n.textContent));
-    }
-    // Emptying a plaintext-only field can strand a lone <br>, which defeats
-    // :empty (and with it the placeholder); normalize it away.
-    if (input.innerHTML === "<br>" || input.textContent === "\n") input.innerHTML = "";
+    // Stranded-<br> normalization: a DELETE that empties the field can leave a
+    // lone <br>, which defeats :empty (and the placeholder). Gate on a delete
+    // inputType — a deliberate Shift+Enter on an empty composer ALSO produces a
+    // lone <br> in Gecko, and that one must survive as a real newline.
+    if ((e?.inputType || "").startsWith("delete") && (input.value === "" || input.value === "\n")) input.innerHTML = "";
+    // No flatten pass: rich.highlight() rebuilds the field's HTML from its text
+    // (textOf), which both decorates AND sanitizes anything a rich paste smuggled
+    // in. A textContent-based flatten would silently drop a <br> Gecko nests
+    // inside a decorated span — that was the eaten-newline / code-block bug.
+
+    // Live markdown decoration + undo snapshot — after image harvest +
+    // normalization, so it works on clean text. Restores the caret from the
+    // pre-mutation offsets; no-op during IME composition.
+    rich.onInput(selStart, selEnd);
 
     if (state.activeChannelId && input.value.trim()) {
       const now = Date.now();
@@ -2189,6 +2223,8 @@ function wireComposer() {
     input.value = input.value.slice(0, start) + md + input.value.slice(end);
     const caret = start + md.length;
     input.setSelectionRange(caret, caret);
+    rich.highlight(); // re-render: the .value set above wiped any decoration spans
+    rich.commit();    // a discrete undo step (this set fires no `input` event)
   });
 
   // Channel 2: Firefox on Android delivers some clipboard flavors (e.g.
@@ -2210,6 +2246,9 @@ function wireComposer() {
     // or synthetic event mustn't send into a locked field.
     if (input.disabled) return;
     if (ac.handleKeydown(e)) return;
+    // Ctrl-B / Ctrl-I wrap the selection in **/* (and preventDefault the
+    // browser's native bold/italic, which would inject <b>/<i> tags).
+    if (rich.handleKeydown(e)) return;
     // Esc on the composer cancels a pending reply (when no autocomplete is open).
     if (e.key === "Escape" && replyingToId != null && popup.hidden) {
       e.preventDefault();
@@ -2236,12 +2275,14 @@ function wireComposer() {
       if (secretSess && secretSess.phase === "active") {
         if (!text.trim()) return;
         input.value = "";
+        composerRich?.resetHistory(); // sent → fresh undo baseline (empty)
         lastTypingSent = 0;
         try {
           await sendSecretMessage(state.activeChannelId, text.trim());
           renderMessages(false);
         } catch (ex) {
           input.value = text;
+          composerRich?.resetHistory(); // restore failed → baseline the put-back text
           alert("Secret message failed: " + ex.message);
         }
         return;
@@ -2252,6 +2293,7 @@ function wireComposer() {
       const content = composeMessageBody(text, composerTray.doneUploads());
       if (!content.trim()) return;
       input.value = ""; // the div collapses back to a single line on its own
+      composerRich?.resetHistory(); // sent → fresh undo baseline (empty)
       lastTypingSent = 0; // allow next keystroke to fire a fresh typing frame immediately
       const sent = composerTray.takeAll();
       const replyId = replyingToId; // capture, then clear the banner optimistically
@@ -2262,6 +2304,7 @@ function wireComposer() {
         sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
         input.value = text;
+        composerRich?.resetHistory(); // restore failed → baseline the put-back text
         composerTray.putBack(sent); // put the attachments back so the send can be retried
         replyingToId = replyId; // restore the reply context too
         renderReplyBanner();
@@ -2349,6 +2392,20 @@ function editorFor(m) {
   ta.addEventListener("input", () => { editDraft = ta.value; autoGrowEdit(ta); });
   ta.addEventListener("keydown", (e) => {
     if (ac.handleKeydown(e)) return;
+    // Ctrl/Cmd-B / -I wrap the selection in **/* — the marker-insert form (a
+    // <textarea> can't render decoration; the markers just get typed for you).
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      const k = (e.key || "").toLowerCase();
+      if (k === "b" || k === "i") {
+        e.preventDefault();
+        const r = toggleMarker(ta.value, ta.selectionStart, ta.selectionEnd, k === "b" ? "**" : "*");
+        ta.value = r.value;
+        ta.setSelectionRange(r.start, r.end);
+        editDraft = ta.value;
+        autoGrowEdit(ta);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitEdit(m); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelEdit(); }
   });
@@ -2664,6 +2721,11 @@ function wireProfileControls() {
   // flow lives in notifyui.js).
   const notifCb = $("#notif-enable");
   if (notifCb) notifCb.onchange = () => notifUI.setEnabled(notifCb.checked);
+
+  // Live markdown formatting opt-out (composer-richtext.js). Persisted in
+  // localStorage (prefs.js); flips the live composer decoration on/off at once.
+  const richCb = $("#richtext-enable");
+  if (richCb) richCb.onchange = () => { prefs.saveRichText(richCb.checked); composerRich?.setEnabled(richCb.checked); };
   $("#profile-form").onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#profile-error");
@@ -3094,7 +3156,12 @@ const modals = createModals({
   closeDrawers,
   avatarSrc,
   startDM,
-  onProfileOpen: () => { notifUI.renderNotifControl(); voiceUI.onProfileOpen(); },
+  onProfileOpen: () => {
+    notifUI.renderNotifControl();
+    voiceUI.onProfileOpen();
+    const richCb = $("#richtext-enable");
+    if (richCb) richCb.checked = prefs.loadRichText();
+  },
   onActiveMembersChanged: (memberIds) => { activeMemberIds = memberIds; renderMembers(); },
 });
 const openInviteModal = modals.openInviteModal;
