@@ -35,6 +35,7 @@ PostgreSQL, with a vanilla-JavaScript web client and no frontend build step.
 - Edit and soft-delete messages, pin messages, and forward a message to another channel or DM
 - Emoji reactions, including instance-wide custom `:shortcode:` emoji
 - @-mentions with inline autocomplete, and live typing indicators
+- Markdown formatting — bold, italic, `code`, fenced code blocks, strikethrough, spoilers — rendered in messages and shown live in the composer as you type (Ctrl/Cmd-B/I to format; the markers stay visible, just dimmed)
 - Full-text search, scoped to the channels you can access
 - Scrollback with keyset pagination; every timestamp is a permalink into history
 
@@ -409,7 +410,6 @@ calling out:
 ## Roadmap
 
 - **Screen sharing / desktop video** _(XL, highest-priority open feature)_ — a screen-capture track alongside the camera in group calls.
-- **Ctrl-B / Ctrl-I inline rich text** _(low priority; may not happen)_.
 
 ---
 
