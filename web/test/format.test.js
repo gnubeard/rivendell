@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI, BUILTIN_EMOJI_LIST } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 // ---- reactionTooltip ----
@@ -560,6 +560,15 @@ test("builtin emoji: BUILTIN_EMOJI export has expected entries", () => {
   assert.equal(BUILTIN_EMOJI.symbolic_heart, "❤️");
   assert.equal(BUILTIN_EMOJI.white_check, "✅");
   assert.equal(BUILTIN_EMOJI["100"], "💯");
+});
+
+test("builtin emoji: BUILTIN_EMOJI_LIST is the ordered source and the map derives from it", () => {
+  // The list dictates the emoji picker's quick-palette order, so its head is pinned.
+  // (The map can't carry order: "100" would hoist to the front as an integer key.)
+  assert.deepEqual(BUILTIN_EMOJI_LIST[0], ["+1", "👍"]);
+  assert.deepEqual(BUILTIN_EMOJI_LIST[1], ["thumbsdown", "👎"]);
+  assert.equal(Object.fromEntries(BUILTIN_EMOJI_LIST)["100"], BUILTIN_EMOJI["100"]);
+  assert.equal(BUILTIN_EMOJI_LIST.length, Object.keys(BUILTIN_EMOJI).length);
 });
 
 test("emoticons: :D :) :( ;) render as glyphs", () => {

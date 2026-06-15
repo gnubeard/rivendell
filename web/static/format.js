@@ -338,29 +338,38 @@ export function extractHideURL(text, origin) {
 // leading + covers :+1:. All matched chars are HTML-safe by construction.
 const EMOJI_RE = /:([+a-z0-9_]{2,32}):/g;
 
-// BUILTIN_EMOJI maps conventional shortcode names to their Unicode glyphs.
-// These render as native Unicode spans (not server-side image URLs), so they
-// work without any custom emoji registry and survive an empty instance.
-export const BUILTIN_EMOJI = {
-  "+1": "👍",
-  thumbsdown: "👎",
-  symbolic_heart: "❤️",
-  joy: "😂",
-  wink: "😉",
-  heart_eyes: "😍",
-  thinking: "🤔",
-  tada: "🎉",
-  raised_hands: "🙌",
-  open_mouth: "😮",
-  cry: "😢",
-  angry: "😡",
-  pray: "🙏",
-  fire: "🔥",
-  white_check: "✅",
-  eyes: "👀",
-  "100": "💯",
-  wave: "👋",
-};
+// BUILTIN_EMOJI_LIST is the ordered source of the builtin set: [shortcode, glyph]
+// in display order (most-common first), which is also the order the emoji picker's
+// quick palette renders. It's an array, not an object literal, on purpose: a
+// numeric shortcode like "100" is an integer-index key that JS would hoist to the
+// front of any object's key order, scrambling a derived display list. The lookup
+// map below is derived from it. These render as native Unicode spans (not
+// server-side image URLs), so they work without a custom emoji registry and
+// survive an empty instance.
+export const BUILTIN_EMOJI_LIST = [
+  ["+1", "👍"],
+  ["thumbsdown", "👎"],
+  ["symbolic_heart", "❤️"],
+  ["joy", "😂"],
+  ["wink", "😉"],
+  ["heart_eyes", "😍"],
+  ["thinking", "🤔"],
+  ["tada", "🎉"],
+  ["raised_hands", "🙌"],
+  ["open_mouth", "😮"],
+  ["cry", "😢"],
+  ["angry", "😡"],
+  ["pray", "🙏"],
+  ["fire", "🔥"],
+  ["white_check", "✅"],
+  ["eyes", "👀"],
+  ["100", "💯"],
+  ["wave", "👋"],
+];
+
+// BUILTIN_EMOJI maps conventional shortcode names to their Unicode glyphs — the
+// lookup form used by the renderer and the :shortcode autocomplete.
+export const BUILTIN_EMOJI = Object.fromEntries(BUILTIN_EMOJI_LIST);
 
 // Reverse of BUILTIN_EMOJI (glyph → shortcode name), so a Unicode reaction can
 // surface its `:shortcode:` in the hover tooltip alongside the reactor names.

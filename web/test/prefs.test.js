@@ -102,3 +102,46 @@ test("createPrefs with no storage (no localStorage) degrades to defaults safely"
   assert.equal(p.loadPttKeyCode(), "Backquote");
   assert.doesNotThrow(() => p.saveNotif(true));
 });
+
+test("recent emoji: push is most-recent-first, dedupes on value+kind, and caps", () => {
+  const s = fakeStorage();
+  const p = createPrefs(s);
+  assert.deepEqual(p.loadRecentEmoji(), []); // missing → empty
+
+  p.pushRecentEmoji("🔥", false);
+  p.pushRecentEmoji("tada", true);
+  assert.deepEqual(p.loadRecentEmoji(), [{ v: "tada", c: 1 }, { v: "🔥", c: 0 }]);
+
+  // Re-picking moves to front without duplicating.
+  p.pushRecentEmoji("🔥", false);
+  assert.deepEqual(p.loadRecentEmoji(), [{ v: "🔥", c: 0 }, { v: "tada", c: 1 }]);
+
+  // Same value, different kind is a distinct entry (literal glyph vs shortcode).
+  p.pushRecentEmoji("tada", false);
+  assert.deepEqual(p.loadRecentEmoji(),
+    [{ v: "tada", c: 0 }, { v: "🔥", c: 0 }, { v: "tada", c: 1 }]);
+
+  // Cap at 16: push 20 distinct, keep the newest 16.
+  for (let i = 0; i < 20; i++) p.pushRecentEmoji(`e${i}`, true);
+  const list = p.loadRecentEmoji();
+  assert.equal(list.length, 16);
+  assert.equal(list[0].v, "e19"); // newest first
+  assert.equal(list[15].v, "e4");
+});
+
+test("recent emoji: malformed or non-array stored value reads as empty", () => {
+  assert.deepEqual(createPrefs(fakeStorage({ "rivendell.recentEmoji": "not json" })).loadRecentEmoji(), []);
+  assert.deepEqual(createPrefs(fakeStorage({ "rivendell.recentEmoji": '{"v":"x"}' })).loadRecentEmoji(), []);
+  // Junk entries are filtered out; valid ones survive.
+  assert.deepEqual(
+    createPrefs(fakeStorage({ "rivendell.recentEmoji": '[{"v":"ok","c":1},{"bad":1},null,42]' })).loadRecentEmoji(),
+    [{ v: "ok", c: 1 }],
+  );
+});
+
+test("recent emoji: blocked storage reads empty and writes never throw", () => {
+  const p = createPrefs(throwingStorage);
+  assert.deepEqual(p.loadRecentEmoji(), []);
+  assert.doesNotThrow(() => p.pushRecentEmoji("🔥", false));
+  assert.deepEqual(p.pushRecentEmoji("🔥", false), [{ v: "🔥", c: 0 }]);
+});

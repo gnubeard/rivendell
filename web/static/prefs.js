@@ -22,6 +22,8 @@ const PTT_KEY = "rivendell.ptt";
 const PTT_CODE_KEY = "rivendell.pttKey";
 const DEFAULT_PTT_CODE = "Backquote"; // layout-independent KeyboardEvent.code
 const RICHTEXT_KEY = "rivendell.richtext";
+const RECENT_EMOJI_KEY = "rivendell.recentEmoji";
+const RECENT_EMOJI_CAP = 16; // most-recent-first; older picks fall off the end
 
 export function createPrefs(storage = globalThis.localStorage) {
   // Booleans persist as "1"/"0". Any storage error (private mode, blocked,
@@ -55,5 +57,30 @@ export function createPrefs(storage = globalThis.localStorage) {
       try { return storage.getItem(RICHTEXT_KEY) !== "0"; } catch { return true; }
     },
     saveRichText(on) { setBool(RICHTEXT_KEY, on); },
+
+    // Recently-used emoji, most-recent-first. Each entry is { v, c } — the picked
+    // value (custom shortcode or literal Unicode glyph) and whether it's custom
+    // (c:1 ⇒ :colon:-wrapped image; c:0 ⇒ literal grapheme). Stored as a JSON
+    // array; a malformed/blocked read yields an empty list rather than throwing.
+    loadRecentEmoji() {
+      try {
+        const arr = JSON.parse(storage.getItem(RECENT_EMOJI_KEY) || "[]");
+        if (!Array.isArray(arr)) return [];
+        // Defensively coerce shape so a corrupted entry can't crash a render.
+        return arr
+          .filter((e) => e && typeof e.v === "string")
+          .map((e) => ({ v: e.v, c: e.c ? 1 : 0 }));
+      } catch { return []; }
+    },
+    // pushRecentEmoji records a pick as most-recent, de-duplicating on value+kind
+    // (so re-picking 🔥 moves it to the front, not adds a second copy) and capping
+    // the list. Returns the new list so the caller can re-render without a reload.
+    pushRecentEmoji(value, isCustom) {
+      const entry = { v: value, c: isCustom ? 1 : 0 };
+      const next = [entry, ...this.loadRecentEmoji().filter((e) => !(e.v === entry.v && e.c === entry.c))]
+        .slice(0, RECENT_EMOJI_CAP);
+      try { storage.setItem(RECENT_EMOJI_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
+      return next;
+    },
   };
 }

@@ -2360,6 +2360,8 @@ const emojiPicker = createEmojiPicker({
   toggleReaction,
   // Lazy: this factory runs at module-eval, before adminPanel is initialized.
   openEmojiManager: () => adminPanel.openEmojiManager(),
+  loadRecentEmoji: () => prefs.loadRecentEmoji(),
+  pushRecentEmoji: (value, isCustom) => prefs.pushRecentEmoji(value, isCustom),
 });
 
 // --- inline message editing --------------------------------------------------

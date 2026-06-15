@@ -166,7 +166,11 @@
       <div class="composer">
         <ul id="mention-popup" class="mention-popup" hidden></ul>
         <div id="emoji-wrap" class="emoji-wrap" hidden>
-          <div id="emoji-picker" class="emoji-picker"></div>
+          <input id="emoji-search" class="emoji-search" type="text" autocomplete="off"
+                 spellcheck="false" placeholder="Search emoji…" aria-label="Search emoji"
+                 role="combobox" aria-expanded="true" aria-controls="emoji-picker"
+                 aria-autocomplete="list">
+          <div id="emoji-picker" class="emoji-picker" role="listbox" aria-label="Emoji"></div>
         </div>
         <div id="composer-reply" class="composer-reply" hidden></div>
         <div id="composer-attachments" class="composer-attachments" hidden></div>
