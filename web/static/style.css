@@ -391,10 +391,13 @@ body.ch-dragging, body.ch-dragging .channel { cursor: grabbing; }
    bar while preserving layout so the spoiler keeps its width. */
 .msg-body .spoiler:not(.revealed) img.emoji,
 .msg-body .spoiler:not(.revealed) .emoji-uni { opacity: 0; }
-.msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; position: relative; line-height: 1; }
+/* The wrapper is the non-scrolling positioning context for the language label;
+   the inner <pre> owns horizontal scroll, so the label stays pinned to the frame. */
+.msg-body .code-block-wrap { position: relative; }
+.msg-body pre.code-block { background: var(--bg-3); padding: 0.7rem 0.9rem; border-radius: var(--radius); overflow-x: auto; line-height: 1; }
 .msg-body pre.code-block code { background: none; padding: 0; }
 /* Language label shown top-right when a language hint is present. */
-.msg-body pre.code-block[data-lang]::after { content: attr(data-lang); position: absolute; top: 0.3rem; right: 0.6rem; font-size: 0.68rem; color: var(--text-faint); font-family: var(--mono); pointer-events: none; }
+.msg-body .code-block-wrap[data-lang]::after { content: attr(data-lang); position: absolute; top: 0.3rem; right: 0.6rem; font-size: 0.68rem; color: var(--text-faint); font-family: var(--mono); pointer-events: none; }
 /* Syntax highlight token colors — dark themes share One Dark–inspired palette. */
 .msg-body pre.code-block .hl-kw { color: #c678dd; }
 .msg-body pre.code-block .hl-str { color: #98c379; }

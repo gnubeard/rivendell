@@ -547,7 +547,7 @@ function renderBlocks(lines, meLower, emojis, channels, embedImages, hideUrl, us
       let j = li + 1;
       for (; j < lines.length && !FENCE_CLOSE_RE.test(lines[j]); j++) code.push(lines[j]);
       const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
-      rendered.push(`<pre class="code-block"${langAttr}><code>${highlight(code.join("\n"), lang)}</code></pre>`);
+      rendered.push(`<div class="code-block-wrap"${langAttr}><pre class="code-block"><code>${highlight(code.join("\n"), lang)}</code></pre></div>`);
       li = j; // skip the closing fence; if unclosed, j === lines.length and we stop
       continue;
     }

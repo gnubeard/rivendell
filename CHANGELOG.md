@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.5.16] - 2026-06-15
+
+### Fixed
+- The language label on a fenced code block now stays pinned to the top-right corner when the code is scrolled horizontally, instead of scrolling off with the code.
+
 ## [1.5.15] - 2026-06-14
 
 ### Changed
