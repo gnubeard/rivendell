@@ -402,6 +402,10 @@ body.ch-dragging, body.ch-dragging .channel { cursor: grabbing; }
 .msg-body pre.code-block .hl-num { color: #d19a66; }
 .msg-body pre.code-block .hl-fn  { color: #61afef; }
 .msg-body pre.code-block .hl-bi  { color: #e5c07b; }
+/* diff/patch line tokens: added (green), removed (red), hunk header (cyan). */
+.msg-body pre.code-block .hl-ins  { color: #98c379; }
+.msg-body pre.code-block .hl-del  { color: #e06c75; }
+.msg-body pre.code-block .hl-hunk { color: #56b6c2; }
 /* Light theme overrides. */
 html[data-theme="light"] .msg-body pre.code-block .hl-kw { color: #7c3aed; }
 html[data-theme="light"] .msg-body pre.code-block .hl-str { color: #16a34a; }
@@ -409,6 +413,9 @@ html[data-theme="light"] .msg-body pre.code-block .hl-cm { color: #6b7280; }
 html[data-theme="light"] .msg-body pre.code-block .hl-num { color: #c2410c; }
 html[data-theme="light"] .msg-body pre.code-block .hl-fn  { color: #1d4ed8; }
 html[data-theme="light"] .msg-body pre.code-block .hl-bi  { color: #92400e; }
+html[data-theme="light"] .msg-body pre.code-block .hl-ins  { color: #16a34a; }
+html[data-theme="light"] .msg-body pre.code-block .hl-del  { color: #dc2626; }
+html[data-theme="light"] .msg-body pre.code-block .hl-hunk { color: #0891b2; }
 .msg-body blockquote { border-left: 3px solid var(--border); margin: 0.2rem 0; padding-left: 0.7rem; color: var(--text-dim); }
 .msg-body table.md-table { border-collapse: collapse; margin: 0.3rem 0; max-width: 100%; font-size: 0.95em; }
 .msg-body table.md-table th, .msg-body table.md-table td { border: 1px solid var(--border); padding: 0.3rem 0.55rem; text-align: left; vertical-align: top; }

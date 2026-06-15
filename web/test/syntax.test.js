@@ -62,3 +62,31 @@ test("perl highlights qw list", () => {
   const out = highlight("my @days = qw(Mon Tue Wed);", "perl");
   assert.ok(out.includes('<span class="hl-str">qw(Mon Tue Wed)</span>'), `missing qw span: ${out}`);
 });
+
+test("diff highlights added, removed, hunk, and meta lines", () => {
+  const patch = [
+    "diff --git a/x.txt b/x.txt",
+    "index 111..222 100644",
+    "--- a/x.txt",
+    "+++ b/x.txt",
+    "@@ -1,3 +1,3 @@",
+    " context line",
+    "-was removed",
+    "+was added",
+  ].join("\n");
+  const out = highlight(patch, "diff");
+  assert.ok(out.includes('<span class="hl-ins">+was added</span>'), `missing ins span: ${out}`);
+  assert.ok(out.includes('<span class="hl-del">-was removed</span>'), `missing del span: ${out}`);
+  assert.ok(out.includes('<span class="hl-hunk">@@ -1,3 +1,3 @@</span>'), `missing hunk span: ${out}`);
+  assert.ok(out.includes('<span class="hl-cm">--- a/x.txt</span>'), `missing meta span: ${out}`);
+  assert.ok(out.includes('<span class="hl-cm">+++ b/x.txt</span>'), `header +++ must not be an ins line: ${out}`);
+});
+
+test("diff context lines stay unstyled and escaped", () => {
+  const out = highlight(" a < b && c", "diff");
+  assert.equal(out, " a &lt; b &amp;&amp; c");
+});
+
+test("diff alias patch resolves", () => {
+  assert.ok(highlight("+x", "patch").includes('<span class="hl-ins">+x</span>'));
+});

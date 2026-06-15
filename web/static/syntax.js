@@ -341,6 +341,27 @@ function jsonRules() {
   ];
 }
 
+// Diff/patch is line-oriented, not token-oriented: each line's first character
+// classifies the whole line, so it bypasses the sticky-rule tokenizer entirely.
+// File-header / hunk-header lines (--- +++ @@ diff index …) are checked before
+// the bare +/- added/removed lines so they don't get mis-tagged.
+const DIFF_META_RE =
+  /^(?:diff |index |--- |\+\+\+ |old mode|new mode|new file|deleted file|rename |copy |similarity |dissimilarity |Binary files)/;
+
+function diffHighlight(code) {
+  return String(code)
+    .split("\n")
+    .map((line) => {
+      let cls = null;
+      if (DIFF_META_RE.test(line)) cls = "hl-cm";
+      else if (line.startsWith("@@")) cls = "hl-hunk";
+      else if (line.startsWith("+")) cls = "hl-ins";
+      else if (line.startsWith("-")) cls = "hl-del";
+      return cls ? sp(cls, line) : esc(line);
+    })
+    .join("\n");
+}
+
 // --- Rule cache and dispatch ---
 
 const CACHE = new Map();
@@ -390,6 +411,7 @@ function getRules(lang) {
 export function highlight(code, lang) {
   if (!code) return esc(code || "");
   if (!lang) return esc(code);
+  if (lang === "diff" || lang === "patch") return diffHighlight(code);
   const rules = getRules(lang);
   if (!rules) return esc(code);
   return tokenize(code, rules);

@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.5.14] - 2026-06-14
+
+### Added
+- Fenced code blocks tagged ` ```diff ` (or ` ```patch `) now syntax-highlight added lines green, removed lines red, hunk headers cyan, and file headers dimmed.
+
 ## [1.5.1] - 2026-06-14
 
 ### Security
