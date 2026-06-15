@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [1.5.15] - 2026-06-14
+
+### Changed
+- Direct messages with a bot now hide the call (📞) and secret-chat (🔒) buttons, the same way self-DMs already do — bots can't take voice calls or do an end-to-end key exchange, so the buttons were meaningless there.
+
 ## [1.5.14] - 2026-06-14
 
 ### Added

@@ -24,6 +24,7 @@ export const BASE = process.env.E2E_BASE_URL || "http://localhost:18080";
 export const ADMIN = "e2e_admin";
 export const USER2 = "e2e_user2";
 export const USER3 = "e2e_user3"; // third member, for group-call specs
+export const BOT = "e2e_bot"; // a bot-flagged user, for the bot-DM spec
 export const PASSWORD = "rivendell-e2e-pw"; // ≥10 chars (server minimum)
 
 const STATE_FILE = path.join(here, ".e2e-state.json");
@@ -161,7 +162,7 @@ export default async function globalSetup() {
   }
 
   // --- additional users: existing login, or invitation → signup --------------
-  for (const username of [USER2, USER3]) {
+  for (const username of [USER2, USER3, BOT]) {
     if (await login(username, PASSWORD)) continue;
     const inv = await mustJSON(await fetch(BASE + "/api/admin/invitations", {
       method: "POST",
@@ -174,4 +175,17 @@ export default async function globalSetup() {
       body: JSON.stringify({ token: inv.token, username, password: PASSWORD }),
     }), "invitation signup");
   }
+
+  // --- flag the bot user so the bot-DM spec can assert the call/secret buttons
+  // are hidden in a DM with it. Idempotent: PUT .../bot just re-sets the flag.
+  const allUsers = await mustJSON(await fetch(BASE + "/api/users", {
+    headers: { Cookie: adminCookie },
+  }), "list users");
+  const botUser = allUsers.find((u) => u.username === BOT);
+  if (!botUser) throw new Error("bot user was not provisioned");
+  await mustJSON(await fetch(BASE + `/api/admin/users/${botUser.id}/bot`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Cookie: adminCookie },
+    body: JSON.stringify({ bot: true }),
+  }), "set bot flag");
 }

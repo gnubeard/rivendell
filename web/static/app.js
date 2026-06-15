@@ -1392,10 +1392,11 @@ function renderDMHeader(ch) {
   } else {
     dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
   }
-  // Self-DM scratch pad: calling yourself or starting a secret session with
-  // yourself makes no sense — hide both buttons.
+  // Self-DM scratch pad — and bot DMs (bots can't take calls or do E2E key
+  // exchange) — make calling/secret-chat meaningless: hide both buttons.
   const isSelfDM = otherId === (state.me && state.me.id);
-  if (isSelfDM) {
+  const otherIsBot = !!(other && other.is_bot);
+  if (isSelfDM || otherIsBot) {
     callBtn.hidden = true;
     secretBtn.hidden = true;
   } else {
