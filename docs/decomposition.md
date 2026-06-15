@@ -146,6 +146,7 @@ Conventions specific to this kind of module:
 | Mobile long-press action sheet (+ reactions sub-panel) | `mobilectx.js` | e2e (mobile-ctx, 5) | ✅ done |
 | In-call video grid (DM 2-tile + group gallery, show/hide, fullscreen) | `videogrid.js` | e2e (video-grid, 3) | ✅ done |
 | Foreground notifications (missed-count badge/title, ping toast, push lifecycle, opt-in control) | `notifyui.js` | e2e (notifications, 3) | ✅ done |
+| History/paging + scroll sub-system (older/newer paging, sentinels, history banner, near-bottom math, scrollToBottom) | `history.js` | unit (6) + e2e (history, 3) | ✅ done |
 
 ### Candidate chunks (not yet scheduled)
 
@@ -284,11 +285,24 @@ untangle** axis, sequenced:
    already prescribed above (NOT a module), and reactions (preserving the `mine`
    invariant) out of the `renderMessages` loop.
 3. **Only then, if a module still earns its keep, carve the history/paging + scroll
-   sub-system** (`loadChannel`/`loadOlderMessages`/`loadNewerMessages`/
-   `observeScrollSentinels`/`scrollToBottom` + `historyComplete`/`viewingHistory`/
+   sub-system** (`loadOlderMessages`/`loadNewerMessages`/`observeScrollSentinels`/
+   `renderHistoryBanner`/`scrollToBottom` + `historyComplete`/`viewingHistory`/
    `loadingOlder`/`loadingNewer`) — a self-contained sub-system with a clean seam and a
    pure-ish core (paging cursors, near-bottom math), unlike "the whole pane." That is the
    carve to bless, e2e-first; a `messagepane.js` god-module is not.
+   **✅ done — `history.js`** (`createHistoryPaging(deps)`): the flags + sentinels +
+   the paging fetches moved behind a ~6-entry deps surface, with `PAGE`/`NEAR_BOTTOM_PX`/
+   `isNearBottom`/`scrollToBottom` as free scroll-geometry exports. As predicted, the
+   channel-open / jump *orchestrators* (`loadChannel`, `jumpToMessage`) stayed in app.js
+   and drive the module through accessors (`resetForChannel`/`noteLoadedPage`/
+   `clearHistoryComplete`/`markViewingHistory`/`isViewingHistory`) rather than moving
+   wholesale — moving them would have dragged `renderChannelHeader`/
+   `applyChannelAffordances`/`refreshActiveMembers` in, the very "relocate the call
+   sites' job" anti-pattern this section warns against. The e2e-first net
+   (`web/e2e/history.spec.js`: open-at-newest, older-paging without snap, jump→history
+   banner→catch-up) landed green on the un-carved code first, then guarded the move.
+   Step 1's near-bottom math (`isNearBottom`) and step 2's untangle were not blockers —
+   the paging seam was clean enough to lift on its own.
 
 That spine-tightening is ongoing and is a distinct axis from module extraction: it
 splits oversized orchestrator functions into named in-file helpers (same file, no

@@ -55,7 +55,7 @@ import { createMobileCtx } from "./mobilectx.js";
 import { createVideoGrid } from "./videogrid.js";
 import { createVoiceUI } from "./voiceui.js";
 import { createNotifyUI } from "./notifyui.js";
-import { isNearBottom } from "./history.js";
+import { isNearBottom, scrollToBottom, PAGE, createHistoryPaging } from "./history.js";
 
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
@@ -111,14 +111,10 @@ let replyingToId = null;      // id of the message the composer is replying to, 
 // hides one per-user across devices, startDM / a fresh message reopens it.)
 let activeMemberIds = null;
 
-// Scrollback: messages load a page at a time as you scroll.
-const PAGE = 50;
-// NEAR_BOTTOM_PX (the "pinned to the live tail" threshold) and the isNearBottom
-// predicate now live in history.js — the home for scroll geometry. Imported above.
-let loadingOlder = false; // guards overlapping back-paging fetches
-let loadingNewer = false; // guards overlapping forward-paging fetches
-const historyComplete = new Set(); // channelIds whose oldest message is loaded
-const viewingHistory = new Set();  // channelIds whose loaded bottom isn't the live tail
+// Scrollback: messages load a page at a time as you scroll. The paging state
+// machine (load guards, history-window flags, sentinels) lives in history.js
+// behind `historyPaging` (created below); PAGE/NEAR_BOTTOM_PX/isNearBottom/
+// scrollToBottom are its scroll-geometry exports, imported above.
 let flashMessageId = null;         // id of a jumped-to message to highlight; survives re-renders
 
 // Voice / call UI state lives in voiceui.js (the call strip, ring banner, PTT,
@@ -682,7 +678,7 @@ function handleRealtimeEvent(evt) {
     // recency; reflect a DM I just sent (ch is post-fold, already current).
     if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
     if (active) {
-      if (d.isNewFromMe && viewingHistory.has(cid)) {
+      if (d.isNewFromMe && historyPaging.isViewingHistory(cid)) {
         // I sent while viewing a history window (below the live tail): reload
         // the channel so my message shows at the bottom in proper context,
         // not appended after a gap of unloaded messages.
@@ -1549,17 +1545,14 @@ async function loadChannel(id) {
   // Invite/leave/pins buttons + the dm-active members-column collapse (see helper).
   applyChannelAffordances(ch);
   // Reset scroll/history flags immediately so sentinels can't fire while in-flight.
-  loadingOlder = false;
-  loadingNewer = false;
-  viewingHistory.delete(id);
-  renderHistoryBanner();
+  historyPaging.resetForChannel(id);
+  historyPaging.renderHistoryBanner();
   try {
     const [, msgs] = await Promise.all([refreshActiveMembers(), api.messages(id, { limit: PAGE })]);
     if (id !== state.activeChannelId) return; // user switched away while fetching
     state = S.setMessages(state, id, msgs);
     // A short first page means there's nothing older to scroll back to.
-    if (msgs.length < PAGE) historyComplete.add(id);
-    else historyComplete.delete(id);
+    historyPaging.noteLoadedPage(id, msgs.length);
     // Use holdPosition so scrollToBottom's rAF callbacks don't fire and
     // override the unread-marker scroll. We control the final position here.
     renderMessages(false, true);
@@ -1582,71 +1575,6 @@ async function loadChannel(id) {
     $("#message-list").innerHTML = "";
     $("#message-list").append(el("div", { class: "notice" }, ex.message));
   }
-}
-
-// loadOlderMessages fetches the previous page when the user scrolls near the top
-// and splices it in, preserving the scroll position so the view doesn't jump.
-async function loadOlderMessages() {
-  const cid = state.activeChannelId;
-  if (!cid || loadingOlder || historyComplete.has(cid)) return;
-  const oldest = S.oldestMessageId(state, cid);
-  if (oldest == null) return;
-  loadingOlder = true;
-  const wrap = $("#message-list");
-  const prevHeight = wrap.scrollHeight;
-  const prevTop = wrap.scrollTop;
-  try {
-    const older = await api.messages(cid, { before: oldest, limit: PAGE });
-    if (older.length < PAGE) historyComplete.add(cid); // reached the beginning
-    if (older.length && cid === state.activeChannelId) {
-      state = S.prependMessages(state, cid, older);
-      renderMessages();
-      // Keep the message that was under the viewport in place: the prepended
-      // content grew the list above us by exactly this delta.
-      wrap.scrollTop = prevTop + (wrap.scrollHeight - prevHeight);
-    } else if (older.length) {
-      // User switched channels mid-fetch; merge quietly, no re-render.
-      state = S.prependMessages(state, cid, older);
-    }
-  } catch (ex) {
-    console.warn("rivendell: could not load older messages:", ex && ex.message);
-  } finally {
-    loadingOlder = false;
-  }
-}
-
-// loadNewerMessages is the forward counterpart to loadOlderMessages: when the user
-// scrolls near the bottom while viewing a history window (below the live tail), it
-// fetches the next page forward and appends it. A short page means we've caught up
-// to the newest message — drop the history flag so normal live-follow resumes.
-async function loadNewerMessages() {
-  const cid = state.activeChannelId;
-  if (!cid || loadingNewer || !viewingHistory.has(cid)) return;
-  const newest = S.newestMessageId(state, cid);
-  if (newest == null) return;
-  loadingNewer = true;
-  try {
-    const newer = await api.messages(cid, { after: newest, limit: PAGE });
-    if (newer.length < PAGE) viewingHistory.delete(cid); // caught up to the live tail
-    if (newer.length && cid === state.activeChannelId) {
-      // Hold position: the new messages land below the viewport, so the reader
-      // stays put and scrolls down into them (rather than being snapped to the
-      // new bottom, which on mobile left no room to trigger the next page).
-      state = S.appendMessages(state, cid, newer);
-      renderMessages(false, true);
-    }
-    if (cid === state.activeChannelId) renderHistoryBanner();
-  } catch (ex) {
-    console.warn("rivendell: could not load newer messages:", ex && ex.message);
-  } finally {
-    loadingNewer = false;
-  }
-}
-
-function renderHistoryBanner() {
-  const banner = $("#history-banner");
-  if (!banner) return;
-  banner.hidden = !viewingHistory.has(state.activeChannelId);
 }
 
 async function jumpToMessage(channelId, messageId) {
@@ -1682,11 +1610,11 @@ async function jumpToMessage(channelId, messageId) {
     const msgs = await api.messages(channelId, { around: messageId });
     if (channelId !== state.activeChannelId) return; // user switched away while fetching
     state = S.setMessages(state, channelId, msgs);
-    historyComplete.delete(channelId);
+    historyPaging.clearHistoryComplete(channelId);
     // Assume history until a forward probe proves otherwise. The around-window
     // only loads a partial page after the anchor, so the live tail — and, in a
     // brief conversation, the last few messages — may be missing.
-    viewingHistory.add(channelId);
+    historyPaging.markViewingHistory(channelId);
     flashMessageId = messageId; // highlight is applied in renderMessages so it survives re-renders
     // Hold position so the rebuild doesn't snap to the bottom; we center below.
     renderMessages(false, true);
@@ -1711,8 +1639,8 @@ async function jumpToMessage(channelId, messageId) {
     // page means we've reached the live tail (it clears the history flag, hiding
     // the banner); a full page confirms a real gap, and the bottom sentinel pages
     // the rest as the reader scrolls down.
-    await loadNewerMessages();
-    renderHistoryBanner();
+    await historyPaging.loadNewerMessages();
+    historyPaging.renderHistoryBanner();
     setTimeout(() => {
       flashMessageId = null;
       const n = $("#message-list").querySelector(".msg-anchor");
@@ -1736,59 +1664,10 @@ function flashNotice(text) {
   setTimeout(() => n.remove(), 4000);
 }
 
-// Infinite scroll is driven by two zero-height sentinels that renderMessages
-// places at the very top and bottom of the list. When a sentinel nears the
-// viewport the matching page loads. We use an IntersectionObserver rather than
-// scrollTop math because the latter fired unreliably on mobile (momentum
-// scrolling and the dynamic viewport) and could strand the reader at the end so
-// the next forward page never loaded. rootMargin "100%" prefetches ~a screen
-// early in both directions, so reading in either direction stays seamless.
-let scrollObserver = null;
-function observeScrollSentinels(topSentinel, bottomSentinel) {
-  if (!scrollObserver) {
-    scrollObserver = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue;
-        if (e.target.dataset.sentinel === "top") loadOlderMessages();
-        else loadNewerMessages();
-      }
-    }, { root: $("#message-list"), rootMargin: "100% 0px" });
-  }
-  // Sentinels are fresh nodes each render (innerHTML is cleared), so rebind.
-  scrollObserver.disconnect();
-  scrollObserver.observe(topSentinel);
-  scrollObserver.observe(bottomSentinel);
-}
-
-// scrollToBottom pins the message list to the newest message. It re-pins across
-// the next couple of frames because layout can keep settling after the first
-// assignment — text wrapping, and on mobile the visual viewport / URL bar — which
-// would otherwise leave the view a few pixels short of the bottom.
-function scrollToBottom(wrap) {
-  wrap.scrollTop = wrap.scrollHeight;
-  requestAnimationFrame(() => {
-    wrap.scrollTop = wrap.scrollHeight;
-    requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
-  });
-  // Images load asynchronously and expand the container after the rAF pass.
-  // Re-pin when each one finishes, but only if the reader hasn't manually
-  // scrolled away since we pinned.
-  // We capture the target scrollTop now (= scrollHeight − clientHeight, the max
-  // possible value). After the pin, wrap.scrollTop == targetTop. When the image
-  // loads, wrap.scrollHeight grows but scrollTop stays put — so checking
-  // "scrollTop is still near targetTop" reliably tells us whether the user
-  // scrolled away (vs. checking distance-from-new-bottom, which would be the
-  // image height and could easily exceed any fixed pixel threshold).
-  const targetTop = wrap.scrollHeight - wrap.clientHeight;
-  wrap.querySelectorAll("img").forEach(media => {
-    if (media.complete) return;
-    media.addEventListener("load", () => {
-      if (!wrap.contains(media)) return; // image is from a prior channel render
-      if (wrap.scrollTop >= targetTop - 5)
-        wrap.scrollTop = wrap.scrollHeight;
-    }, { once: true });
-  });
-}
+// Infinite-scroll paging (the two zero-height sentinels renderMessages places at
+// the top/bottom of the list) and the scrollToBottom pin both live in history.js.
+// observeScrollSentinels is reached through `historyPaging`; scrollToBottom is a
+// free import (pure DOM, no paging state).
 
 // --- message rendering -------------------------------------------------------
 
@@ -1928,7 +1807,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   const bottomSentinel = el("div", { class: "scroll-sentinel", "data-sentinel": "bottom" });
   wrap.prepend(topSentinel);
   wrap.append(bottomSentinel);
-  observeScrollSentinels(topSentinel, bottomSentinel);
+  historyPaging.observeScrollSentinels(topSentinel, bottomSentinel);
   // Follow the conversation when already at the bottom; otherwise hold the
   // reader's position (loadOlderMessages adjusts further for prepended history).
   if (atBottom) scrollToBottom(wrap);
@@ -3333,6 +3212,20 @@ function initials(name) {
 // imagewarm.js for the contract; the pure newest-first URL scan is unit-tested
 // there. avatarSrc is passed by reference (it closes over avatarVersion/state).
 const imageWarm = createImageWarmer({ getState: () => state, api, avatarSrc });
+
+// history.js — the message-pane history/paging + scroll sub-system (the blessed
+// carve). Owns the load guards, history-window flags, and IntersectionObserver
+// sentinels; loadChannel/jumpToMessage stay here and drive it via its accessors.
+// getState/setState bridge the reassigned `state`; renderMessages is app.js's pane
+// render, called back when a page splices in.
+const historyPaging = createHistoryPaging({
+  getState: () => state,
+  setState: (s) => { state = s; },
+  api,
+  S,
+  renderMessages,
+  messageList: () => $("#message-list"),
+});
 
 // In-call video grid — videogrid.js, e2e/video-grid.spec. app.js keeps owning
 // videoViewHidden (header label, channel selection, and call lifecycle touch it
