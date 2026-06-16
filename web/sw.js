@@ -122,39 +122,44 @@ self.addEventListener("notificationclick", (event) => {
   // openWindow/focus must run inside waitUntil or the user-gesture is lost.
   event.waitUntil(
     (async () => {
+      const scope = self.registration.scope;
+      const isOurs = (c) => c.url && c.url.indexOf(scope) === 0;
+
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const client = pickClient(wins);
 
-      // First, tell a live app where to go. navigate() drops the permalink hash
-      // (the page's hashchange listener jumps from it) and postMessage jumps an
-      // already-foreground app without a reload; the two are de-duped app-side.
-      // Both are harmless no-ops on a dead/zombie client — the openWindow path
-      // below then carries the jump via a fresh boot.
+      // First, point a live app at the message and ask its tab to the foreground.
+      // navigate() drops the permalink hash (the page's hashchange listener jumps
+      // from it) and postMessage jumps an already-foreground app without a reload —
+      // the two are de-duped app-side. focus() requests the foreground transition.
+      // All three are harmless no-ops on a dead/"zombie" client. focus() resolves
+      // with the post-focus WindowClient, which is our non-racy signal for whether
+      // the tab actually came forward.
+      let surfaced = false;
       if (client) {
         if (client.navigate) {
           try { await client.navigate(url); } catch (e) { /* detached/cross-origin */ }
         }
         try { client.postMessage({ type: "notificationclick", url }); } catch (e) { /* dead client */ }
+        try {
+          const focused = client.focus ? await client.focus() : null;
+          if (focused && focused.visibilityState === "visible") surfaced = true;
+        } catch (e) { /* focus() can reject (FF-Android, detached) */ }
       }
 
-      // Then surface the tab — the genuinely hard part. On desktop and Chrome,
-      // WindowClient.focus() brings the existing tab to the foreground, and calling
-      // openWindow() while a tab is already open would just spawn a duplicate — so
-      // there we focus and stop. Firefox-for-Android is the exception this whole
-      // dance exists for: focus() from a service worker resolves WITHOUT actually
-      // foregrounding the tab, and a swiped-away tab lingers in matchAll as an
-      // unfocusable zombie (so "a client exists" doesn't even mean "a tab is open").
-      // There, openWindow() is the only call that actually brings Firefox AND the
-      // right tab forward — for both the backgrounded and the fully-closed case —
-      // so we always use it.
-      const ua = (self.navigator && self.navigator.userAgent) || "";
-      const ffAndroid = /Firefox/i.test(ua) && /Android/i.test(ua);
-
-      if (client && !ffAndroid) {
-        try { if (client.focus) await client.focus(); } catch (e) { /* fall through to openWindow */ }
-        return;
+      // Only open a fresh window if nothing actually came to the foreground. This
+      // one outcome-based rule gets every browser right without sniffing: when
+      // focus() worked (desktop, Chrome, and Firefox-Android when it cooperates) a
+      // rivendell tab is now visible, so we DON'T openWindow and never spawn a
+      // duplicate; when there was no real tab to surface — a fully-closed tab,
+      // including the unfocusable zombie Firefox-Android leaves behind in matchAll —
+      // nothing came forward, so we open one. The matchAll re-query backstops the
+      // focus() return in case another tab was already visible.
+      if (!surfaced) {
+        const after = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        surfaced = after.some((c) => isOurs(c) && c.visibilityState === "visible");
       }
-      if (self.clients.openWindow) {
+      if (!surfaced && self.clients.openWindow) {
         try { await self.clients.openWindow(url); } catch (e) { /* nothing more we can do */ }
       }
     })()
