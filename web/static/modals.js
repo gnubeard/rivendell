@@ -106,7 +106,12 @@ export function createModals({
     $("#profile-theme").value = normalizeTheme(me.theme);
     onProfileOpen(); // refresh notif + push-to-talk sub-controls (owned by app.js)
     $("#profile-modal").hidden = false;
-    $("#profile-display").focus();
+    // On touch devices, auto-focusing pops the on-screen keyboard before the
+    // user has had a chance to look at the profile — so only focus on hover/
+    // fine-pointer devices.
+    if (!window.matchMedia?.("(pointer: coarse)")?.matches) {
+      $("#profile-display").focus();
+    }
   }
 
   // openUserCard shows a read-only profile card for any user. The full roster

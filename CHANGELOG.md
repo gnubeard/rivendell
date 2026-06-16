@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-06-15
+
+### Changed
+- Opening your profile on a touch device no longer immediately focuses the display-name field, so the on-screen keyboard no longer pops up before you've had a chance to look.
+
 ## [2.0.2] - 2026-06-15
 
 ### Fixed
