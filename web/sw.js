@@ -131,34 +131,27 @@ self.addEventListener("notificationclick", (event) => {
       // First, point a live app at the message and ask its tab to the foreground.
       // navigate() drops the permalink hash (the page's hashchange listener jumps
       // from it) and postMessage jumps an already-foreground app without a reload —
-      // the two are de-duped app-side. focus() requests the foreground transition.
-      // All three are harmless no-ops on a dead/"zombie" client. focus() resolves
-      // with the post-focus WindowClient, which is our non-racy signal for whether
-      // the tab actually came forward.
-      let surfaced = false;
+      // the two are de-duped app-side. focus() requests the foreground transition
+      // (it works on desktop/Chrome). All three are harmless no-ops on a dead client.
       if (client) {
         if (client.navigate) {
           try { await client.navigate(url); } catch (e) { /* detached/cross-origin */ }
         }
         try { client.postMessage({ type: "notificationclick", url }); } catch (e) { /* dead client */ }
-        try {
-          const focused = client.focus ? await client.focus() : null;
-          if (focused && focused.visibilityState === "visible") surfaced = true;
-        } catch (e) { /* focus() can reject (FF-Android, detached) */ }
+        try { if (client.focus) await client.focus(); } catch (e) { /* focus() can reject */ }
       }
 
-      // Only open a fresh window if nothing actually came to the foreground. This
-      // one outcome-based rule gets every browser right without sniffing: when
-      // focus() worked (desktop, Chrome, and Firefox-Android when it cooperates) a
-      // rivendell tab is now visible, so we DON'T openWindow and never spawn a
-      // duplicate; when there was no real tab to surface — a fully-closed tab,
-      // including the unfocusable zombie Firefox-Android leaves behind in matchAll —
-      // nothing came forward, so we open one. The matchAll re-query backstops the
-      // focus() return in case another tab was already visible.
-      if (!surfaced) {
-        const after = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-        surfaced = after.some((c) => isOurs(c) && c.visibilityState === "visible");
-      }
+      // Then openWindow UNLESS a rivendell view is genuinely frontmost now. The only
+      // trustworthy signal is the live visibility from a fresh matchAll — NOT the
+      // WindowClient that focus() resolves with, which on Firefox (a browser tab AND
+      // an installed PWA) optimistically reports "visible" even though the view never
+      // came forward and stays buried behind whatever was on top. So: focus() worked
+      // (desktop/Chrome) ⇒ a tab is now visible ⇒ skip openWindow, no duplicate; the
+      // view is buried, a fully-closed tab, or the PWA didn't surface ⇒ nothing is
+      // visible ⇒ openWindow to actually bring it forward. Gating on visibility first
+      // means an already-front view is never duplicated.
+      const after = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const surfaced = after.some((c) => isOurs(c) && c.visibilityState === "visible");
       if (!surfaced && self.clients.openWindow) {
         try { await self.clients.openWindow(url); } catch (e) { /* nothing more we can do */ }
       }
