@@ -22,7 +22,9 @@ let peerMeta = new Map();     // remoteUserId -> { restarts, timer } (reconnecti
 let audioEls = new Map();     // remoteUserId -> <audio> element
 let videoEls = new Map();     // remoteUserId -> <video> element
 let localVideoEl = null;      // local preview <video> (muted, created on first camera use)
-let cameraEnabled = false;    // camera state in current call
+let cameraEnabled = false;    // "sending video" master for the current call (camera OR screen)
+let videoIsScreen = false;    // when sending video, is the source the screen (getDisplayMedia) vs the camera?
+let screenAudioTrack = null;  // the tab/system audio track captured alongside a screen share (Chrome only), or null
 let activeChannelId = null;
 // callGen is bumped on every join. Call teardown (leave/end) defers the mic +
 // meter release behind the farewell-tone wait; if a new call starts during that
@@ -449,6 +451,166 @@ export function setVolumeForUser(userId, vol) {
   if (audio) audio.volume = v;
 }
 
+// idleVideoSender returns a peer's video RTCRtpSender whose track is currently
+// null — the dormant slot a turned-off screen share leaves behind (screen-off does
+// replaceTrack(null), unlike camera-off which keeps a disabled track). Reusing it
+// via replaceTrack lets video come back on with NO renegotiation; absent one, the
+// caller falls back to addTrack (which fires onnegotiationneeded). Detection is
+// best-effort across engines: a track-less sender whose transceiver receives video.
+function idleVideoSender(pc) {
+  for (const t of pc.getTransceivers()) {
+    if (t.sender && t.sender.track === null &&
+        t.receiver && t.receiver.track && t.receiver.track.kind === "video") {
+      return t.sender;
+    }
+  }
+  return null;
+}
+
+// attachVideoToPeers puts a local video track onto every peer connection, reusing
+// a dormant video sender (replaceTrack, no reneg) when one exists and otherwise
+// adding it (addTrack → onnegotiationneeded). Used by every "video turns on" path
+// (camera first-enable, screen-share, and the camera↔screen swaps). Best-effort
+// per peer; a failure on one never blocks the others. Bitrate caps are re-applied
+// after, since a replaceTrack reuse fires no negotiation event to trigger them.
+async function attachVideoToPeers(track) {
+  for (const [uid, pc] of peerConns) {
+    const slot = idleVideoSender(pc);
+    if (slot) {
+      try { await slot.replaceTrack(track); }
+      catch { try { pc.addTrack(track, localStream); } catch { /* peer setup race */ } }
+    } else {
+      try { pc.addTrack(track, localStream); } catch { /* peer setup race */ }
+    }
+    applyVideoBitrateCaps(uid, pc);
+  }
+}
+
+// attachScreenAudioToPeers adds a screen-share audio track (Chrome tab/system
+// audio) to every peer. The track is added INTO localStream by the caller so it
+// shares the mic's MediaStream msid — the remote then groups both audio tracks into
+// one stream and its single per-peer <audio> element plays them mixed (per-user
+// volume/deafen cover both). It rides its OWN m-line, separate from the mic, so
+// muting the mic never silences the shared audio (by design — you mute your voice,
+// the stream keeps playing). Always addTrack (no parked-sender reuse): the teardown
+// fully removes this track, so there's never a dormant audio sender to reuse.
+async function attachScreenAudioToPeers(track) {
+  for (const pc of peerConns.values()) {
+    try { pc.addTrack(track, localStream); } catch { /* peer setup race */ }
+  }
+}
+
+// stopScreenAudio releases the screen-share audio track. Unlike the parked-and-
+// reused VIDEO sender, this REMOVES the sender (pc.removeTrack → renegotiation drops
+// the m-line). The asymmetry is deliberate: video has the app-layer video_muted flag
+// that hides a peer's tile regardless of a lingering (silenced) track, but audio has
+// NO such gate — the remote <audio> plays whatever tracks are in its stream — so the
+// only way to guarantee a listener stops hearing the shared audio is to take the
+// track out, not merely null its source. No-op when none is live.
+async function stopScreenAudio() {
+  const t = screenAudioTrack;
+  if (!t) return;
+  screenAudioTrack = null;
+  for (const pc of peerConns.values()) {
+    const sender = pc.getSenders().find(s => s.track === t);
+    if (sender) { try { pc.removeTrack(sender); } catch { /* already gone */ } }
+  }
+  if (localStream) { try { localStream.removeTrack(t); } catch { /* not in stream */ } }
+  try { t.stop(); } catch { /* already stopped */ }
+}
+
+// setScreenShareEnabled toggles desktop screen sharing as the call's video source.
+// Screen share and the camera are mutually exclusive — one video source at a time —
+// so turning the share ON while the camera is live SWAPS the source on the existing
+// video m-line (replaceTrack: instant, no renegotiation) and stops the camera.
+// getDisplayMedia is independent of the microphone, so none of the camera path's
+// Android combined-stream / mic-HAL dance applies here. Turning the share OFF fully
+// STOPS the capture (replaceTrack(null) + stop) — unlike camera-off, which keeps a
+// disabled track for instant re-toggle — because a live screen-grab the browser is
+// still showing its "you're sharing" indicator for must actually be released.
+export async function setScreenShareEnabled(on) {
+  if (!localStream || activeChannelId === null) return;
+
+  if (on) {
+    const md = typeof navigator !== "undefined" ? navigator.mediaDevices : null;
+    if (!md || typeof md.getDisplayMedia !== "function") {
+      if (onCameraError) onCameraError(new Error("Screen sharing isn't supported in this browser."));
+      return;
+    }
+    let display;
+    try {
+      // audio:true opts into screen audio — Chrome can capture tab/system audio (only
+      // when the user picks a tab or ticks "share system audio"); Firefox/Safari just
+      // return no audio track, so the share is silently video-only there.
+      display = await md.getDisplayMedia({ video: true, audio: true });
+    } catch (err) {
+      // Dismissing the OS picker rejects with NotAllowedError/AbortError — that's a
+      // cancel, not a failure to surface. Anything else is a real error.
+      dbgEvent(0, "getdisplaymedia-error", { name: err && err.name });
+      if (err && err.name !== "NotAllowedError" && err.name !== "AbortError" && onCameraError) onCameraError(err);
+      return;
+    }
+    const screenTrack = display.getVideoTracks()[0];
+    if (!screenTrack) { display.getTracks().forEach(t => { try { t.stop(); } catch { /* already stopped */ } }); return; }
+    const screenAudio = display.getAudioTracks()[0] || null;
+    // "detail" tells the encoder to preserve sharpness over frame rate — the right
+    // trade for text/UI, and the inverse of the camera track's "motion" hint.
+    screenTrack.contentHint = "detail";
+    // The browser draws its own "Stop sharing" control; ending the capture there
+    // fires onended. Flip us back to video-off so our state tracks reality.
+    screenTrack.onended = () => { setScreenShareEnabled(false); };
+
+    const oldVideo = localStream.getVideoTracks()[0]; // a live camera track, if the camera was on
+    if (oldVideo) {
+      for (const pc of peerConns.values()) {
+        const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
+        if (sender) { try { await sender.replaceTrack(screenTrack); } catch { /* sender gone */ } }
+      }
+      localStream.removeTrack(oldVideo); oldVideo.stop();
+    } else {
+      await attachVideoToPeers(screenTrack);
+    }
+    localStream.addTrack(screenTrack);
+    // Screen audio (if the browser/user provided it): add it into localStream so it
+    // shares the mic's stream and plays mixed at the remote (see attachScreenAudioToPeers).
+    if (screenAudio) {
+      // A leftover from a prior share shouldn't linger if we somehow re-enter.
+      if (screenAudioTrack && screenAudioTrack !== screenAudio) await stopScreenAudio();
+      screenAudioTrack = screenAudio;
+      // Ending screen audio independently (rare) should drop it cleanly, not wedge state.
+      screenAudio.onended = () => { stopScreenAudio(); };
+      await attachScreenAudioToPeers(screenAudio);
+      localStream.addTrack(screenAudio);
+    }
+    videoIsScreen = true;
+    cameraEnabled = true;
+    // A screen share must NOT teach the per-DM "camera was on" memory — the next
+    // call should start voice-only, not auto-share the screen.
+    saveCameraPref(activeChannelId, false);
+    setupLocalVideo();
+  } else {
+    const vt = localStream.getVideoTracks()[0];
+    if (vt) {
+      for (const pc of peerConns.values()) {
+        const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
+        if (sender) { try { await sender.replaceTrack(null); } catch { /* sender gone */ } }
+      }
+      localStream.removeTrack(vt); vt.stop();
+    }
+    await stopScreenAudio();
+    videoIsScreen = false;
+    cameraEnabled = false;
+    teardownLocalVideo();
+    saveCameraPref(activeChannelId, false);
+  }
+
+  sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
+  dbgEvent(0, "screenshare-toggle", { on: videoIsScreen });
+  notifyState();
+}
+
+export function isScreenSharing() { return videoIsScreen; }
+
 // setCameraEnabled toggles the camera mid-call. When the video track already
 // exists (camera was on at join), it just flips track.enabled — no renegotiation
 // needed; we still send voice.mute so the server and peers know the new state.
@@ -473,6 +635,47 @@ export function setVolumeForUser(userId, vol) {
 // audio-only and keep the call alive rather than leaving it mute.
 export async function setCameraEnabled(on) {
   if (!localStream || activeChannelId === null) return;
+
+  // Switching FROM a live screen share TO the camera. Screen sharing is desktop-only,
+  // where opening the camera alone (no mic) is safe — the Android combined-stream
+  // dance below applies only to the FIRST camera enable from audio-only — so acquire
+  // just the camera and swap it onto the existing video m-line (replaceTrack: instant,
+  // no reneg), then stop the screen grab. Camera failure leaves the share running.
+  if (on && videoIsScreen) {
+    let camTrack;
+    try {
+      camTrack = (await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS })).getVideoTracks()[0];
+    } catch (err) {
+      if (shouldRetryRelaxed(err)) {
+        try { camTrack = (await navigator.mediaDevices.getUserMedia({ video: true })).getVideoTracks()[0]; }
+        catch (e2) { dbgEvent(0, "getusermedia-error", { name: e2 && e2.name, where: "camera-switch" }); if (onCameraError) onCameraError(e2); return; }
+      } else {
+        dbgEvent(0, "getusermedia-error", { name: err && err.name, where: "camera-switch" });
+        if (onCameraError) onCameraError(err);
+        return;
+      }
+    }
+    if (!camTrack) return;
+    camTrack.contentHint = "motion";
+    const screen = localStream.getVideoTracks()[0];
+    for (const pc of peerConns.values()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
+      if (sender) { try { await sender.replaceTrack(camTrack); } catch { /* sender gone */ } }
+    }
+    if (screen) { localStream.removeTrack(screen); screen.stop(); }
+    await stopScreenAudio(); // the screen capture is ending — its audio goes with it
+    localStream.addTrack(camTrack);
+    videoIsScreen = false;
+    cameraEnabled = true;
+    saveCameraPref(activeChannelId, true);
+    setupLocalVideo();
+    for (const [uid, pc] of peerConns) applyVideoBitrateCaps(uid, pc);
+    sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: false });
+    dbgEvent(0, "camera-toggle", { on: true, from: "screen" });
+    notifyState();
+    return;
+  }
+
   const videoTracks = localStream.getVideoTracks();
 
   if (on && videoTracks.length === 0) {
@@ -514,15 +717,17 @@ export async function setCameraEnabled(on) {
     if (newAudio) newAudio.enabled = !muted; // preserve current mute state
 
     // Swap each peer's audio sender to the new session's mic track (replaceTrack
-    // is transparent — same m-line, no renegotiation), then add the video track
-    // (this fires onnegotiationneeded; the offerer re-offers).
+    // is transparent — same m-line, no renegotiation).
     for (const pc of peerConns.values()) {
       if (newAudio) {
         const audioSender = pc.getSenders().find(s => s.track && s.track.kind === "audio");
         if (audioSender) { try { await audioSender.replaceTrack(newAudio); } catch {} }
       }
-      if (vt) pc.addTrack(vt, localStream);
     }
+    // Add the video track: reuse a dormant sender a prior screen-off left behind
+    // (replaceTrack, no reneg) or addTrack it (fires onnegotiationneeded; the
+    // offerer re-offers). attachVideoToPeers picks whichever applies.
+    if (vt) await attachVideoToPeers(vt);
 
     // Adopt the new session's tracks into localStream (the original audio was
     // already removed and stopped above, before the acquire).
@@ -1131,8 +1336,18 @@ export function congestionTarget(prev, ceiling, sig) {
 // scaleResolutionDownBy and maxFramerate. At/above VIDEO_SCALE_FULL_BPS the link
 // can carry native capture; as the target falls we shed resolution (2×, then 4×)
 // and trim framerate, which is what actually unloads a CPU-pinned phone encoder.
-// Pure; exported for unit testing.
-export function videoScaleForTarget(target) {
+//
+// isScreen INVERTS the resolution/framerate trade-off. Shedding resolution turns
+// shared text/UI to mush — unreadable is worse than choppy — so a screen source
+// HOLDS native resolution (scaleResolutionDownBy:1) at every target and gives back
+// frame rate instead (a near-static screen barely needs frames). This pairs with
+// the "detail" contentHint the screen track carries. Pure; exported for unit testing.
+export function videoScaleForTarget(target, isScreen = false) {
+  if (isScreen) {
+    if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 15 };
+    if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 8 };
+    return { scaleResolutionDownBy: 1, maxFramerate: 5 };
+  }
   if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) {
     return { scaleResolutionDownBy: 1, maxFramerate: 24 };
   }
@@ -1205,7 +1420,7 @@ async function monitorCongestion() {
       applyVideoBitrateCaps(uid, pc);
       dbgEvent(uid, "bitrate-adapt", {
         target: next, lossFrac: sig.lossFrac, rttMs: sig.rttMs,
-        scale: videoScaleForTarget(next).scaleResolutionDownBy, cpu: sig.cpuLimited,
+        scale: videoScaleForTarget(next, videoIsScreen).scaleResolutionDownBy, cpu: sig.cpuLimited,
       });
     }
   }
@@ -1231,7 +1446,7 @@ function stopCongestionMonitor() {
 // failure never touches the call.
 function applyVideoBitrateCaps(remoteUserId, pc) {
   const cap = effectiveVideoCap(remoteUserId);
-  const shape = { maxBitrate: cap, ...videoScaleForTarget(cap) };
+  const shape = { maxBitrate: cap, ...videoScaleForTarget(cap, videoIsScreen) };
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     let params;
@@ -1578,6 +1793,8 @@ function stopLocalStream() {
   }
   teardownLocalVideo();
   cameraEnabled = false;
+  videoIsScreen = false;
+  screenAudioTrack = null; // its track was stopped with the rest of localStream above
 }
 
 function notifyState() {
@@ -1587,6 +1804,7 @@ function notifyState() {
     muted,
     deafened,
     videoMuted: !cameraEnabled,
+    sharing: videoIsScreen, // local-only: which video source is live, so the UI lights the right button
     participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted, video_muted: !!p.video_muted })),
   });
 }

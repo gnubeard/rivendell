@@ -1448,6 +1448,9 @@ function renderDMHeader(ch) {
   } else {
     headerCamBtn.hidden = true;
   }
+  // Desktop screen-share button (CSS hides it on touch layouts): shown while in
+  // this DM's call. Mutually exclusive with the camera at the engine level.
+  voiceUI.applyHeaderShareBtn($("#header-share-btn"), ch.id);
 }
 
 function renderRegularHeader(ch) {
@@ -1479,6 +1482,9 @@ function renderRegularHeader(ch) {
   } else {
     callBtn.hidden = true;
   }
+  // Desktop screen-share button: available in a group voice call too (CSS hides it
+  // on touch layouts). Hidden when not in this channel's call.
+  voiceUI.applyHeaderShareBtn($("#header-share-btn"), ch ? ch.id : null);
   $("#channel-title").textContent = ch ? (ch.is_private ? "🔒 " : "# ") + ch.name : "";
   const canEdit = !!(ch && !ch.is_dm && isModPlus());
   topicEl.classList.toggle("editable", canEdit);

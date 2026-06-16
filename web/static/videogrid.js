@@ -130,7 +130,9 @@ export function createVideoGrid({
     if (!voiceCallState.videoMuted) {
       const localVid = getLocalVideoEl();
       if (localVid) {
-        localVid.className = "video-tile-local";
+        // Sharing the screen flips the PiP to object-fit:contain so the whole
+        // shared surface shows (a camera self-view crops to fill; a screen mustn't).
+        localVid.className = "video-tile-local" + (voiceCallState.sharing ? " sharing" : "");
         grid.appendChild(localVid);
         localVid.play().catch(() => {});
       }

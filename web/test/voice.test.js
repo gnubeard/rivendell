@@ -798,6 +798,20 @@ test("videoScaleForTarget: sheds resolution/framerate as the target falls", () =
   assert.deepEqual(voice.videoScaleForTarget(undefined), { scaleResolutionDownBy: 1, maxFramerate: 24 });
 });
 
+test("videoScaleForTarget: a screen source holds resolution and sheds framerate instead", () => {
+  // Inverse trade-off vs the camera: shedding resolution would turn shared text to
+  // mush, so scaleResolutionDownBy stays 1 at EVERY target; frame rate gives instead.
+  assert.deepEqual(voice.videoScaleForTarget(800000, true), { scaleResolutionDownBy: 1, maxFramerate: 15 });
+  assert.deepEqual(voice.videoScaleForTarget(500000, true), { scaleResolutionDownBy: 1, maxFramerate: 15 });
+  assert.deepEqual(voice.videoScaleForTarget(400000, true), { scaleResolutionDownBy: 1, maxFramerate: 8 });
+  assert.deepEqual(voice.videoScaleForTarget(300000, true), { scaleResolutionDownBy: 1, maxFramerate: 8 });
+  assert.deepEqual(voice.videoScaleForTarget(150000, true), { scaleResolutionDownBy: 1, maxFramerate: 5 });
+  // Resolution is never shed for a screen, even at the floor.
+  for (const t of [800000, 400000, 150000, undefined]) {
+    assert.equal(voice.videoScaleForTarget(t, true).scaleResolutionDownBy, 1);
+  }
+});
+
 test("uplinkStressed: loss, RTT, or local CPU limitation each trip stress", () => {
   assert.equal(voice.uplinkStressed({ lossFrac: 0.10, rttMs: 100 }), true);  // loss
   assert.equal(voice.uplinkStressed({ lossFrac: 0, rttMs: 700 }), true);     // RTT
