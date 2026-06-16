@@ -316,13 +316,21 @@ export function createVoiceUI({
     if (evt.type === "voice.ring") {
       // Incoming ring from another user.
       if (ringState) return; // already in a ring — ignore (shouldn't happen in practice)
-      ringState = { channelId: p.dm_channel_id, direction: "incoming", fromUserId: p.from_user_id };
+      // The server embeds the caller's name (from_display_name) so we can always
+      // name them, even on a ring replayed onto a socket whose roster hasn't
+      // loaded yet — fall back to the roster lookup, then "Someone".
+      ringState = {
+        channelId: p.dm_channel_id,
+        direction: "incoming",
+        fromUserId: p.from_user_id,
+        fromName: p.from_display_name || displayNameOf(p.from_user_id),
+      };
       renderRingBanner();
       // Repaint the header so the active DM's call button flips to the "answer"
       // icon — the banner alone doesn't drive the header.
       renderChannelHeader(state.channels[state.activeChannelId]);
       startRingSound();
-      fireRingNotification(p.from_user_id, p.dm_channel_id);
+      fireRingNotification(p.from_user_id, p.dm_channel_id, ringState.fromName);
       return;
     }
 
@@ -416,10 +424,10 @@ export function createVoiceUI({
       banner.hidden = true;
       return;
     }
-    const { direction, fromUserId, channelId } = ringState;
+    const { direction, fromUserId, fromName, channelId } = ringState;
     const bannerText = $("#ring-banner-text");
     if (direction === "incoming") {
-      bannerText.textContent = displayNameOf(fromUserId) + " is calling…";
+      bannerText.textContent = (fromName || displayNameOf(fromUserId)) + " is calling…";
       $("#ring-accept-btn").hidden = false;
       $("#ring-decline-btn").textContent = "Decline";
     } else {
@@ -448,13 +456,13 @@ export function createVoiceUI({
   // ring alone is easy to miss. Foreground only (a live tab): a ring is ephemeral
   // WS state, not a persisted message, so there's no Web Push path to a fully
   // closed app. Clicking it focuses the tab and opens the DM, mirroring firePing.
-  function fireRingNotification(fromUserId, dmChannelId) {
+  function fireRingNotification(fromUserId, dmChannelId, fromName) {
     if (!shouldNotify({ permission: currentPermission(), enabled: getNotifEnabled(), focused: !tabUnfocused() })) {
       return;
     }
     const state = getState();
     const caller = state.users[fromUserId];
-    const title = "📞 Call from " + displayNameOf(fromUserId);
+    const title = "📞 Call from " + (fromName || displayNameOf(fromUserId));
     const icon = caller && caller.has_avatar ? api.avatarURL(caller.id) : undefined;
     // messageId 0 = "just open the channel" (real ids start at 1); the SW click
     // routing in initPushRouting treats it as selectChannel rather than a jump.

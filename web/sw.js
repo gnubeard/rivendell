@@ -105,23 +105,55 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = (event.notification.data && event.notification.data.url) || "/";
+
+  // pickClient chooses the best existing window to surface: a currently-visible
+  // rivendell tab first, else any same-origin one, else the first client. Focusing
+  // wins[0] blindly could foreground the wrong (or a non-visible) tab when several
+  // are open.
+  function pickClient(wins) {
+    let sameOrigin = null;
+    for (const c of wins) {
+      if (c.visibilityState === "visible") return c;
+      if (!sameOrigin && c.url && c.url.indexOf(self.registration.scope) === 0) sameOrigin = c;
+    }
+    return sameOrigin || wins[0] || null;
+  }
+
   // openWindow/focus must run inside waitUntil or the user-gesture is lost.
   event.waitUntil(
     (async () => {
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      // Reuse an open rivendell tab if there is one: focus it and tell the app
-      // where to navigate (it parses the permalink hash).
-      for (const c of wins) {
-        if ("focus" in c) {
-          await c.focus();
+      const client = pickClient(wins);
+      // Reuse an open rivendell tab if there is one. navigate() surfaces the tab
+      // far more reliably than focus() alone on Firefox-for-Android (where focus()
+      // from a SW often resolves successfully without actually foregrounding the
+      // tab) and survives the case where the app's message listener isn't ready —
+      // the URL is in the location, not just an in-app postMessage the tab might
+      // never see. We still postMessage so an already-foreground app jumps without
+      // a reload, and still focus() to request the foreground transition.
+      if (client) {
+        if (client.navigate) {
           try {
-            c.postMessage({ type: "notificationclick", url });
+            await client.navigate(url);
           } catch (e) {
-            /* a focused client that can't receive a message still got focused */
+            /* cross-origin or detached client — fall through to focus/openWindow */
           }
-          return;
         }
+        try {
+          if (client.focus) await client.focus();
+        } catch (e) {
+          /* focus() can reject (FF Android); navigate() above already moved the tab */
+        }
+        try {
+          client.postMessage({ type: "notificationclick", url });
+        } catch (e) {
+          /* a navigated/focused client that can't receive a message still moved */
+        }
+        return;
       }
+      // No existing window — open one. (openWindow on a same-origin URL when a
+      // tab already exists would spawn a duplicate on Chrome, so it's reserved
+      // strictly for the no-client case.)
       if (self.clients.openWindow) {
         await self.clients.openWindow(url);
       }

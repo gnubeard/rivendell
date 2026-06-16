@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-06-15
+
+### Fixed
+- Incoming-call notifications and the ring banner now always name the caller instead of sometimes saying "Someone" (the caller's name now travels with the ring).
+- Tapping a notification is more reliable at bringing the app to the front, especially on Firefox for Android.
+
 ## [2.0.1] - 2026-06-15
 
 ### Fixed

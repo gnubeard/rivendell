@@ -160,8 +160,8 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 	ctx := context.Background()
 
 	// relayToUser re-encodes the client frame as a server event envelope, injects
-	// from_user_id, and delivers it to a specific user.
-	relayToUser := func(targetID int64) {
+	// from_user_id (plus any extra fields), and delivers it to a specific user.
+	relayToUser := func(targetID int64, extra map[string]any) {
 		var payload map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return
@@ -169,6 +169,11 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		delete(payload, "type")
 		fromBytes, _ := json.Marshal(userID)
 		payload["from_user_id"] = fromBytes
+		for k, v := range extra {
+			if b, err := json.Marshal(v); err == nil {
+				payload[k] = b
+			}
+		}
 		out, err := json.Marshal(event{Type: msgType, Payload: payload})
 		if err != nil {
 			return
@@ -270,7 +275,7 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		if err != nil || !canAccess(ch, userID) || !canAccess(ch, toUserID) {
 			return
 		}
-		relayToUser(toUserID)
+		relayToUser(toUserID, nil)
 
 	case "voice.mute":
 		if channelID == 0 {
@@ -343,7 +348,11 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		})
 		s.rings[dmChannelID] = ring
 		s.ringMu.Unlock()
-		relayToUser(calleeID)
+		// Embed the caller's name so the callee's ring banner/OS notification can
+		// always name them, even when their client hasn't loaded the caller into
+		// its roster yet (e.g. a ring replayed onto a freshly-opened socket before
+		// the user list finishes loading) — otherwise it falls back to "Someone".
+		relayToUser(calleeID, map[string]any{"from_display_name": s.callerName(ctx, userID)})
 
 	case "voice.ring_response":
 		if dmChannelID == 0 {
@@ -375,7 +384,7 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 			delete(s.rings, dmChannelID)
 		}
 		s.ringMu.Unlock()
-		relayToUser(otherID)
+		relayToUser(otherID, nil)
 		// Multi-login: every one of the responder's connections was rung
 		// (SendToUser fans out), but only this one answered/declined. Tell the
 		// others to stop ringing. This is a dismiss, NOT a relayed
@@ -403,10 +412,13 @@ func (s *Server) pendingRingFrames(userID int64) [][]byte {
 			continue
 		}
 		// Faithfully reconstruct what relayToUser would have delivered live:
-		// {dm_channel_id, from_user_id} under a voice.ring envelope.
-		frame, err := json.Marshal(event{Type: "voice.ring", Payload: map[string]int64{
-			"dm_channel_id": chID,
-			"from_user_id":  r.callerID,
+		// {dm_channel_id, from_user_id, from_display_name} under a voice.ring
+		// envelope. The name matters most here: a replayed ring lands on a socket
+		// that has only just opened, before its user roster has loaded.
+		frame, err := json.Marshal(event{Type: "voice.ring", Payload: map[string]any{
+			"dm_channel_id":     chID,
+			"from_user_id":      r.callerID,
+			"from_display_name": s.callerName(context.Background(), r.callerID),
 		}})
 		if err != nil {
 			continue
@@ -414,6 +426,21 @@ func (s *Server) pendingRingFrames(userID int64) [][]byte {
 		frames = append(frames, frame)
 	}
 	return frames
+}
+
+// callerName resolves a user's best display label (display name, falling back to
+// username) for embedding in a ring frame, so the callee can always name the
+// caller without depending on its own loaded roster. Best-effort: an empty string
+// on lookup failure lets the client fall back to its roster / "Someone".
+func (s *Server) callerName(ctx context.Context, userID int64) string {
+	u, err := s.st.GetUserByID(ctx, userID)
+	if err != nil {
+		return ""
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	return u.Username
 }
 
 // handleSecretWSMessage routes secret.* frames from clients. All frames are
