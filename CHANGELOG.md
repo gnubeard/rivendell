@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-06-16
+
+### Changed
+- Removed the redundant "Edit profile" header from the profile editor; the fields make its purpose clear.
+
 ## [2.0.3] - 2026-06-15
 
 ### Changed
