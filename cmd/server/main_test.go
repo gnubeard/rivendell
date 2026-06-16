@@ -2,40 +2,13 @@ package main
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"rivendell/internal/config"
+	"rivendell/internal/dbtest"
 	"rivendell/internal/store"
 )
-
-func testDSN() string {
-	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
-		return v
-	}
-	return "postgres://chat:chat_dev_pw@localhost:5432/chat_test?sslmode=disable"
-}
-
-// openTestStore opens + migrates the test database and truncates it to a clean
-// slate, skipping the whole test when no database is reachable.
-func openTestStore(t *testing.T) *store.Store {
-	t.Helper()
-	ctx := context.Background()
-	st, err := store.Open(ctx, testDSN())
-	if err != nil {
-		t.Skipf("no test database (%v); set TEST_DATABASE_URL to run", err)
-	}
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	_, err = st.DB().Exec(`TRUNCATE push_subscriptions, blobs, emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, invitations, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
-	if err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-	return st
-}
 
 func bootstrapCfg() config.Config {
 	return config.Config{
@@ -49,7 +22,7 @@ func bootstrapCfg() config.Config {
 // AND a default public #general channel, so the sidebar isn't blank on arrival.
 func TestBootstrapSeedsAdminAndGeneralChannel(t *testing.T) {
 	ctx := context.Background()
-	st := openTestStore(t)
+	st := dbtest.Open(t)
 
 	maybeBootstrap(ctx, bootstrapCfg(), st)
 
@@ -79,7 +52,7 @@ func TestBootstrapSeedsAdminAndGeneralChannel(t *testing.T) {
 // a no-op — no duplicate admin, no duplicate (or resurrected) #general.
 func TestBootstrapIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	st := openTestStore(t)
+	st := dbtest.Open(t)
 
 	maybeBootstrap(ctx, bootstrapCfg(), st)
 	maybeBootstrap(ctx, bootstrapCfg(), st)
@@ -101,7 +74,7 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 // add #general over the operator's existing room layout.
 func TestBootstrapSkipsGeneralWhenChannelsExist(t *testing.T) {
 	ctx := context.Background()
-	st := openTestStore(t)
+	st := dbtest.Open(t)
 
 	// Seed a user + a pre-existing channel, but no admin.
 	u, err := st.CreateUser(ctx, "member1", "Member One", store.RoleMember)

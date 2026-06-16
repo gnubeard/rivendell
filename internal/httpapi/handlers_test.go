@@ -19,16 +19,9 @@ import (
 
 	"rivendell/internal/auth"
 	"rivendell/internal/config"
+	"rivendell/internal/dbtest"
 	"rivendell/internal/store"
 )
-
-// testDSN returns the test database connection string, or "" to skip.
-func testDSN() string {
-	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
-		return v
-	}
-	return "postgres://chat:chat_dev_pw@localhost:5432/chat_test?sslmode=disable"
-}
 
 func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config) {
 	t.Helper()
@@ -41,19 +34,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, config.Config)
 // synchronisation.
 func newTestServerSrv(t *testing.T) (*httptest.Server, *store.Store, config.Config, *Server) {
 	t.Helper()
-	dsn := testDSN()
-	st, err := store.Open(context.Background(), dsn)
-	if err != nil {
-		t.Skipf("no test database (%v); set TEST_DATABASE_URL to run", err)
-	}
-	if err := st.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	// Clean slate.
-	_, err = st.DB().Exec(`TRUNCATE link_previews, push_subscriptions, blobs, emojis, channel_mutes, message_mentions, channel_reads, messages, channel_members, channels, magic_links, invitations, bot_tokens, sessions, users RESTART IDENTITY CASCADE`)
-	if err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
+	st := dbtest.Open(t)
 	cfg := config.Config{
 		Addr:            ":0",
 		SessionTTL:      time.Hour,
@@ -69,10 +50,10 @@ func newTestServerSrv(t *testing.T) (*httptest.Server, *store.Store, config.Conf
 	}
 	srv := New(cfg, st)
 	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() {
-		ts.Close()
-		st.Close()
-	})
+	// dbtest.Open owns st's lifecycle (close + lock release); we only need to
+	// stop serving here. This cleanup is registered after dbtest's, so it runs
+	// first (LIFO): the server stops before the store closes.
+	t.Cleanup(ts.Close)
 	return ts, st, cfg, srv
 }
 

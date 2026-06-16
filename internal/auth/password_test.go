@@ -28,6 +28,19 @@ func TestPBKDF2_SHA256_KnownVectors(t *testing.T) {
 	}
 }
 
+// TestDefaultIterationsIsProductionGrade guards the production PBKDF2 cost from
+// accidental downgrade. DefaultIterations is a var (not a const) so test binaries
+// can lower it for speed; this test runs in the auth package's own binary, which
+// does NOT lower it, so it asserts the real shipped default. Don't relax this.
+func TestDefaultIterationsIsProductionGrade(t *testing.T) {
+	const owaspFloor = 600_000
+	if DefaultIterations < owaspFloor {
+		t.Fatalf("DefaultIterations = %d, must stay >= %d (OWASP 2023 floor); "+
+			"lower it only in a test binary's TestMain, never the package default",
+			DefaultIterations, owaspFloor)
+	}
+}
+
 func TestHashVerifyRoundTrip(t *testing.T) {
 	// Use a small iteration count via encodeHash to keep the test fast.
 	h := encodeHash("correct horse battery staple", []byte("0123456789abcdef"), 1000)

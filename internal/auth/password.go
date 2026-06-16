@@ -21,11 +21,17 @@ import (
 	"strings"
 )
 
-// DefaultIterations follows OWASP guidance for PBKDF2-HMAC-SHA256 (2023).
+// DefaultIterations follows OWASP guidance for PBKDF2-HMAC-SHA256 (2023). It is
+// a var, not a const, solely so tests can lower the cost (one 600k-iteration
+// hash is ~100ms by design); production MUST keep the 600k default. Verify reads
+// the iteration count from the self-describing hash, so a hash produced at a
+// lowered count still verifies. TestDefaultIterationsIsProductionGrade guards the
+// default from accidental downgrade.
+var DefaultIterations = 600_000
+
 const (
-	DefaultIterations = 600_000
-	saltLen           = 16
-	keyLen            = 32
+	saltLen = 16
+	keyLen  = 32
 )
 
 // ErrMismatch is returned when a password does not match a stored hash.

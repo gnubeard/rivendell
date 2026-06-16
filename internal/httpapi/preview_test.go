@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"rivendell/internal/auth"
+	"rivendell/internal/dbtest"
 	"rivendell/internal/store"
 )
 
@@ -214,18 +215,9 @@ func TestPreviewClientRefusesInternal(t *testing.T) {
 
 // TestLinkPreviewStoreCycle verifies GetLinkPreview/SaveLinkPreview round-trip.
 func TestLinkPreviewStoreCycle(t *testing.T) {
-	dsn := testDSN()
-	st, err := store.Open(context.Background(), dsn)
-	if err != nil {
-		t.Skipf("no test database: %v", err)
-	}
-	defer st.Close()
-	if err := st.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := dbtest.Open(t)
 	ctx := context.Background()
 	const testURL = "https://example.com/preview-cycle-test"
-	st.DB().Exec(`DELETE FROM link_previews WHERE url = $1`, testURL)
 
 	lp := store.LinkPreview{
 		URL:         testURL,
