@@ -1,4 +1,9 @@
-# Video calling roadmap
+# Video calling — design notes
+
+**Status: shipped.** Camera video landed across phases 1–4 (group calls + congestion
+control); desktop screen sharing landed in 2.0.0 (see Phase 3 below). This is now the
+design record and the reference for the fiddly corners — capture aspect ratio and the
+FF-Android encoder freeze especially. The original target framing is kept below.
 
 Target: opt-in camera video on top of the existing P2P WebRTC voice infrastructure.
 Same design constraints as voice: no media server, no new Go dependencies, vanilla JS,
@@ -165,17 +170,24 @@ instead of us calling `createOffer` manually.
 
 ---
 
-### Phase 3 — screen sharing (future)
+### Phase 3 — screen sharing (shipped in 2.0.0)
 
-`getDisplayMedia` produces a `MediaStream` with a video track. The mechanics are
-identical to camera video (add a third track, renegotiate), but it's a separate
-permission flow and the UX is distinct: only the sharer sends a screen track; viewers
-just receive it. Defer until Phase 2 is stable.
+`getDisplayMedia` produces a video track (plus, on Chrome, an optional tab/system
+audio track). It's a desktop-only 🖥️ header toggle that switches the call's video
+SOURCE between camera and screen — one video slot, mutually exclusive, not a second
+simultaneous track. The engine is `setScreenShareEnabled` in `voice.js`; the UI is in
+`voiceui.js`; the load-bearing invariants are in CLAUDE.md under Voice/WebRTC, and
+`web/e2e/screen-share.spec.js` pins the behavior. The design-pass open questions
+resolved as:
 
-Key open questions deferred to that design pass:
-- Can a user share screen + camera simultaneously (two video tracks)?
-- Does a screen share replace or add to the video grid?
-- Should the hub track `ScreenSharing bool` in `VoiceParticipant`?
+- **Share screen + camera at once?** No — one video source at a time. Camera↔screen swaps the source on the existing video m-line via `replaceTrack` (instant, no renegotiation). Simpler to ship, and when you watch a friend stream you're rarely also looking at their camera (that's Twitch-streamer territory).
+- **Replace or add to the grid?** Replace — the screen rides the sender's existing video tile. Remote and group tiles are already `object-fit: contain`, so a screen shows uncropped; only the DM local PiP flips from `cover` to `contain` while sharing.
+- **Track `ScreenSharing` on `VoiceParticipant`?** Deliberately NOT added. It would only buy a "X is sharing" label and per-tile framing, and we already have full-screen + voluntary camera-off. The real reason to revisit a per-stream server flag is bandwidth-consent **receive** control (see the README roadmap), not labelling.
+
+Two corners worth keeping straight (full detail in CLAUDE.md):
+
+- **Encoding is inverted for screen content.** `contentHint="detail"` plus `videoScaleForTarget(t, isScreen=true)` HOLD resolution and shed framerate under congestion (15 → 8 → 5 fps) — blurred text is worse than choppy, the opposite of the camera's motion trade.
+- **Audio teardown differs from video.** Shared audio is added into the mic's stream (so the remote plays both through its one `<audio>`) but rides its OWN m-line, so muting the mic never silences it. On stop it is FULLY removed (`pc.removeTrack`), not parked — audio has no `video_muted`-style gate, so a parked-but-silent track would still be audible. Video parks-and-reuses its sender; audio removes.
 
 ---
 

@@ -27,6 +27,8 @@ import {
   isVoiceDeafened,
   setCameraEnabled,
   isCameraEnabled,
+  setScreenShareEnabled,
+  isScreenSharing,
   joinVoiceChannel,
   leaveVoiceChannel,
   endCallLocally,
@@ -96,11 +98,23 @@ export function createVoiceUI({
     };
     $("#call-leave-btn").onclick = () => leaveVoiceChannel();
 
-    // Camera toggle (DM calls only — button is hidden in regular voice channels).
+    // Camera toggle. While a screen share is live, clicking the camera SWITCHES the
+    // source to the camera (the engine swaps it on the same m-line) rather than
+    // turning video off — so the two video sources stay mutually exclusive.
     $("#call-camera-btn").onclick = async () => {
-      await setCameraEnabled(!isCameraEnabled());
+      if (isScreenSharing()) await setCameraEnabled(true);
+      else await setCameraEnabled(!isCameraEnabled());
       renderCallStrip();
       renderVideoGrid();
+      renderHeader();
+    };
+    // Screen share toggle (desktop-only; CSS hides it on narrow/touch layouts).
+    // Switches the call's video source to the screen, or off if already sharing.
+    $("#header-share-btn").onclick = async () => {
+      await setScreenShareEnabled(!isScreenSharing());
+      renderCallStrip();
+      renderVideoGrid();
+      renderHeader();
     };
     // Mobile video/chat toggle: switches between watching video and reading chat.
     $("#header-camera-btn").onclick = () => {
@@ -518,6 +532,13 @@ export function createVoiceUI({
   // The video grid itself lives in videogrid.js (createVideoGrid in app.js); the
   // call strip stays here because it reads the PTT flags this module owns.
 
+  // renderHeader repaints the channel header (app.js owns it; we get it as a dep).
+  // Used after a video-source toggle so the header share button reflects the new state.
+  function renderHeader() {
+    const st = getState();
+    renderChannelHeader(st.channels[st.activeChannelId]);
+  }
+
   function renderCallStrip() {
     const state = getState();
     const strip = $("#call-strip");
@@ -553,10 +574,14 @@ export function createVoiceUI({
     // (group video is the 1.4.0 feature). Hidden only when there's no active call.
     const camBtn = $("#call-camera-btn");
     if (ch) {
+      // The camera counts as "on" only when video is live AND it's the camera (not
+      // the screen). While sharing, the camera reads as off — clicking it switches
+      // the source to the camera. "active" styling marks the off/inactive state.
+      const cameraOn = !voiceCallState.videoMuted && !voiceCallState.sharing;
       camBtn.hidden = false;
-      camBtn.textContent = voiceCallState.videoMuted ? "📷" : "🎥";
-      camBtn.title = voiceCallState.videoMuted ? "Turn camera on" : "Turn camera off";
-      camBtn.classList.toggle("active", voiceCallState.videoMuted);
+      camBtn.textContent = cameraOn ? "🎥" : "📷";
+      camBtn.title = cameraOn ? "Turn camera off" : "Turn camera on";
+      camBtn.classList.toggle("active", !cameraOn);
     } else {
       camBtn.hidden = true;
     }
@@ -596,6 +621,21 @@ export function createVoiceUI({
     btn.title = videoViewHidden ? "Show video" : "Show chat";
   }
 
+  // applyHeaderShareBtn drives the desktop screen-share button for a channel:
+  // hidden unless we're in THIS channel's call, otherwise visible and lit while
+  // sharing. The desktop-only gate is CSS (hidden on touch/narrow layouts), so this
+  // only manages .hidden + the active/title state. Called from app.js's header
+  // renders alongside the mobile camera toggle.
+  function applyHeaderShareBtn(btn, channelId) {
+    if (!btn) return;
+    const inThisCall = voiceCallState.inCall && voiceCallState.channelId === channelId;
+    if (!inThisCall) { btn.hidden = true; return; }
+    const sharing = !!voiceCallState.sharing;
+    btn.hidden = false;
+    btn.classList.toggle("active", sharing);
+    btn.title = sharing ? "Stop sharing your screen" : "Share your screen";
+  }
+
   // resetVideoView clears the mobile chat-override (used on channel switch) and
   // repaints the grid.
   function resetVideoView() {
@@ -613,6 +653,7 @@ export function createVoiceUI({
     // shared renders app.js needs
     volumeSlider,
     applyHeaderCamLabel,
+    applyHeaderShareBtn,
     resetVideoView,
     // accessors for app.js render functions (header / members / channel list)
     getRingState: () => ringState,

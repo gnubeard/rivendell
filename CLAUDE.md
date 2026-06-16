@@ -51,7 +51,8 @@ web/static/                   app.js (orchestrator; being decomposed — see
                               linkpreview.js, admin.js, secretui.js, forward.js,
                               pins.js, modals.js, mobilectx.js, videogrid.js,
                               voiceui.js (call/ring UI over voice.js: call strip,
-                              ring banner, PTT, volume slider, video toggle),
+                              ring banner, PTT, volume slider, camera + screen-share
+                              toggles),
                               notifyui.js (foreground-notification UX over notify.js:
                               missed-count badge/title, ping toast, Web Push
                               subscription lifecycle, profile opt-in control),
@@ -68,7 +69,8 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               group-call, search, emoji-picker, channel-reorder,
                               link-previews, admin, secret-chat, forward, pins,
                               modals, mobile-ctx, video-grid, notifications,
-                              non-admin, bot-dm, history, composer-richtext);
+                              non-admin, bot-dm, history, composer-richtext,
+                              screen-share);
                               Chromium by default,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
                               (Safari-engine), opt-in via E2E_WEBKIT — see
@@ -140,6 +142,9 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 - Group caps are server-enforced (`MaxVoiceAudio`/`MaxVoiceVideo`): over-cap join ⇒ `voice.join_denied{reason:"full"}` (abort); over the video sub-cap ⇒ forced video-muted + `reason:"video_full"` (audio-only). DMs are exempt. `TestVoiceJoinDeniedWhenFull`/`TestVoiceVideoSubCap` guard.
 - Per-user volume uses `audio.volume`, not Web Audio GainNode (Chromium no-output bug with WebRTC+WebAudio).
 - Teardown is synchronous (`finishTeardown` → `closeAllPeers` before farewell-tone await). `callGen` guards rapid re-join.
+- **Screen share is a SECOND video SOURCE on the single video slot, mutually exclusive with the camera** (`setScreenShareEnabled`). Camera↔screen swaps the source on the existing m-line via `replaceTrack` (instant, no reneg); first-enable `addTrack`s and renegotiates. `contentHint="detail"` + `videoScaleForTarget(t, isScreen=true)` HOLD resolution and shed framerate (the inverse of the camera's motion trade — sheared text is worse than choppy). `track.onended` catches the browser's native "Stop sharing" bar and flips to video-off.
+- Screen VIDEO parks its sender on stop (`replaceTrack(null)`, reused via `idleVideoSender`). **`idleVideoSender` must only match a transceiver already negotiated to SEND (`currentDirection` sendrecv/sendonly), never a recvonly RECEIVE slot** — else whoever turns their camera on SECOND in a 2-way call reuses the receive slot and silently never offers (the 2.0.0 regression). `dm-call`'s sequential-camera spec guards it.
+- Screen AUDIO (Chrome tab/system audio) is `addTrack`ed INTO the mic's `localStream` so the remote groups both by msid and plays them through its one per-peer `<audio>`; it rides its OWN m-line, so muting the mic never silences it. Teardown FULLY removes it (`pc.removeTrack`, NOT park) — audio has no `video_muted`-style gate, so a parked-but-lingering track would still be heard. `web/e2e/screen-share` pins share→receive→camera-swap→teardown.
 
 **Reactions**
 - `message.update` that omits `reactions` must PRESERVE existing ones (`addMessage` guards this).

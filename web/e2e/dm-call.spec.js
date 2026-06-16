@@ -150,3 +150,34 @@ test("glare: simultaneous first-time camera adds converge under Perfect Negotiat
   await expect(page1.locator("#call-strip")).toBeHidden({ timeout: 15_000 });
   await expect(page2.locator("#call-strip")).toBeHidden({ timeout: 15_000 });
 });
+
+test("sequential camera adds: the SECOND camera also reaches the other end", async () => {
+  // Regression guard. The glare test above adds both cameras at once (neither side
+  // yet has a video transceiver, so both addTrack and both offer). The bug this pins
+  // is the SEQUENTIAL case: once one side sends video, the other holds a RECVONLY
+  // video transceiver for it — and a naive "reuse an idle video sender" replaceTrack
+  // would grab that receive slot and never renegotiate, so the second camera's video
+  // silently never sent. Turn cameras on one at a time; BOTH ends must end with two
+  // live tiles (remote + local PiP).
+  for (const p of [page1, page2]) {
+    await p.evaluate(() => localStorage.removeItem("rivendell.cameraEnabled"));
+  }
+  await page1.click("#call-btn");
+  await page2.click("#ring-accept-btn");
+  await inCall(page1);
+  await inCall(page2);
+
+  // First camera (page1): page2 sees one live remote tile.
+  await page1.click("#call-camera-btn");
+  await assertLiveVideo(page2, 1);
+
+  // Second camera (page2) — the regressing direction: page1 must now see page2's
+  // video too (its own local PiP + the newly-arriving remote tile = two live tiles).
+  await page2.click("#call-camera-btn");
+  await assertLiveVideo(page1, 2);
+  await assertLiveVideo(page2, 2);
+
+  await page1.click("#call-leave-btn");
+  await expect(page1.locator("#call-strip")).toBeHidden({ timeout: 15_000 });
+  await expect(page2.locator("#call-strip")).toBeHidden({ timeout: 15_000 });
+});

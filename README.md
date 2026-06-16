@@ -42,6 +42,7 @@ PostgreSQL, with a vanilla-JavaScript web client and no frontend build step.
 **Calls**
 
 - Voice channels and 1:1 or group calls, with optional camera
+- Desktop screen sharing as an alternative video source — including shared tab/system audio (Chrome), tuned to keep text sharp under congestion
 - Peer-to-peer WebRTC mesh — no media server (STUN/TURN configurable, with server-enforced participant caps)
 
 **Privacy and security**
@@ -265,56 +266,29 @@ host `psql` needs none of this.
 
 ## Architecture
 
-```
-cmd/server/main.go            entrypoint; flags; first-boot bootstrap
-internal/config/config.go     env-var config (all RIVENDELL_* vars)
-internal/auth/                password.go (PBKDF2), token.go (random + hash)
-internal/store/               store.go (open/migrate + domain structs),
-                              queries.go (core helpers: ErrNotFound, collectRows,
-                              exec, IsUniqueViolation), store_<domain>.go (SQL
-                              methods split by domain: users, emoji, admin, auth,
-                              invitations, channels, messages, reactions, read,
-                              push, blobs, previews),
-                              migrations/0001…NNNN.sql (embedded; applied in order)
-internal/ws/                  websocket.go (RFC 6455), hub.go (fan-out + presence)
-internal/httpapi/             server.go (Server struct + Handler route table),
-                              middleware.go (recover/log/auth/role + sessions),
-                              realtime.go (broadcast/audience/visibility),
-                              ws_dispatch.go (WS voice/secret signaling + teardown),
-                              static.go (versioned/templated static serving),
-                              httputil.go (JSON/path helpers),
-                              handlers.go (core: health/instance/voice-state
-                              reads/WS upgrade), handlers_<domain>.go (handler
-                              bodies split by domain: auth, users, channels,
-                              messages, reactions, pins, emoji, admin, blobs, push)
-internal/push/                push.go (Web Push: VAPID + RFC 8291/8188, stdlib only)
-web/index.html                single-page shell (login / set-password / app views)
-web/static/                   app.js (orchestrator; being decomposed — see
-                              docs/decomposition.md), api.js, ws.js, state.js,
-                              format.js, syntax.js, voice.js, secret.js,
-                              notify.js, rtcdebug.js, style.css; modules carved
-                              out of app.js: unread.js, channelorder.js,
-                              drafts.js, composer-field.js, attachments.js,
-                              autocomplete.js, prefs.js, previews.js, util.js,
-                              search.js, emoji.js, channeldrag.js, presence.js,
-                              imagewarm.js, linkpreview.js, admin.js, secretui.js,
-                              forward.js, pins.js, modals.js, mobilectx.js
-web/sw.js                     service worker (Web Push display + click routing)
-web/manifest.json             PWA manifest (installability; iOS push needs install)
-web/test/                     node:test unit suites for the pure JS modules
-                              (DOM-carrying modules are covered by e2e instead)
-web/e2e/                      Playwright specs (admin, channel-reorder,
-                              composer-paste, dm-call, emoji-picker, forward,
-                              group-call, link-previews, mobile-ctx, modals,
-                              non-admin, pins, search, secret-chat); dev-only,
-                              run via `make test-e2e`
-docs/                         design.md plus per-subsystem notes
-                              (decomposition.md, otr.md, voice.md, video.md,
-                              web_push.md, file_upload.md, and others)
-```
+rivendell is one Go binary serving a JSON + WebSocket API and a vanilla-JS client
+straight from disk — no media server, no message broker, no frontend build step.
+State lives in PostgreSQL; uploaded files live in a content-addressed blob
+directory on the filesystem.
 
-The module path is `rivendell` (Go 1.26); internal imports are `rivendell/internal/...`.
-Deeper design notes and per-feature invariants live in [docs/design.md](docs/design.md).
+**Backend** (`internal/`, module path `rivendell`, Go 1.26) is layered by
+responsibility:
+
+- **`store`** — the data layer: `database/sql` over the pure-Go `lib/pq` driver, plain auditable SQL (no ORM, no query builder), with schema migrations embedded in the binary and applied in order at startup.
+- **`ws`** — a hand-rolled RFC 6455 WebSocket and a hub that fans events out to connected clients and tracks presence.
+- **`httpapi`** — the HTTP layer: routing on the stdlib `net/http` ServeMux (no third-party router), middleware (recover / log / auth / role + sessions), the realtime broadcast + channel-visibility logic, and request handlers split into files by domain.
+- **`auth`** (PBKDF2 passwords, hashed tokens) and **`push`** (Web Push: VAPID + RFC 8291/8188) round it out — both stdlib-only.
+
+**Frontend** (`web/`) is a single HTML shell plus ES modules served raw, with
+path-based cache-busting in place of a bundler. `app.js` is the orchestrator,
+progressively carved into focused feature modules (composer, voice/video UI,
+search, emoji, …); `sw.js` is the service worker for Web Push. Calls are a
+peer-to-peer WebRTC mesh — the server only relays signaling — so media never
+touches the backend.
+
+The authoritative, file-by-file map and the per-feature invariants are kept
+current in [CLAUDE.md](CLAUDE.md); deeper design notes live in
+[docs/design.md](docs/design.md) and the per-subsystem notes alongside it.
 
 ---
 
@@ -409,7 +383,11 @@ calling out:
 
 ## Roadmap
 
-- **Screen sharing / desktop video** _(XL, highest-priority open feature)_ — a screen-capture track alongside the camera in group calls.
+Screen sharing — the last major feature — shipped in 2.0.0. What's left is
+refinement around the edges of calls:
+
+- **Graceful media fallback** — when a participant has no camera, offer to share their screen instead; when they have no working mic, let them join listen-only (one-way audio beats none).
+- **Per-stream receive control** — let a viewer stop receiving a participant's video to save bandwidth. On the P2P mesh this means signalling the sender to stop, not just hiding the tile.
 
 ---
 

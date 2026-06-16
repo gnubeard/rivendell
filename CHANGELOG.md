@@ -5,6 +5,26 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-15
+
+### Added
+- **Screen sharing.** In a call, a desktop 🖥️ button shares your screen as an alternative to your camera (one or the other). On Chrome you can include the shared tab or system audio, so a video you're playing comes through for everyone — and muting your own microphone doesn't silence it. Shared screens are tuned to keep text sharp when the connection gets tight.
+
+## [1.5.19] - 2026-06-15
+
+### Added
+- The emoji picker gained search, a recently-used row, and keyboard navigation, plus a dedicated top panel on mobile.
+
+## [1.5.18] - 2026-06-15
+
+### Added
+- The composer now shows markdown formatting live as you type — **bold**, *italic*, `code`, ~~strikethrough~~, and spoilers render in place, with the markers kept but dimmed. Ctrl/Cmd-B and Ctrl/Cmd-I wrap the selection.
+
+## [1.5.17] - 2026-06-15
+
+### Fixed
+- Voice and video calls handle Safari's media context more gracefully, with clearer guidance when the microphone or camera can't be reached (notably iOS home-screen apps).
+
 ## [1.5.16] - 2026-06-15
 
 ### Fixed

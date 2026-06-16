@@ -806,6 +806,10 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   background: #000;
   z-index: 2;
 }
+/* While sharing the screen, the local PiP shows the whole shared surface rather
+   than cropping it to fill (a camera self-view fills; a screen must not lose its
+   edges). Remote/group tiles are already object-fit:contain, so only the PiP needs it. */
+.video-tile-local.sharing { object-fit: contain; }
 .video-avatar {
   display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
 }
@@ -851,6 +855,12 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
 }
 @media (min-width: 721px) {
   #header-camera-btn { display: none !important; }
+}
+/* The screen-share button is the desktop counterpart: getDisplayMedia is a
+   desktop affordance, so hide it on narrow/touch layouts (mirrors the mobile-only
+   #header-camera-btn rule above, inverted). */
+@media (max-width: 720px) {
+  #header-share-btn { display: none !important; }
 }
 
 .call-strip {
