@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-06-16
+
+### Fixed
+- The profile editor no longer scrolls past the Save button. An empty error placeholder was reserving dead space below it.
+
 ## [2.0.4] - 2026-06-16
 
 ### Changed
