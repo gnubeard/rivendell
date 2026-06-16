@@ -1,11 +1,21 @@
 # Frontend decomposition
 
+> **Status: COMPLETE — historical document.** The decomposition effort described
+> below is finished. `app.js` has been carved down to a thin orchestrator and the
+> concerns it once held now live in the focused, individually-tested modules listed
+> in `CLAUDE.md`'s layout section. This document is kept for the record: it captures
+> the rationale, the test strategy, and the chunk-by-chunk method that guided the
+> work. It is no longer a live worklist — nothing here needs to be acted on, and the
+> status table below reflects the final state, not an open plan. Read it to
+> understand *why* the frontend is shaped the way it is, not as a list of TODOs.
+
 Breaking `web/static/app.js` (the client orchestrator — 6.1k lines at the start
 of this effort, shrinking with each slice) into small, well-understood,
 well-tested, well-documented modules — incrementally, one cohesive chunk per
 commit, each shippable on its own.
 
-This is a living document. Update the status table as chunks land.
+This was a living document during the effort; the status table below records where
+each chunk ultimately landed.
 
 ## Why
 
