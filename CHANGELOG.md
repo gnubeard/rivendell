@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.8] - 2026-06-16
+
+### Fixed
+- A trailing period (or run of periods) at the end of an auto-linked URL is no longer swallowed into the link — "see example.com/page." now links just the URL and leaves the period as text. Explicit `[text](url)` links are left exactly as written.
+
 ## [2.0.7] - 2026-06-16
 
 ### Fixed

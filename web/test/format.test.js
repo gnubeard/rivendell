@@ -224,6 +224,30 @@ test("non-image bare URL still autolinks (not imaged)", () => {
   assert.ok(!out.includes("<img"));
 });
 
+test("trailing period on a bare URL stays out of the link", () => {
+  const out = formatMessage("see https://example.com/page.");
+  assert.ok(out.includes('href="https://example.com/page"'), "period excluded from href");
+  assert.ok(out.includes(">https://example.com/page</a>"), "period excluded from link text");
+  assert.ok(out.endsWith("."), "period rendered as trailing plain text");
+});
+
+test("multiple trailing periods on a bare URL are all stripped", () => {
+  const out = formatMessage("https://example.com/x...");
+  assert.ok(out.includes('href="https://example.com/x"'));
+  assert.ok(out.includes(">https://example.com/x</a>..."), "all dots become trailing text");
+});
+
+test("a trailing period on a bare image URL is excluded", () => {
+  const out = formatMessage("https://example.com/cat.gif.");
+  assert.ok(out.includes('src="https://example.com/cat.gif"'), "image src has no trailing dot");
+  assert.ok(out.endsWith("."), "the period renders after the image");
+});
+
+test("trailing period inside an explicit markdown link is preserved", () => {
+  const out = formatMessage("[docs](https://example.com/page.)");
+  assert.ok(out.includes('href="https://example.com/page."'), "author-delimited URL kept verbatim");
+});
+
 test("links and images stay XSS-safe", () => {
   const out = formatMessage('[x](https://e.com/"onmouseover="alert(1))');
   assert.ok(!out.includes('"onmouseover='), "a quote in the URL is escaped, can't break the attribute");

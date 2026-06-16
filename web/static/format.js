@@ -139,6 +139,18 @@ const BLOB_IMG_RE = /!\[([^\]\n]*)\]\((\/api\/blobs\/[a-f0-9]{64})\)/g;
 // explicit [text](url) keeps its text and never becomes an image.
 const IMAGE_URL_RE = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg)(?:[?#]\S*)?$/i;
 
+// splitTrailingDots peels a run of trailing '.' off a BARE URL. A bare URL stops
+// only at whitespace, so a URL written at the end of a sentence ("see foo.com.")
+// swallows the terminal period; that period is far more likely punctuation than
+// part of the URL. Returns { url, trail } so the dots can render as plain text
+// after the link. Explicit [text](url) links are never run through this — the
+// author delimited the URL themselves.
+function splitTrailingDots(url) {
+  let i = url.length;
+  while (i > 0 && url[i - 1] === ".") i--;
+  return { url: url.slice(0, i), trail: url.slice(i) };
+}
+
 function linkAnchor(url, text) {
   return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 }
@@ -165,11 +177,13 @@ function inline(escaped, meLower, channels, embedImages, hideUrl, usernames) {
       // [text](url): keep the author's text (with markup); never an image.
       out += linkAnchor(m[2], inlineMarkup(m[1], meLower, channels, usernames));
     } else {
-      const url = m[3];
-      if (hideUrl && url === hideUrl) {
+      const raw = m[3];
+      if (hideUrl && raw === hideUrl) {
         // suppressed: YouTube embed or message-permalink card renders this URL
       } else {
+        const { url, trail } = splitTrailingDots(raw);
         out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url) : linkAnchor(url, url);
+        out += trail;
       }
     }
     last = m.index + m[0].length;
@@ -310,7 +324,7 @@ export function extractFirstBareURL(text) {
   const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
   let m;
   while ((m = re.exec(String(text))) !== null) {
-    if (m[3] !== undefined) return m[3];
+    if (m[3] !== undefined) return splitTrailingDots(m[3]).url;
   }
   return null;
 }
