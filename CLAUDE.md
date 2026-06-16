@@ -35,8 +35,10 @@ internal/httpapi/             server.go (Server struct + New + the Handler route
                               users, channels, messages, reactions, pins, emoji, admin,
                               blobs, push)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188)
-web/static/                   app.js (orchestrator; being decomposed — see
-                              docs/decomposition.md), api.js, ws.js, state.js,
+web/static/                   app.js (orchestrator; decomposed as far as is
+                              sensible — now mapped by 8 REGION banners over 30
+                              section markers, see docs/atlas.md; carve history
+                              in docs/decomposition.md), api.js, ws.js, state.js,
                               format.js, syntax.js, voice.js (WebRTC engine),
                               secret.js, notify.js, rtcdebug.js, tones.js (all
                               Web Audio synthesis: chime + greet/farewell +
@@ -75,7 +77,9 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
                               (Safari-engine), opt-in via E2E_WEBKIT — see
                               docs/webkit-e2e.md
-docs/                         decomposition.md (frontend module breakup),
+docs/                         atlas.md (app.js navigation map: 8 regions over
+                              30 sections + structural findings),
+                              decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
                               call-drop-investigation.md,

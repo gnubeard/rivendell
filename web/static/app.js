@@ -1,5 +1,8 @@
 // app.js — the rivendell web client. Wires the API, websocket, formatter, and the
 // pure state reducer to the DOM. Deliberately framework-free.
+//
+// Big file. It's mapped: 8 `// ▌ REGION N` banners (coarse) over 30 `// --- `
+// section markers (fine). Read docs/atlas.md first for the overview + the index.
 
 import { api } from "./api.js";
 import { connectRealtime } from "./ws.js";
@@ -58,6 +61,12 @@ import { createVoiceUI } from "./voiceui.js";
 import { createNotifyUI } from "./notifyui.js";
 import { isNearBottom, scrollToBottom, PAGE, createHistoryPaging } from "./history.js";
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 1 · FOUNDATIONS
+// ▌ Module-level state (the world model + ephemeral session cursors) and the
+// ▌ DOM micro-helpers ($/el/show/guard/safeLocal) every later region builds on.
+// ▌ Map: docs/atlas.md.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- module state ------------------------------------------------------------
 // All mutable module-level state, grouped by concern. `state` is the immutable
 // world model (state.js); everything else is ephemeral session bookkeeping that
@@ -193,6 +202,12 @@ function safeLocalSet(key, value) {
 // breaking channel restore with no error.
 const ACTIVE_CHANNEL_KEY = "rivendell.activeChannel";
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 2 · BOOT & AUTH
+// ▌ Page-load to live app: viewport/audio priming, the /set-password and
+// ▌ /invite routes, login/signup, and enterApp() — the one big async that
+// ▌ seeds state, paints the first frame, and wires everything before realtime.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- mobile viewport height --------------------------------------------------
 // Pin a --app-height var to the *visual* viewport so the app fits the area not
 // covered by the on-screen keyboard. Without this, focusing the composer makes
@@ -401,6 +416,20 @@ async function bootSignup() {
   };
 }
 
+// MAP — enterApp is the one-time boot sequence: authenticated → fully live. The
+// order is load-bearing (see CLAUDE.md): every interactive control is wired BEFORE
+// startRealtime(), so no event can arrive before its handler exists.
+//
+//   1. show("app"); fetch users + channels (parallel) → seed state → preload avatars
+//   2. best-effort seeds (each try/catch, non-fatal): emojis · unread · voice rosters
+//   3. choose the channel to open (restored last / first real / permalink target)
+//   4. first paint: renderMe · rerenderSidebar · renderAdminVisibility · notif total
+//   5. load that channel (or jumpToMessage for a permalink) + mark read
+//   6. warm viewport images → dismissLoadingScreen → background image warm
+//   7. subsystems: initVoice (+telemetry, callbacks, ICE) · initSecret (+support, key)
+//   8. WIRE EVERYTHING: wireComposer · wireControls · wireSwipe · wireIdleDetection ·
+//      push routing · focus / visibility / beforeunload listeners
+//   9. startRealtime()  ← LAST, only after step 8 (guarded; realtime is optional)
 async function enterApp() {
   show("app");
   const [users, channels] = await Promise.all([api.users(), api.channels()]);
@@ -535,6 +564,12 @@ function onWindowFocus() {
   if (state.activeChannelId) markActiveChannelRead();
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 3 · REALTIME
+// ▌ The inbound WebSocket pump. handleRealtimeEvent folds each frame into state
+// ▌ via the pure reducers, then dispatches the targeted re-renders + voice/
+// ▌ secret hand-offs. resync closes the gap a dead socket left after reconnect.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- realtime ----------------------------------------------------------------
 
 function startRealtime() {
@@ -555,6 +590,31 @@ function sendWS(msg) {
 // by event type. The state-folding is total in state.js; what's left here is the
 // targeted re-render dispatch and the voice/secret hand-offs — DOM territory, not
 // a further pure carve (see docs/decomposition.md, "Realtime/sync").
+// MAP — the inbound-WS dispatch table. Every frame is first folded into `state` by
+// the PURE reducer (S.applyEvent, total in state.js); what remains here is "given
+// the event type, which DOM re-renders fire" plus the voice/secret hand-offs. It
+// writes `state` only through the reducers, never ad hoc.
+//
+//   presence.update    → schedulePresenceUpdate (DEBOUNCED ~1.5s), early-return
+//   presence*/user.update → renderMembers · renderMe · renderDMs
+//                           (user.update also: avatar cache-bust + renderMessages)
+//   channel*           → renderChannels · renderDMs (+ header/members if active)
+//   member.remove      → me: drop/reload active channel · other: prune the roster
+//   hello              → server version ≠ ours → show #update-banner (deploy happened)
+//   read/mute.update   → renderSidebarBadges (+ renderMessages if active)
+//   typing.update      → renderTypingIndicator (if active)
+//   emoji.add/delete   → renderMessages · picker.rerender · refreshEmojiManagerIfOpen
+//   reaction.update    → renderMessages + refreshPinsIfOpen (if active)
+//   voice.* / secret.* → voiceUI.onVoiceEvent / handleSecretEvent
+//   message*           → classifyIncomingMessage (PURE, unread.js) decides
+//                        unread/mention/ping; here is only the DOM fallout (DM
+//                        resort, renderMessages, read cursor, badges, firePing)
+//
+// The unread/mention/ping matrix is intentionally NOT inlined — it's pure and
+// unit-tested in unread.js. Keep the policy there; keep only the side effects here.
+// The four fat domains (presence/user, channel, member.remove, message) are
+// extracted into named on<Domain>(evt) handlers right below the dispatcher; the
+// small ones (hello, read/mute, typing, emoji, reaction, voice, secret) stay inline.
 function handleRealtimeEvent(evt) {
   // Presence is debounced (see schedulePresenceUpdate): a transient flip that
   // reverts within ~1s never paints, so dots don't flicker on brief blips.
@@ -564,57 +624,12 @@ function handleRealtimeEvent(evt) {
   // already did locally (leaveActiveChannel) doesn't trigger a redundant reload.
   const hadChannel = evt.type === "member.remove" && !!state.channels[evt.payload.channel_id];
   state = S.applyEvent(state, evt);
-  // Targeted re-renders based on event type.
-  if (evt.type.startsWith("presence") || evt.type === "user.update") {
-    if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
-      // Their avatar may have changed — force a re-fetch on next render.
-      avatarVersion[evt.payload.id] = Date.now();
-      imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
-    }
-    renderMembers();
-    renderMe();
-    renderDMs(); // a DM row shows the other participant's name + presence
-    // Author display name / avatar in the open message list may have changed.
-    if (evt.type === "user.update") renderMessages();
-  }
-  if (evt.type.startsWith("channel")) {
-    renderChannels();
-    renderDMs();
-    // Membership may have changed (e.g. someone was invited) — re-scope the
-    // members panel if the event concerns the channel we're viewing. A topic
-    // edit by another mod also arrives here, so repaint the header (unless I'm
-    // mid-edit, to avoid clobbering my own input).
-    if (evt.payload && evt.payload.id === state.activeChannelId) {
-      if (!$("#channel-topic").querySelector("input")) {
-        renderChannelHeader(state.channels[state.activeChannelId]);
-      }
-      refreshActiveMembers();
-    }
-  }
-  if (evt.type === "member.remove") {
-    const { channel_id, user_id } = evt.payload;
-    if (user_id === state.me.id) {
-      // applyEvent dropped the channel for me (non-admin); render the
-      // consequences — unless it was already gone before the fold (e.g.
-      // leaveActiveChannel handled it), which hadChannel guards.
-      if (hadChannel && !S.isAdmin(state.me)) {
-        renderSidebarBadges();
-        // removeChannel re-pointed activeChannelId; load the new active one.
-        if (state.activeChannelId) loadChannel(state.activeChannelId);
-      } else if (hadChannel && channel_id === state.activeChannelId) {
-        // Admin lost membership on the active channel (via another session or
-        // another admin) but keeps bypass access — hide the leave button and
-        // re-fetch so the roster is accurate.
-        $("#leave-btn").hidden = true;
-        refreshActiveMembers();
-      }
-    } else if (channel_id === state.activeChannelId && activeMemberIds) {
-      // Someone else left the channel I'm viewing — drop them from the roster
-      // immediately (no re-fetch).
-      activeMemberIds.delete(user_id);
-      renderMembers();
-    }
-  }
+  // Targeted DOM re-renders by event type. Each FAT domain lives in its own
+  // on<Domain>(evt) handler below (defined right after this dispatcher); the small
+  // ones stay inline. See the MAP above for the full event→effect table.
+  if (evt.type.startsWith("presence") || evt.type === "user.update") onPresenceOrUserUpdate(evt);
+  if (evt.type.startsWith("channel")) onChannelEvent(evt);
+  if (evt.type === "member.remove") onMemberRemove(evt, hadChannel);
   if (evt.type === "hello") {
     // The server greets each connection with its version. If it differs from
     // the build we loaded, a newer server is running (a deploy happened) —
@@ -660,60 +675,123 @@ function handleRealtimeEvent(evt) {
       return u ? u.identity_key || null : null;
     }).catch((e) => console.warn("secret: event handler error:", e && e.message));
   }
-  if (evt.type.startsWith("message")) {
-    // A delete seen live earns a tombstone (unlike already-deleted history).
-    if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
-    const cid = evt.payload.channel_id;
-    const ch = state.channels[cid];
-    const active = cid === state.activeChannelId;
-    const focused = !tabUnfocused();
-    // The unread/mention/ping decision matrix is a pure function of state +
-    // event + these three view booleans (see unread.js). isNewFromMe/Other
-    // come back too, for the DOM side effects below.
-    const d = classifyIncomingMessage(state, evt, {
-      active,
-      focused,
-      adminPanelOpen: !$("#admin-panel").hidden,
-    });
-    // applyEvent bumped last_message_at so the DM list stays sorted by
-    // recency; reflect a DM I just sent (ch is post-fold, already current).
-    if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
-    if (active) {
-      if (d.isNewFromMe && historyPaging.isViewingHistory(cid)) {
-        // I sent while viewing a history window (below the live tail): reload
-        // the channel so my message shows at the bottom in proper context,
-        // not appended after a gap of unloaded messages.
-        loadChannel(cid);
-      } else {
-        renderMessages(d.isNewFromMe); // mine forces a jump to the newest
-      }
-      refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
-      if (focused && d.isNewFromOther) {
-        // You're looking right at it — keep the read cursor current. If the
-        // user is scrolled up, plant the marker at the current read position
-        // so they see where new messages begin when they scroll down.
-        if (!unread.markerFor(cid)) {
-          const ml = $("#message-list");
-          if (ml && !isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight)) {
-            unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
-          }
-        }
-        markActiveChannelRead();
-      }
-    }
-    // Raise the unread badge for a message I won't immediately see read, and
-    // separately the mention badge so @-mentions stand out. (A message landing
-    // in a closed DM resurfaces it server-side, arriving as a channel.new just
-    // before this event — so the row is already back.)
-    if (d.countUnread) {
-      state = S.bumpUnread(state, cid);
-      if (d.countMention) state = S.bumpMention(state, cid);
-      renderSidebarBadges();
-    }
-    // Chime + (if opted in) an OS notification for pings; plain channel
-    // chatter stays silent with just the badge.
-    if (d.ping) notifUI.firePing(evt, ch);
+  if (evt.type.startsWith("message")) onMessageEvent(evt);
+}
+
+// onPresenceOrUserUpdate repaints the surfaces that show a user's identity/presence
+// (the member list, my own chip, DM rows) and — on a profile change — the open
+// message authors. A user.update carrying a new avatar busts the avatar cache first.
+function onPresenceOrUserUpdate(evt) {
+  if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
+    // Their avatar may have changed — force a re-fetch on next render.
+    avatarVersion[evt.payload.id] = Date.now();
+    imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
   }
+  renderMembers();
+  renderMe();
+  renderDMs(); // a DM row shows the other participant's name + presence
+  // Author display name / avatar in the open message list may have changed.
+  if (evt.type === "user.update") renderMessages();
+}
+
+// onChannelEvent repaints the channel/DM lists on any channel.* event, and — when it
+// concerns the channel I'm viewing — re-scopes the members panel and repaints the
+// header. A topic edit by another mod arrives here too; skip the header repaint while
+// I'm mid-edit (an open input under #channel-topic) so I don't clobber my own input.
+function onChannelEvent(evt) {
+  renderChannels();
+  renderDMs();
+  if (evt.payload && evt.payload.id === state.activeChannelId) {
+    if (!$("#channel-topic").querySelector("input")) {
+      renderChannelHeader(state.channels[state.activeChannelId]);
+    }
+    refreshActiveMembers();
+  }
+}
+
+// onMemberRemove handles a member leaving / being removed. hadChannel (captured by
+// the caller BEFORE the state fold) guards against double-handling a removal we did
+// locally (leaveActiveChannel). Three cases: me as a non-admin losing a channel
+// (reload the re-pointed active one), an admin losing membership on the active channel
+// but keeping bypass access, or someone else leaving the channel I'm viewing.
+function onMemberRemove(evt, hadChannel) {
+  const { channel_id, user_id } = evt.payload;
+  if (user_id === state.me.id) {
+    if (hadChannel && !S.isAdmin(state.me)) {
+      renderSidebarBadges();
+      // removeChannel re-pointed activeChannelId; load the new active one.
+      if (state.activeChannelId) loadChannel(state.activeChannelId);
+    } else if (hadChannel && channel_id === state.activeChannelId) {
+      // Admin lost membership on the active channel but keeps bypass access — hide
+      // the leave button and re-fetch so the roster is accurate.
+      $("#leave-btn").hidden = true;
+      refreshActiveMembers();
+    }
+  } else if (channel_id === state.activeChannelId && activeMemberIds) {
+    // Someone else left the channel I'm viewing — drop them from the roster now.
+    activeMemberIds.delete(user_id);
+    renderMembers();
+  }
+}
+
+// onMessageEvent folds the DOM consequences of a message.new/update/delete. The
+// unread/mention/ping POLICY is the pure classifyIncomingMessage (unread.js); this is
+// only the side effects: a live delete earns a tombstone, the DM list re-sorts, the
+// open channel repaints (a from-me send forces a jump to newest; sending while in a
+// history window reloads), the read cursor/marker stays current while focused, and the
+// unread/mention badges + ping chime fire.
+function onMessageEvent(evt) {
+  // A delete seen live earns a tombstone (unlike already-deleted history).
+  if (evt.type === "message.delete") liveDeleted.add(evt.payload.id);
+  const cid = evt.payload.channel_id;
+  const ch = state.channels[cid];
+  const active = cid === state.activeChannelId;
+  const focused = !tabUnfocused();
+  // The unread/mention/ping decision matrix is a pure function of state + event +
+  // these three view booleans (see unread.js). isNewFromMe/Other come back too.
+  const d = classifyIncomingMessage(state, evt, {
+    active,
+    focused,
+    adminPanelOpen: !$("#admin-panel").hidden,
+  });
+  // applyEvent bumped last_message_at so the DM list stays sorted by recency;
+  // reflect a DM I just sent (ch is post-fold, already current).
+  if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
+  if (active) {
+    if (d.isNewFromMe && historyPaging.isViewingHistory(cid)) {
+      // I sent while viewing a history window (below the live tail): reload the
+      // channel so my message shows at the bottom in proper context, not appended
+      // after a gap of unloaded messages.
+      loadChannel(cid);
+    } else {
+      renderMessages(d.isNewFromMe); // mine forces a jump to the newest
+    }
+    refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
+    if (focused && d.isNewFromOther) {
+      // You're looking right at it — keep the read cursor current. If the user is
+      // scrolled up, plant the marker at the current read position so they see where
+      // new messages begin when they scroll down.
+      if (!unread.markerFor(cid)) {
+        const ml = $("#message-list");
+        if (ml && !isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight)) {
+          unread.pinMarkerIfUnset(cid, state.lastRead[cid]);
+        }
+      }
+      markActiveChannelRead();
+    }
+  }
+  // Raise the unread badge for a message I won't immediately see read, and separately
+  // the mention badge so @-mentions stand out. (A message landing in a closed DM
+  // resurfaces it server-side, arriving as a channel.new just before this event — so
+  // the row is already back.)
+  if (d.countUnread) {
+    state = S.bumpUnread(state, cid);
+    if (d.countMention) state = S.bumpMention(state, cid);
+    renderSidebarBadges();
+  }
+  // Chime + (if opted in) an OS notification for pings; plain channel chatter stays
+  // silent with just the badge.
+  if (d.ping) notifUI.firePing(evt, ch);
 }
 
 // onRealtimeConnChange paints the connection indicator and triggers a resync when
@@ -798,6 +876,12 @@ async function resync() {
   }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 4 · SIDEBAR & CHANNELS
+// ▌ Everything left of the message pane: me/theme, the channel/DM/member lists,
+// ▌ channel lifecycle (create/mute/leave/close/select), drag reordering, read
+// ▌ state, and the channel header. Five sub-sections below.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- rendering ---------------------------------------------------------------
 
 // applyTheme paints the chosen UI theme by setting data-theme on <html>; the CSS
@@ -1041,6 +1125,9 @@ function renderAdminVisibility() {
 // gesture and persists the dropped order (the order math lives in channelorder.js).
 // renderChannels uses channelDrag.isActive() to skip a mid-drag repaint and
 // channelDrag.wire(li, id) to arm each mod-visible row.
+// Placement: NOT load-order-pinned — its bag is all hoisted fns/arrows, so it
+// could legally live in R8's switchboard. It stays here, next to renderChannels
+// (its only caller), on purpose: cohesion beats symmetry. See docs/atlas.md.
 const channelDrag = createChannelDrag({
   $,
   getState: () => state,
@@ -1551,6 +1638,12 @@ function beginTopicEdit() {
   input.onblur = save;
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 5 · MESSAGE PANE
+// ▌ The message list itself: paging/history (drives historyPaging),
+// ▌ renderMessages and the row builders + edit-state capture/restore, and the
+// ▌ reply banner. The densest DOM+state knot in the file.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- message loading, history & scrolling ------------------------------------
 
 async function loadChannel(id) {
@@ -1689,6 +1782,37 @@ function flashNotice(text) {
 // free import (pure DOM, no paging state).
 
 // --- message rendering -------------------------------------------------------
+//
+// MAP. renderMessages is the orchestrator; everything else in this section is a
+// builder it composes. The whole section is a *projection* of module state onto
+// #message-list — it reads app state, never writes it (the one exception:
+// captureEditState stashes the live draft into editDraft so an in-flight inline
+// edit survives the innerHTML wipe). This is why it resists extraction: it depends
+// on a wide slice of live state but owns none of it. Don't carve it to a file;
+// keep it legible here. (docs/atlas.md, R5.)
+//
+//   renderMessages(forceBottom, holdPosition)          // full rebuild of the pane
+//     ├─ captureEditState(wrap) ──────────────┐        // snapshot inline edit…
+//     │   wrap.innerHTML = ""                  │
+//     ├─ renderSecretView(...)   ←OR→  message loop     // OTR view vs server history
+//     │                                        │
+//     │   message loop, per item:              │
+//     │     • renderDeletedRun     (collapsed "N deleted", live ids only)
+//     │     • renderSystemMessage   (joins / topic changes)
+//     │     • "New messages" divider  (shouldInsertUnreadMarker · unread.markerFor)
+//     │     • messageRow(m, {grouped, isMod, canPin})   // grouped = shouldGroupMessage
+//     │         ├─ buildReplyQuote(m)                   // quoted-reply header
+//     │         ├─ reactionsRow(m)                      // NB: defined in R6 (`mine` rule)
+//     │         └─ messageActions(m, {…})               // hover edit/forward/pin/del/read
+//     ├─ scroll sentinels → historyPaging.observeScrollSentinels   // infinite scroll
+//     ├─ atBottom ? scrollToBottom(wrap) : wrap.scrollTop = prevTop // follow vs hold
+//     └─ restoreEditState(wrap, snap) ────────┘        // …re-focus + caret after rebuild
+//
+// State read: state.{channels, messages, me, typing}, the inline-edit trio
+// (editingMessageId / editDraft / editFocusPending), liveDeleted, the unread cursor
+// (unread.markerFor), and the per-DM secret session (getSession).
+// renderTypingIndicator stands apart — it paints #typing-indicator alone, driven by
+// typing.update; it isn't part of the renderMessages rebuild.
 
 function renderTypingIndicator() {
   const el = $("#typing-indicator");
@@ -1758,38 +1882,21 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   let lastTime = 0;
   let i = 0;
   while (i < msgs.length) {
-    // Walk a run of consecutive deleted messages. Only those deleted live this
-    // session (in liveDeleted) get a collapsed "N deleted" tombstone; ones that
-    // arrived already-deleted from history render as nothing — so reopening a
-    // channel isn't cluttered with old tombstones.
+    // Deleted run: collapse consecutive deletions. renderDeletedRun returns the
+    // index past the run and whether it drew a tombstone — a drawn tombstone breaks
+    // grouping; an invisible run (no live deletions) doesn't.
     if (msgs[i].deleted_at) {
-      let j = i;
-      let live = 0;
-      while (j < msgs.length && msgs[j].deleted_at) {
-        if (liveDeleted.has(msgs[j].id)) live++;
-        j++;
-      }
-      if (live > 0) {
-        wrap.append(
-          el("div", { class: "msg deleted-run" },
-            el("div", { class: "msg-gutter" }),
-            el("div", { class: "msg-main" },
-              el("div", { class: "msg-body deleted" }, live === 1 ? "message deleted" : `${live} messages deleted`)))
-        );
-        lastUser = null;
-        lastTime = 0;
-      }
-      // A run with no live deletions is invisible and doesn't break grouping.
-      i = j;
+      const run = renderDeletedRun(wrap, msgs, i);
+      if (run.drew) { lastUser = null; lastTime = 0; }
+      i = run.next;
       continue;
     }
 
     const m = msgs[i];
 
+    // System line (joins, topic changes): no author gutter, always breaks grouping.
     if (m.is_system) {
-      wrap.append(el("div", { class: "msg msg-system", "data-msg-id": m.id },
-        el("span", { class: "msg-system-text" }, m.content),
-        el("span", { class: "msg-system-time" }, formatTime(m.created_at))));
+      renderSystemMessage(wrap, m);
       lastUser = null;
       lastTime = 0;
       i++;
@@ -1828,6 +1935,38 @@ function renderMessages(forceBottom = false, holdPosition = false) {
   else wrap.scrollTop = prevTop;
   // Re-establish the inline editor's size, focus, and caret after the rebuild.
   restoreEditState(wrap, editRestore);
+}
+
+// renderDeletedRun collapses a run of consecutive deleted messages starting at
+// `start`. Only messages deleted live this session (liveDeleted) earn a visible
+// "N deleted" tombstone; a run that arrived already-deleted from history renders
+// nothing — so a reopened channel isn't littered with old tombstones. Returns the
+// index past the run and whether a tombstone was drawn (the caller resets grouping
+// only when one was — an invisible run must not break a group).
+function renderDeletedRun(wrap, msgs, start) {
+  let j = start;
+  let live = 0;
+  while (j < msgs.length && msgs[j].deleted_at) {
+    if (liveDeleted.has(msgs[j].id)) live++;
+    j++;
+  }
+  if (live > 0) {
+    wrap.append(
+      el("div", { class: "msg deleted-run" },
+        el("div", { class: "msg-gutter" }),
+        el("div", { class: "msg-main" },
+          el("div", { class: "msg-body deleted" }, live === 1 ? "message deleted" : `${live} messages deleted`)))
+    );
+  }
+  return { next: j, drew: live > 0 };
+}
+
+// renderSystemMessage appends a centered system line (joins, topic changes, …):
+// text + time, no author gutter. The caller breaks the grouping run around it.
+function renderSystemMessage(wrap, m) {
+  wrap.append(el("div", { class: "msg msg-system", "data-msg-id": m.id },
+    el("span", { class: "msg-system-text" }, m.content),
+    el("span", { class: "msg-system-time" }, formatTime(m.created_at))));
 }
 
 // captureEditState snapshots an in-progress inline edit before renderMessages wipes
@@ -2074,6 +2213,12 @@ function cancelReply() {
   renderReplyBanner();
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 6 · COMPOSER & MESSAGE ACTIONS
+// ▌ Authoring: the contenteditable composer + autocomplete + emoji picker,
+// ▌ inline message editing, link previews, and reactions — i.e. everything you
+// ▌ do TO a message once it (or its draft) exists.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- inline autocomplete binding (widget in autocomplete.js) -----------------
 
 // mkAutocomplete builds an @-mention / :emoji / #channel completion widget bound
@@ -2119,6 +2264,25 @@ function richContext() {
 // the div so none of those callers change. The content model is deliberately
 // flat: text nodes plus <br> (counted as "\n"); the composer's input handler
 // strips anything richer, so the facade's offset math stays exact.
+// MAP — wireComposer builds the message composer and binds its handlers once. It
+// plugs in three sub-systems and threads them through the DOM events:
+//   • ac   = mkAutocomplete(input)          — @-mention / :emoji completion
+//   • rich = createComposerRichText(input)  — live **markdown** decoration + undo
+//   • composerTray = createAttachmentTray() — staged image uploads (module handle)
+//
+// Handlers (registration order):
+//   input      → image-paste CHANNEL 3 (harvest native <img>) · stranded-<br>
+//                normalize · rich.onInput (decorate + undo) · typing ping
+//   paste      → image-paste CHANNEL 1 (clipboard files) · URL-over-selection → [..](..)
+//   beforeinput→ image-paste CHANNEL 2 (FF-Android dataTransfer files)
+//   keydown    → ac → rich (Ctrl-B/I) → Esc-cancels-reply → ArrowUp-edits-last →
+//                Enter-SEND ┬ secret session: sendSecretMessage (no attach/reply)
+//                           └ normal: composeMessageBody + attachments + reply
+//   attach btn / drag-drop → composerTray.uploadAndInsert
+//
+// The three image-paste channels are deliberately redundant across browsers and
+// mutually exclusive per paste (each preventDefaults). Don't collapse them — see
+// docs/composer-paste-qa.md and the caret/decoration invariant in docs/richtext.md.
 function wireComposer() {
   const input = $("#composer-input");
   upgradeComposerField(input); // before anything reads .value / .selectionStart
@@ -2577,80 +2741,12 @@ async function toggleReaction(messageId, emoji, knownMine) {
   await guard(() => (mine ? api.removeReaction(messageId, emoji) : api.addReaction(messageId, emoji)));
 }
 
-// --- feature-module wiring ---------------------------------------------------
-//
-// Each of these features lives in its own module behind a createX(deps) surface;
-// app.js instantiates it here and re-exports the handful of methods the call sites
-// and wire* functions use. Full contracts live in each module's header comment.
-
-// Forward modal + pure cores (forwardBody/forwardTargets/makeCanSee) — forward.js,
-// e2e/forward.spec, web/test/forward.test.
-const forward = createForward({
-  el,
-  $,
-  getState: () => state,
-  api,
-  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
-});
-const openForwardModal = forward.openForwardModal;
-
-// Mobile long-press action sheet — mobilectx.js, e2e/mobile-ctx.spec. The gesture
-// detection + backdrop wiring stay in app.js (wireMobileContextMenu).
-const mobileCtx = createMobileCtx({
-  el,
-  $,
-  getState: () => state,
-  api,
-  emojiPicker,
-  startReply,
-  openForwardModal,
-  startEdit,
-  togglePin,
-  toggleMessageRead,
-  deleteMessage,
-});
-const openMobileCtx = mobileCtx.openMobileCtx;
-const closeMobileCtx = mobileCtx.closeMobileCtx;
-
-// Pinned-messages panel — pins.js, e2e/pins.spec. reactionsRow is injected because
-// reactions stay in app.js (the `mine` invariant); togglePin stays with rendering.
-const pins = createPins({
-  el,
-  $,
-  getState: () => state,
-  api,
-  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
-  closeDrawers,
-  reactionsRow,
-});
-const openPinsModal = pins.openPinsModal;
-const refreshPinsIfOpen = pins.refreshPinsIfOpen;
-
-// Message-search modal — search.js, e2e/search.spec. Owns its racy state
-// (generation token, query, keyset cursor, debounce); wireSearchControls binds it.
-const search = createSearch({
-  el,
-  $,
-  getState: () => state,
-  jumpToMessage,
-  closeDrawers,
-});
-
-// Foreground notifications — notifyui.js, e2e/notifications.spec. Owns the opt-in
-// (seeded from prefs) + baseTitle; renderNotificationTotal/firePing/renderNotifControl/
-// initPushRouting are driven from the realtime handler, sidebar badges, and profile
-// modal. voiceUI reads the opt-in via notifUI.isEnabled (below).
-const notifUI = createNotifyUI({
-  el,
-  $,
-  getState: () => state,
-  api,
-  prefs,
-  selectChannel,
-  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
-  tabUnfocused,
-});
-
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 7 · CONTROL WIRING
+// ▌ The one-time wire* functions that attach static-DOM event listeners, grouped
+// ▌ by concern and aggregated by wireControls (run once from enterApp). The
+// ▌ feature-module plugs they reference now live in R8's switchboard.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- control wiring: one-time event bindings, grouped by concern -------------
 
 // openLightbox shows an inline image large, centred on a dark backdrop, instead
@@ -3044,6 +3140,13 @@ function wireControls() {
   wireGlobalButtons();
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ▌ REGION 8 · SHELL CHROME & SUBSYSTEMS
+// ▌ Drawers/swipe/idle, then the consolidated switchboard — feature-module plugs
+// ▌ (forward/mobile-ctx/pins/search/notify) + subsystem plugs (modals, admin,
+// ▌ avatars/image-warming, voice/video, secret UI), interleaved with presence and
+// ▌ the loading screen — then the lone boot() call at the very bottom.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- app shell: drawers, swipe, idle -----------------------------------------
 
 // Drawer helpers. Only one drawer is open at a time; the backdrop shows whenever
@@ -3162,6 +3265,83 @@ function wireIdleDetection() {
   idleTimer = setTimeout(goIdle, IDLE_MS);
 }
 
+// --- feature-module plugs ----------------------------------------------------
+//
+// The message/channel feature modules, each behind a createX(deps) surface that
+// re-exports the handful of methods the call sites + wire* functions use. Gathered
+// here (with the subsystem plugs below) as the app's one switchboard. Ordering
+// constraints: forward → mobileCtx (mobileCtx injects openForwardModal), and
+// mobileCtx after emojiPicker (R6); everything else they reference is a hoisted
+// function declaration. Full contracts live in each module's header comment.
+
+// Forward modal + pure cores (forwardBody/forwardTargets/makeCanSee) — forward.js,
+// e2e/forward.spec, web/test/forward.test.
+const forward = createForward({
+  el,
+  $,
+  getState: () => state,
+  api,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+});
+const openForwardModal = forward.openForwardModal;
+
+// Mobile long-press action sheet — mobilectx.js, e2e/mobile-ctx.spec. The gesture
+// detection + backdrop wiring stay in app.js (wireMobileContextMenu).
+const mobileCtx = createMobileCtx({
+  el,
+  $,
+  getState: () => state,
+  api,
+  emojiPicker,
+  startReply,
+  openForwardModal,
+  startEdit,
+  togglePin,
+  toggleMessageRead,
+  deleteMessage,
+});
+const openMobileCtx = mobileCtx.openMobileCtx;
+const closeMobileCtx = mobileCtx.closeMobileCtx;
+
+// Pinned-messages panel — pins.js, e2e/pins.spec. reactionsRow is injected because
+// reactions stay in app.js (the `mine` invariant); togglePin stays with rendering.
+const pins = createPins({
+  el,
+  $,
+  getState: () => state,
+  api,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+  closeDrawers,
+  reactionsRow,
+});
+const openPinsModal = pins.openPinsModal;
+const refreshPinsIfOpen = pins.refreshPinsIfOpen;
+
+// Message-search modal — search.js, e2e/search.spec. Owns its racy state
+// (generation token, query, keyset cursor, debounce); wireSearchControls binds it.
+const search = createSearch({
+  el,
+  $,
+  getState: () => state,
+  jumpToMessage,
+  closeDrawers,
+});
+
+// Foreground notifications — notifyui.js, e2e/notifications.spec. Owns the opt-in
+// (seeded from prefs) + baseTitle; renderNotificationTotal/firePing/renderNotifControl/
+// initPushRouting are driven from the realtime handler, sidebar badges, and profile
+// modal. voiceUI reads the opt-in via notifUI.isEnabled (below).
+const notifUI = createNotifyUI({
+  el,
+  $,
+  getState: () => state,
+  api,
+  prefs,
+  selectChannel,
+  jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
+  tabUnfocused,
+});
+
 // --- invite, channel & profile modals, user card -----------------------------
 
 // The modal cluster (new-channel, edit-profile, invite, read-only user card)
@@ -3170,6 +3350,8 @@ function wireIdleDetection() {
 // and onActiveMembersChanged writes activeMemberIds + re-renders the members
 // panel as people are invited. The create-channel and save-profile form handlers
 // stay in app.js's wire* functions.
+// (avatarSrc/startDM in the bag are defined further down in R8 but are hoisted
+// function declarations, so the forward reference resolves fine.)
 const modals = createModals({
   el,
   $,
@@ -3218,7 +3400,7 @@ const refreshEmojiManagerIfOpen = adminPanel.refreshEmojiManagerIfOpen;
 // The foreground-notification UX — the global missed-count badge/title, the
 // focused-tab ping toast, firePing's chime/toast/OS-alert decision, the Web Push
 // subscription lifecycle, and the profile opt-in control — lives in notifyui.js
-// (created in the feature-module wiring above as `notifUI`). app.js's realtime
+// (created in the feature-module plugs above as `notifUI`). app.js's realtime
 // handler calls notifUI.firePing on a ping; renderSidebarBadges/enterApp call
 // notifUI.renderNotificationTotal; the profile modal drives setEnabled/
 // renderNotifControl. The opt-in is read back via notifUI.isEnabled (voiceui.js's
@@ -3352,6 +3534,8 @@ function dismissLoadingScreen() {
 // through its accessors. Two voice values stay in app.js and are injected back:
 // voiceTelemetry (created + registered to voice.js in enterApp) via getTelemetry,
 // and the notification opt-in via getNotifEnabled (the ring notification reads it).
+// Order constraint: this plug MUST follow videoGrid — its bag takes renderVideoGrid
+// (a const, not a hoisted fn), so it can't float above the grid in the switchboard.
 const voiceUI = createVoiceUI({
   $, el,
   getState: () => state,
