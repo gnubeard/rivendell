@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.9] - 2026-06-16
+
+### Fixed
+- Adding a custom emoji no longer shows a spurious "refreshEmojiManager is not defined" error in the manager modal. The upload always succeeded, but a dangling internal call left over from the admin/emoji refactor threw afterward and the modal didn't re-render the list right away.
+
 ## [2.0.8] - 2026-06-16
 
 ### Fixed

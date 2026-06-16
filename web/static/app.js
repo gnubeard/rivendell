@@ -2859,7 +2859,7 @@ function wireEmojiControls() {
       await api.uploadEmoji(shortcode, file);
       $("#emoji-manager-shortcode").value = "";
       $("#emoji-manager-file").value = "";
-      await refreshEmojiManager();
+      refreshEmojiManagerIfOpen();
     } catch (ex) {
       out.textContent = ex.message;
     }
