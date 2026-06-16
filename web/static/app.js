@@ -2688,7 +2688,13 @@ function wireDelegatedClicks() {
     if (chLink) {
       e.preventDefault();
       const id = parseInt(chLink.dataset.channelId, 10);
-      if (id && state.channels[id]) selectChannel(id);
+      if (id && state.channels[id]) {
+        // A #channel link can live inside a modal-rendered message body (pins,
+        // search); navigating away should dismiss that modal too.
+        $("#pins-modal").hidden = true;
+        $("#search-modal").hidden = true;
+        selectChannel(id);
+      }
       return;
     }
     // Inline images open in a large in-app lightbox rather than a new tab. The

@@ -713,6 +713,10 @@ body.dm-active #members-toggle { display: none; }
    cramped at the narrow width; widen on desktop. .modal-card is width:100%, so
    phones are unaffected. */
 #emoji-manager-modal .modal-card { max-width: 560px; }
+/* The profile editor is the tallest modal; its full form sits a few px over the
+   shared 85vh ceiling on mid-height phones, producing a sliver of dead scroll past
+   Save. Give just this card a touch more headroom so it fits without scrolling. */
+#profile-modal .modal-card { max-height: 90vh; }
 .modal-form .optional { color: var(--text-faint); }
 .modal-form .checkbox-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0 0.9rem; cursor: pointer; color: var(--text); }
 .modal-form .checkbox-row input { width: auto; margin: 0; }

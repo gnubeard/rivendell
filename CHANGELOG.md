@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-06-16
+
+### Fixed
+- The profile editor no longer leaves a couple pixels of dead scroll past Save on mid-height phones.
+- Clicking a #channel link inside the pinned-messages (or search) panel now closes that panel when it navigates you to the channel.
+
 ## [2.0.5] - 2026-06-16
 
 ### Fixed
