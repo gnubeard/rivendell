@@ -254,6 +254,40 @@ export function parsePermalink(hash) {
   return { channelId: parseInt(m[1], 10), messageId: parseInt(m[2], 10) };
 }
 
+// ROUTE_DEDUPE_MS is the window in which a repeat route to the same permalink
+// target is collapsed (one notification click can arrive via both the SW
+// postMessage and the navigate()-driven hashchange/visibility paths).
+export const ROUTE_DEDUPE_MS = 2000;
+
+// decidePermalinkRoute is the pure decision behind notifyui's routeToPermalink:
+// given a permalink hash, a `channelLoaded(channelId)` predicate, the current
+// time, and the last route taken, it decides what to do with a notification
+// click that lands on an already-open tab. Returns:
+//   { skip: true, last }                          — not a permalink, or a de-dupe
+//                                                    hit: caller does nothing.
+//   { skip: false, action, channelId, messageId, last }
+//     action "jump"   — jump to the message (messageId > 0); jumpToMessage
+//                       self-handles a channel that isn't loaded (a closed DM).
+//     action "select" — open the channel (messageId 0 ring sentinel) when it's
+//                       already loaded.
+//     action "none"   — valid permalink but nothing to navigate (ring sentinel
+//                       for an unloaded channel); still recorded so a duplicate
+//                       within the window is skipped.
+// `last` is the de-dupe record to carry forward ({ key, at }). Pure.
+export function decidePermalinkRoute(hash, { channelLoaded, now, last }) {
+  const pl = parsePermalink(hash);
+  if (!pl) return { skip: true, last };
+  const key = pl.channelId + "/" + pl.messageId;
+  if (last && key === last.key && now - last.at < ROUTE_DEDUPE_MS) {
+    return { skip: true, last };
+  }
+  const nextLast = { key, at: now };
+  let action = "none";
+  if (pl.messageId) action = "jump";
+  else if (channelLoaded(pl.channelId)) action = "select";
+  return { skip: false, action, channelId: pl.channelId, messageId: pl.messageId, last: nextLast };
+}
+
 // pingLabel formats the "who" line shared by the ping toast and the OS ping
 // notification (notifyui.js): a DM is just the sender's name; a channel message
 // reads "<sender> in #<channel>". `who` is the already-resolved display name (see

@@ -451,15 +451,14 @@ async function enterApp() {
   // Check for a permalink hash (#c<channelId>/m<messageId>) before loading
   // the default channel — if present, jump there instead.
   const permalink = parsePermalink(location.hash);
-  if (permalink) {
+  if (permalink && permalink.messageId) {
     history.replaceState(null, "", "/");
-    const plChannel = permalink.channelId;
-    const plMessage = permalink.messageId;
-    if (state.channels[plChannel]) {
-      await jumpToMessage(plChannel, plMessage);
-    } else if (state.activeChannelId) {
-      await loadChannel(state.activeChannelId);
-    }
+    // jumpToMessage self-handles a channel absent from local state (a closed DM):
+    // it fetches/reopens it, or flashes a notice in the message pane if it's truly
+    // inaccessible. The sidebar/header are already rendered above, so even the
+    // inaccessible case leaves a usable app — and a notification's target is always
+    // one we're a member of, so it resolves.
+    await jumpToMessage(permalink.channelId, permalink.messageId);
   } else if (state.activeChannelId) {
     await loadChannel(state.activeChannelId);
     markActiveChannelRead();

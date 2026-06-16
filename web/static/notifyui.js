@@ -33,7 +33,7 @@ import {
   pushSubscriptionPayload,
 } from "./notify.js";
 import { totalMentions, displayNameOf } from "./state.js";
-import { pingLabel, permalinkHash, parsePermalink } from "./format.js";
+import { pingLabel, permalinkHash, decidePermalinkRoute } from "./format.js";
 import { boop } from "./tones.js";
 
 export function createNotifyUI({
@@ -138,24 +138,57 @@ export function createNotifyUI({
     }
   }
 
-  // initPushRouting registers the SW (so firePing can show via it and any push
-  // arrives) when notifications are already enabled, refreshes the push
-  // subscription, and routes a service-worker notification click back to the right
-  // message. Called once at app start.
+  // routeToPermalink is the single sink for a notification click reaching an
+  // already-open tab. A click can arrive two ways, and on mobile only the second
+  // is reliable:
+  //   1. the SW postMessage — works while the page's message listener is alive
+  //      (desktop), but a backgrounded/frozen mobile tab may never run it;
+  //   2. the SW's client.navigate(), which sets the permalink hash on the tab and
+  //      fires `hashchange` (or surfaces on the next visibility flip) — this is the
+  //      path that survives a frozen tab. It only does anything because we listen
+  //      for it here: the app otherwise reads the hash exactly once, at boot, so
+  //      without this navigate() was inert (the "URL is in the location" half of
+  //      sw.js's plan was never wired up — that was the mobile bug).
+  // jumpToMessage self-handles a channel absent from local state (a closed DM): it
+  // fetches/reopens it, or flashes a notice if it's genuinely inaccessible — so the
+  // jump is no longer gated on the channel already being loaded. messageId 0 is the
+  // ring "open the channel" sentinel (real ids start at 1), with no message to jump
+  // to. Both delivery paths can fire for one click, so a repeat of the same target
+  // within a short window is collapsed.
+  let lastRouted = { key: "", at: 0 };
+  function routeToPermalink(hash) {
+    const r = decidePermalinkRoute(hash, {
+      channelLoaded: (id) => !!getState().channels[id],
+      now: Date.now(),
+      last: lastRouted,
+    });
+    if (r.skip) return;
+    lastRouted = r.last;
+    history.replaceState(null, "", "/"); // clean the hash back out (no hashchange)
+    if (r.action === "jump") jumpToMessage(r.channelId, r.messageId);
+    else if (r.action === "select") selectChannel(r.channelId);
+  }
+
+  // initPushRouting wires the notification-click routing (both delivery paths),
+  // and — when notifications are already enabled — makes the SW live and refreshes
+  // the push subscription. Called once at app start.
   function initPushRouting() {
+    // The SW's client.navigate() drops the permalink hash on the (possibly
+    // backgrounded/frozen) tab; react to it. hashchange covers a live fragment
+    // navigation; the visibility check catches the case where the tab was frozen
+    // when navigate() ran and only wakes up on foreground. Both are de-duped and
+    // no-op on the cleaned-out "/" hash, so neither needs a service worker.
+    window.addEventListener("hashchange", () => routeToPermalink(location.hash));
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") routeToPermalink(location.hash);
+    });
     if (!pushSupported()) return;
-    // Route clicks the SW forwards from a background notification.
+    // The other path: an in-app message the SW posts (desktop, listener alive).
     navigator.serviceWorker.addEventListener("message", (event) => {
       const data = event.data || {};
       if (data.type !== "notificationclick" || !data.url) return;
       const hash = data.url.indexOf("#") >= 0 ? data.url.slice(data.url.indexOf("#")) : "";
-      const pl = parsePermalink(hash);
-      if (pl && getState().channels[pl.channelId]) {
-        // messageId 0 is the "open the channel" sentinel a ring notification uses
-        // (real message ids start at 1) — there's no message to jump to.
-        if (pl.messageId) jumpToMessage(pl.channelId, pl.messageId);
-        else selectChannel(pl.channelId);
-      }
+      routeToPermalink(hash);
       try { window.focus(); } catch (e) { /* best-effort */ }
     });
     // If notifications are already on, make sure the SW is live and the

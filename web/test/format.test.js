@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI, BUILTIN_EMOJI_LIST } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, decidePermalinkRoute, ROUTE_DEDUPE_MS, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI, BUILTIN_EMOJI_LIST } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 // ---- reactionTooltip ----
@@ -945,4 +945,70 @@ test("extractFirstBareURL returns null for no URL", () => {
 
 test("extractFirstBareURL also returns http:// bare URLs (server rejects non-https)", () => {
   assert.equal(extractFirstBareURL("http://github.com/foo"), "http://github.com/foo");
+});
+
+// --- decidePermalinkRoute: the notification-click routing decision -----------
+// (the pure half of notifyui's routeToPermalink: parse + guard + de-dupe)
+
+const NONE = { key: "", at: 0 }; // a "nothing routed yet" de-dupe record
+
+test("decidePermalinkRoute jumps to a message permalink", () => {
+  const r = decidePermalinkRoute("#c5/m123", { channelLoaded: () => false, now: 1000, last: NONE });
+  assert.equal(r.skip, false);
+  assert.equal(r.action, "jump");
+  assert.equal(r.channelId, 5);
+  assert.equal(r.messageId, 123);
+  assert.deepEqual(r.last, { key: "5/123", at: 1000 });
+});
+
+test("decidePermalinkRoute jumps even when the channel isn't loaded (closed DM)", () => {
+  // jumpToMessage self-handles fetch/reopen — the guard must NOT swallow this.
+  const r = decidePermalinkRoute("#c9/m50", { channelLoaded: () => false, now: 1000, last: NONE });
+  assert.equal(r.action, "jump");
+  assert.equal(r.channelId, 9);
+});
+
+test("decidePermalinkRoute selects a channel for the messageId-0 ring sentinel when loaded", () => {
+  const r = decidePermalinkRoute("#c7/m0", { channelLoaded: (id) => id === 7, now: 1000, last: NONE });
+  assert.equal(r.skip, false);
+  assert.equal(r.action, "select");
+  assert.equal(r.channelId, 7);
+});
+
+test("decidePermalinkRoute does nothing for the ring sentinel when the channel isn't loaded", () => {
+  const r = decidePermalinkRoute("#c7/m0", { channelLoaded: () => false, now: 1000, last: NONE });
+  assert.equal(r.skip, false);
+  assert.equal(r.action, "none");
+  // still recorded, so an immediate duplicate is collapsed
+  assert.deepEqual(r.last, { key: "7/0", at: 1000 });
+});
+
+test("decidePermalinkRoute skips a non-permalink hash and leaves last untouched", () => {
+  const last = { key: "5/123", at: 500 };
+  const r = decidePermalinkRoute("#not-a-permalink", { channelLoaded: () => true, now: 1000, last });
+  assert.equal(r.skip, true);
+  assert.equal(r.last, last);
+});
+
+test("decidePermalinkRoute de-dupes a repeat of the same target inside the window", () => {
+  const last = { key: "5/123", at: 1000 };
+  const r = decidePermalinkRoute("#c5/m123", { channelLoaded: () => true, now: 1000 + ROUTE_DEDUPE_MS - 1, last });
+  assert.equal(r.skip, true);
+  assert.equal(r.last, last); // unchanged
+});
+
+test("decidePermalinkRoute routes again once the de-dupe window has passed", () => {
+  const last = { key: "5/123", at: 1000 };
+  const r = decidePermalinkRoute("#c5/m123", { channelLoaded: () => true, now: 1000 + ROUTE_DEDUPE_MS, last });
+  assert.equal(r.skip, false);
+  assert.equal(r.action, "jump");
+  assert.deepEqual(r.last, { key: "5/123", at: 1000 + ROUTE_DEDUPE_MS });
+});
+
+test("decidePermalinkRoute does not de-dupe a different target inside the window", () => {
+  const last = { key: "5/123", at: 1000 };
+  const r = decidePermalinkRoute("#c5/m124", { channelLoaded: () => true, now: 1001, last });
+  assert.equal(r.skip, false);
+  assert.equal(r.action, "jump");
+  assert.equal(r.messageId, 124);
 });
