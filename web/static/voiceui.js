@@ -64,6 +64,7 @@ import { permalinkHash } from "./format.js";
 export function createVoiceUI({
   $, el, getState, api, sendWS, prefs,
   renderChannelHeader, renderMembers, renderChannels, renderVideoGrid,
+  reflowSpotlightForSpeaker,
   selectChannel, ensureDMOpen, displayNameOf, tabUnfocused,
   getNotifEnabled, getTelemetry,
 }) {
@@ -496,6 +497,11 @@ export function createVoiceUI({
     // opens it). The !prevInCall guard fires this only on the join transition;
     // setVoiceMuted re-enters here with prevInCall now true, so it won't recurse.
     if (!prevInCall && vs.inCall && pttEnabled && !pttTransmitting && !isVoiceMuted()) setVoiceMuted(true);
+    // No usable mic: we joined listen-only (receive but can't transmit). Tell the
+    // user once, on the join transition, so the silent mute pill isn't a mystery.
+    if (!prevInCall && vs.inCall && vs.listenOnly) {
+      setTimeout(() => alert("No microphone available — you've joined listen-only. You can hear and see everyone, but you can't talk."), 0);
+    }
     if (!vs.inCall) pttTransmitting = false; // call ended: drop any stuck PTT gate
     if (prevInCall && vs.inCall) {
       // Already in call: chime for remote peers joining/leaving. (Self join/leave
@@ -526,6 +532,9 @@ export function createVoiceUI({
     // tile — without repainting the grid (the flip fires far too often for that).
     const tile = document.querySelector(`#video-grid .video-tile[data-user-id="${userId}"]`);
     if (tile) tile.classList.toggle("speaking", speaking);
+    // In auto-follow spotlight, a speaker change moves the big tile — let the grid
+    // repaint if (and only if) the featured subject actually changes.
+    if (reflowSpotlightForSpeaker) reflowSpotlightForSpeaker();
   }
 
   // --- call strip ------------------------------------------------------------
@@ -547,13 +556,21 @@ export function createVoiceUI({
       return;
     }
     const ch = voiceCallState.channelId !== null ? state.channels[voiceCallState.channelId] : null;
-    const label = ch ? (ch.is_dm ? "📞 " + dmDisplayName(state, ch) : "🔊 #" + ch.name) : "In call";
-    $("#call-strip-label").textContent = label;
+    const base = ch ? (ch.is_dm ? "📞 " + dmDisplayName(state, ch) : "🔊 #" + ch.name) : "In call";
+    $("#call-strip-label").textContent = voiceCallState.listenOnly ? base + " · listen-only" : base;
     // In PTT mode the mic is key-driven, so the mute toggle is replaced by a PTT
-    // pill that lights up while you're holding the key (transmitting).
+    // pill that lights up while you're holding the key (transmitting). With no mic
+    // (listen-only) there's nothing to mute: show a disabled "can't talk" pill.
     const muteBtn = $("#call-mute-btn");
     const pttPill = $("#call-ptt");
-    if (pttEnabled) {
+    if (voiceCallState.listenOnly) {
+      pttPill.hidden = true;
+      muteBtn.hidden = false;
+      muteBtn.disabled = true;
+      muteBtn.textContent = "🙉";
+      muteBtn.title = "Listen-only — no microphone available";
+      muteBtn.classList.add("active");
+    } else if (pttEnabled) {
       muteBtn.hidden = true;
       pttPill.hidden = false;
       pttPill.textContent = "PTT " + pttKeyLabel(pttKeyCode);
@@ -562,6 +579,7 @@ export function createVoiceUI({
     } else {
       pttPill.hidden = true;
       muteBtn.hidden = false;
+      muteBtn.disabled = false;
       muteBtn.textContent = voiceCallState.muted ? "🔇" : "🎙";
       muteBtn.title = voiceCallState.muted ? "Unmute" : "Mute";
       muteBtn.classList.toggle("active", voiceCallState.muted);
@@ -573,10 +591,11 @@ export function createVoiceUI({
     // Camera button: available in any call — DMs and group voice channels alike
     // (group video is the 1.4.0 feature). Hidden only when there's no active call.
     const camBtn = $("#call-camera-btn");
-    if (ch) {
+    if (ch && !voiceCallState.listenOnly) {
       // The camera counts as "on" only when video is live AND it's the camera (not
       // the screen). While sharing, the camera reads as off — clicking it switches
       // the source to the camera. "active" styling marks the off/inactive state.
+      // (Listen-only has no local capture, so no camera/share controls.)
       const cameraOn = !voiceCallState.videoMuted && !voiceCallState.sharing;
       camBtn.hidden = false;
       camBtn.textContent = cameraOn ? "🎥" : "📷";
@@ -629,7 +648,7 @@ export function createVoiceUI({
   function applyHeaderShareBtn(btn, channelId) {
     if (!btn) return;
     const inThisCall = voiceCallState.inCall && voiceCallState.channelId === channelId;
-    if (!inThisCall) { btn.hidden = true; return; }
+    if (!inThisCall || voiceCallState.listenOnly) { btn.hidden = true; return; }
     const sharing = !!voiceCallState.sharing;
     btn.hidden = false;
     btn.classList.toggle("active", sharing);

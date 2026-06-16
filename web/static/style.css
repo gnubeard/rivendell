@@ -835,9 +835,34 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   height: 360px;
 }
 .video-grid.group-grid .video-tile { border-radius: 4px; }
+/* ---- spotlight view (2.0.1) -------------------------------------------------
+   Opt-in single-stream focus over the gallery: one big tile (auto-follows the
+   active speaker / a screen-share, or a clicked pin) above a thumbnail filmstrip
+   of everyone else. Overrides group-grid's CSS grid back to a flex column. */
+.video-grid.group-grid.spotlight {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.spotlight-stage { flex: 1; min-height: 0; display: flex; }
+.spotlight-stage .video-tile { flex: 1; border-radius: 4px; cursor: pointer; }
+.spotlight-strip {
+  display: flex; gap: 2px; height: 84px; flex-shrink: 0; overflow-x: auto;
+}
+.spotlight-strip .video-tile {
+  flex: 0 0 auto; width: 120px; border-radius: 4px; cursor: pointer;
+}
 /* Active-speaker promotion: a glowing ring on the speaker's tile (toggled live
    by onSpeaking, mirroring the member-roster speaking ring). */
 .video-tile.speaking { outline: 3px solid var(--accent, #5b8cff); outline-offset: -3px; }
+.video-spotlight-btn {
+  position: absolute; top: 0.4rem; right: 2.6rem; z-index: 3;
+  background: rgba(0,0,0,0.45); border: none; border-radius: var(--radius);
+  color: rgba(255,255,255,0.8); font-size: 1rem; padding: 0.15rem 0.4rem;
+  cursor: pointer; line-height: 1; opacity: 0;
+  transition: opacity 0.15s;
+}
+.video-grid:hover .video-spotlight-btn { opacity: 1; }
 .video-fullscreen-btn {
   position: absolute; top: 0.4rem; right: 0.4rem; z-index: 3;
   background: rgba(0,0,0,0.45); border: none; border-radius: var(--radius);
@@ -851,7 +876,7 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   body.video-active .message-list,
   body.video-active #typing-indicator,
   body.video-active .composer { display: none; }
-  .video-fullscreen-btn { opacity: 0.6; }
+  .video-fullscreen-btn, .video-spotlight-btn { opacity: 0.6; }
 }
 @media (min-width: 721px) {
   #header-camera-btn { display: none !important; }

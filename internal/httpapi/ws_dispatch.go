@@ -94,6 +94,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 		Idle        bool   `json:"idle"`
 		Muted       bool   `json:"muted"`
 		VideoMuted  bool   `json:"video_muted"`
+		Sharing     bool   `json:"sharing"`
 		Accept      bool   `json:"accept"`
 	}
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -107,7 +108,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 		return
 	}
 	if strings.HasPrefix(msg.Type, "voice.") {
-		s.handleVoiceWSMessage(c, data, msg.Type, msg.ChannelID, msg.DMChannelID, msg.ToUserID, msg.Muted, msg.VideoMuted, msg.Accept)
+		s.handleVoiceWSMessage(c, data, msg.Type, msg.ChannelID, msg.DMChannelID, msg.ToUserID, msg.Muted, msg.VideoMuted, msg.Sharing, msg.Accept)
 		return
 	}
 	if strings.HasPrefix(msg.Type, "secret.") {
@@ -154,7 +155,7 @@ func (s *Server) onWSMessage(c *ws.Client, data []byte) {
 // frames (offer/answer/ice/ring/ring_response) are relayed with from_user_id
 // injected; state-change frames (join/leave/mute) update in-memory voice state
 // and fan out voice.state to the channel audience.
-func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, channelID, dmChannelID, toUserID int64, muted, videoMuted, accept bool) {
+func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, channelID, dmChannelID, toUserID int64, muted, videoMuted, sharing, accept bool) {
 	userID := c.UserID()
 	ctx := context.Background()
 
@@ -290,7 +291,12 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 				denyJoin("video_full", s.cfg.MaxVoiceVideo)
 			}
 		}
-		participants := s.hub.VoiceSetMute(channelID, userID, muted, videoMuted)
+		// A forced video-mute (sub-cap) also drops the sharing flag — you can't be
+		// sharing a screen if your video slot was just denied.
+		if videoMuted {
+			sharing = false
+		}
+		participants := s.hub.VoiceSetMute(channelID, userID, muted, videoMuted, sharing)
 		aud := s.audienceForChannel(ctx, ch)
 		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
 

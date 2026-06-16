@@ -3348,6 +3348,7 @@ const voiceUI = createVoiceUI({
   renderMembers,
   renderChannels,
   renderVideoGrid,
+  reflowSpotlightForSpeaker: () => videoGrid.reflowSpotlightForSpeaker(),
   selectChannel,
   ensureDMOpen,
   displayNameOf: (id) => S.displayNameOf(state, id),

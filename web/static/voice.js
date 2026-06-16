@@ -24,6 +24,7 @@ let videoEls = new Map();     // remoteUserId -> <video> element
 let localVideoEl = null;      // local preview <video> (muted, created on first camera use)
 let cameraEnabled = false;    // "sending video" master for the current call (camera OR screen)
 let videoIsScreen = false;    // when sending video, is the source the screen (getDisplayMedia) vs the camera?
+let listenOnly = false;       // joined without a usable mic: we receive only (no local capture, recvonly peers)
 let screenAudioTrack = null;  // the tab/system audio track captured alongside a screen share (Chrome only), or null
 let activeChannelId = null;
 // callGen is bumped on every join. Call teardown (leave/end) defers the mic +
@@ -272,42 +273,21 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   }
 
   cameraEnabled = enableVideo;
-  const audioConstraints = AUDIO_CONSTRAINTS;
-  const videoConstraint = cameraEnabled ? VIDEO_CONSTRAINTS : false;
+  listenOnly = false;
+  localStream = await acquireJoinStream(); // degrades: camera fail → audio-only, mic fail → listen-only (null)
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: videoConstraint });
-  } catch (err) {
-    if (cameraEnabled && shouldRetryRelaxed(err)) {
-      // Camera couldn't satisfy our ideal constraints (common on Android) — retry
-      // with the camera unconstrained before giving up on video. Mic + relaxed
-      // video together; only if that also fails do we drop to audio-only.
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
-      } catch {
-        cameraEnabled = false;
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
-      }
-    } else if (cameraEnabled) {
-      // Permission denied for the camera — fall back to audio-only (relaxing
-      // constraints wouldn't help) without blocking the call.
-      cameraEnabled = false;
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
-    } else {
-      throw err;
-    }
+  if (localStream) {
+    // contentHint "motion" tells the encoder to prefer frame rate over detail,
+    // which is the right trade-off for a camera video call.
+    localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
+
+    if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
+    if (cameraEnabled) setupLocalVideo();
+
+    // Meter our own mic so our roster row pulses while we talk (a disabled/muted
+    // track reads as silence, so muting naturally clears our own speaking ring).
+    addMeter(myUserId, localStream);
   }
-
-  // contentHint "motion" tells the encoder to prefer frame rate over detail,
-  // which is the right trade-off for a camera video call.
-  localStream.getVideoTracks().forEach(t => { t.contentHint = "motion"; });
-
-  if (muted) localStream.getAudioTracks().forEach(t => { t.enabled = false; });
-  if (cameraEnabled) setupLocalVideo();
-
-  // Meter our own mic so our roster row pulses while we talk (a disabled/muted
-  // track reads as silence, so muting naturally clears our own speaking ring).
-  addMeter(myUserId, localStream);
 
   activeChannelId = channelId;
   callGen++; // supersede any still-pending teardown from a just-ended call
@@ -319,7 +299,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   // before anyone turns a camera on), so a camera-on-at-join caller MUST correct
   // that to video_muted:false here or their video tile would never appear; a
   // mic-muted caller (mute persists across calls) likewise announces it.
-  sendFn({ type: "voice.mute", channel_id: channelId, muted, video_muted: !cameraEnabled });
+  sendMuteState();
   startCallHeartbeat();
   startCongestionMonitor();
   notifyState();
@@ -384,10 +364,27 @@ export async function endCallLocally() {
   await finishTeardown();
 }
 
+// sendMuteState announces our current audio/video posture to the server (which
+// fans it out as voice.state): mute, video-mute, and whether the live video
+// source is a screen share. Centralised so every toggle path reports the same
+// shape — including the `sharing` flag the spotlight view keys on and the
+// listen-only case (no mic ⇒ reported muted, since we can never transmit). No-op
+// outside a call.
+function sendMuteState() {
+  if (activeChannelId === null) return;
+  sendFn({
+    type: "voice.mute",
+    channel_id: activeChannelId,
+    muted: muted || listenOnly,
+    video_muted: !cameraEnabled,
+    sharing: videoIsScreen,
+  });
+}
+
 export function setVoiceMuted(m) {
   muted = m;
   if (localStream) localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
-  if (activeChannelId !== null) sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
+  sendMuteState();
   notifyState();
 }
 
@@ -614,7 +611,7 @@ export async function setScreenShareEnabled(on) {
     saveCameraPref(activeChannelId, false);
   }
 
-  sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
+  sendMuteState();
   dbgEvent(0, "screenshare-toggle", { on: videoIsScreen });
   notifyState();
 }
@@ -680,7 +677,7 @@ export async function setCameraEnabled(on) {
     saveCameraPref(activeChannelId, true);
     setupLocalVideo();
     for (const [uid, pc] of peerConns) applyVideoBitrateCaps(uid, pc);
-    sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: false });
+    sendMuteState();
     dbgEvent(0, "camera-toggle", { on: true, from: "screen" });
     notifyState();
     return;
@@ -758,12 +755,13 @@ export async function setCameraEnabled(on) {
     if (on) setupLocalVideo(); else teardownLocalVideo();
   }
 
-  sendFn({ type: "voice.mute", channel_id: activeChannelId, muted, video_muted: !cameraEnabled });
+  sendMuteState();
   dbgEvent(0, "camera-toggle", { on: cameraEnabled });
   notifyState();
 }
 
 export function isCameraEnabled() { return cameraEnabled; }
+export function isListenOnly() { return listenOnly; }
 export function getVideoEl(userId) { return videoEls.get(userId); }
 export function getLocalVideoEl() { return localVideoEl; }
 
@@ -956,6 +954,38 @@ async function acquireCameraStream() {
   } catch (err) {
     if (!shouldRetryRelaxed(err)) throw err;
     return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true });
+  }
+}
+
+// acquireJoinStream gets the local capture for a join, degrading gracefully so a
+// missing/blocked device never aborts the call:
+//   - camera fails  → drop to audio-only (relaxing the camera constraints first,
+//                     which fixes the common Android OverconstrainedError);
+//   - microphone fails → drop to LISTEN-ONLY: return null and set listenOnly, so
+//                     we still join and RECEIVE everyone's audio/video over
+//                     recvonly transceivers (see createPC) — we just can't send.
+// Mutates the module cameraEnabled/listenOnly flags. It never throws for a device
+// failure; the only hard stop (a context that can't capture at all) is the
+// preflight check the caller runs before this. Internal.
+async function acquireJoinStream() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: cameraEnabled ? VIDEO_CONSTRAINTS : false });
+  } catch (err) {
+    // The combined request rejects if EITHER device fails. Distinguish by retry:
+    // if a relaxed/audio-only request then succeeds it was the camera; if even
+    // audio-only fails the mic is unavailable → listen-only.
+    if (cameraEnabled && shouldRetryRelaxed(err)) {
+      try { return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: true }); }
+      catch { /* camera still unhappy — fall through to audio-only */ }
+    }
+    cameraEnabled = false;
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: false });
+    } catch (micErr) {
+      listenOnly = true;
+      dbgEvent(0, "listen-only-join", { name: micErr && micErr.name });
+      return null;
+    }
   }
 }
 
@@ -1354,9 +1384,14 @@ export function congestionTarget(prev, ceiling, sig) {
 // the "detail" contentHint the screen track carries. Pure; exported for unit testing.
 export function videoScaleForTarget(target, isScreen = false) {
   if (isScreen) {
-    if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 15 };
-    if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 8 };
-    return { scaleResolutionDownBy: 1, maxFramerate: 5 };
+    // Hold full resolution at every target (sheared text is worse than choppy),
+    // but give framerate back generously: the original 15/8/5 ladder was tuned
+    // far enough toward sharpness that motion (scrolling, video, a demo) stuttered
+    // noticeably even on a healthy link. These let the encoder use the frames the
+    // bitrate affords; the AIMD target still steps them down on a stressed link.
+    if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 24 };
+    if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 15 };
+    return { scaleResolutionDownBy: 1, maxFramerate: 10 };
   }
   if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) {
     return { scaleResolutionDownBy: 1, maxFramerate: 24 };
@@ -1678,6 +1713,14 @@ function createPC(remoteUserId) {
 
   if (localStream) {
     for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+  } else if (isOfferer(remoteUserId)) {
+    // Listen-only (no mic/camera): with no local tracks our offer would carry no
+    // m-lines and we'd negotiate — and receive — nothing. Add recvonly
+    // transceivers so the peer still sends us audio/video. Only needed on the
+    // OFFERER side: as the answerer, setRemoteDescription synthesises matching
+    // recvonly transceivers from the peer's offer automatically.
+    try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch { /* older engines */ }
+    try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { /* older engines */ }
   }
   // Prefer VP8 on any video transceiver addTrack just created (offerer side).
   preferVideoCodec(pc);
@@ -1699,9 +1742,22 @@ function createPC(remoteUserId) {
         document.body.appendChild(audio);
         audioEls.set(remoteUserId, audio);
       }
-      if (e.streams[0]) {
-        audio.srcObject = e.streams[0];
-        addMeter(remoteUserId, e.streams[0]); // pulse their row while they talk
+      // A peer can send a SECOND audio track mid-call: the tab/system audio from a
+      // screen share, grouped into the mic's msid stream so it arrives in this SAME
+      // `e.streams[0]`. The track is received and lands in the stream, but Chrome
+      // treats re-assigning the identical srcObject as a no-op and the <audio>
+      // element never starts RENDERING the newly-added track — received but unheard
+      // (the IRL "I hear their mic, not their share" bug). Null-flip srcObject to
+      // force the element to re-evaluate the stream's tracks, then kick playback.
+      // We keep the browser-owned stream (not a stream of our own) so that when the
+      // share's audio sender is later removed, the track drops out automatically.
+      const stream = e.streams[0];
+      if (stream) {
+        if (audio.srcObject === stream) audio.srcObject = null;
+        audio.srcObject = stream;
+        audio.play?.().catch(() => {}); // autoplay can need a kick after a re-bind
+        addMeter(remoteUserId, stream); // pulse their row while they talk
+        dbgEvent(remoteUserId, "audio-track", { tracks: stream.getAudioTracks().length });
       }
     } else if (e.track.kind === "video") {
       let video = videoEls.get(remoteUserId);
@@ -1804,6 +1860,7 @@ function stopLocalStream() {
   teardownLocalVideo();
   cameraEnabled = false;
   videoIsScreen = false;
+  listenOnly = false;
   screenAudioTrack = null; // its track was stopped with the rest of localStream above
 }
 
@@ -1815,7 +1872,8 @@ function notifyState() {
     deafened,
     videoMuted: !cameraEnabled,
     sharing: videoIsScreen, // local-only: which video source is live, so the UI lights the right button
-    participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted, video_muted: !!p.video_muted })),
+    listenOnly,             // joined without a mic: receive-only (UI shows it, disables the mute toggle)
+    participants: participants.map(p => ({ user_id: p.user_id, muted: !!p.muted, video_muted: !!p.video_muted, sharing: !!p.sharing })),
   });
 }
 

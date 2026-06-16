@@ -104,11 +104,39 @@ test("two cameras on → the third sees both remote tiles in the group gallery",
   await assertLiveVideo(pages[2], 2);
   await expect(pages[2].locator("#video-grid")).toHaveClass(/group-grid/);
 
+  // ...and exactly two tiles: the camera-off viewer no longer takes a slot for
+  // its own avatar (2.0.1 — self tile dropped when our own camera is off).
+  await expect(pages[2].locator("#video-grid .video-tile")).toHaveCount(2);
+
   // Each camera-on user sees its own local preview plus the other's tile.
   await assertLiveVideo(pages[0], 2);
   await assertLiveVideo(pages[1], 2);
+});
 
-  // Everyone hangs up.
+test("spotlight view: one big tile + filmstrip, pin on click, toggle back", async () => {
+  // The camera-off third user switches to the opt-in spotlight view (▣ control).
+  const grid = pages[2].locator("#video-grid");
+  await grid.locator(".video-spotlight-btn").click();
+
+  await expect(grid).toHaveClass(/spotlight/);
+  // One big stage tile playing live, the other remote down in the filmstrip.
+  await expect.poll(async () =>
+    pages[2].locator("#video-grid .spotlight-stage video").count()
+  ).toBeGreaterThanOrEqual(1);
+  await expect(grid.locator(".spotlight-strip .video-tile")).toHaveCount(1);
+
+  // Clicking the filmstrip tile pins it as the spotlight subject; still spotlit.
+  await grid.locator(".spotlight-strip .video-tile").first().click();
+  await expect(grid).toHaveClass(/spotlight/);
+  await expect(grid.locator(".spotlight-stage video")).toHaveCount(1);
+
+  // Toggling the control off returns to the even gallery (no spotlight class).
+  await grid.locator(".video-spotlight-btn").click();
+  await expect(grid).not.toHaveClass(/spotlight/);
+  await expect(grid.locator(".video-tile")).toHaveCount(2);
+});
+
+test("everyone hangs up", async () => {
   for (const page of pages) await page.click("#call-leave-btn");
   for (const page of pages) {
     await expect(page.locator("#call-strip")).toBeHidden({ timeout: 15_000 });

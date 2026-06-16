@@ -5,6 +5,19 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-15
+
+### Fixed
+- Audio from a shared screen (a tab or system audio captured alongside the share) is now actually heard by everyone — previously only your microphone came through.
+
+### Changed
+- Shared screens get more frame rate back, so scrolling, video, and demos look smoother while still keeping text sharp.
+- In a group call you no longer take up a tile for your own avatar while your camera is off.
+
+### Added
+- **Spotlight view in group calls.** A new control enlarges one stream with the rest as a filmstrip; it follows whoever's talking (and a shared screen takes priority), or click a tile to pin it.
+- **Listen-only calls.** If your microphone is missing or blocked, you can still join a call to hear and see everyone instead of being shut out — the call shows you're listen-only.
+
 ## [2.0.0] - 2026-06-15
 
 ### Added

@@ -14,6 +14,11 @@ type VoiceParticipant struct {
 	JoinedAt   time.Time `json:"joined_at"`
 	Muted      bool      `json:"muted"`
 	VideoMuted bool      `json:"video_muted"`
+	// Sharing is true while this participant's live video source is a screen
+	// share (vs. a camera). It rides the same voice.mute frame as the mute flags
+	// and lets peers prioritise a shared screen in the spotlight view. Purely
+	// advisory — it never gates media.
+	Sharing bool `json:"sharing"`
 }
 
 // Hub tracks connected clients and fans out events. A user is "online" while
@@ -302,14 +307,16 @@ func (h *Hub) VoiceLeave(channelID, userID int64) []VoiceParticipant {
 	return voiceList(h.voiceChannels[channelID])
 }
 
-// VoiceSetMute updates a participant's muted and video-muted flags, returning the updated list.
-func (h *Hub) VoiceSetMute(channelID, userID int64, muted, videoMuted bool) []VoiceParticipant {
+// VoiceSetMute updates a participant's muted, video-muted, and screen-sharing
+// flags, returning the updated list.
+func (h *Hub) VoiceSetMute(channelID, userID int64, muted, videoMuted, sharing bool) []VoiceParticipant {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	if m := h.voiceChannels[channelID]; m != nil {
 		if p := m[userID]; p != nil {
 			p.Muted = muted
 			p.VideoMuted = videoMuted
+			p.Sharing = sharing
 		}
 	}
 	return voiceList(h.voiceChannels[channelID])
