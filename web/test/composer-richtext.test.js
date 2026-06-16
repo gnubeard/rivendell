@@ -8,15 +8,30 @@ import { formatMessage } from "../static/format.js";
 // <br> becomes "\n" (matching composer-field's textOf); all spans drop away
 // leaving their text; entities decode. This is exactly the round-trip the caret
 // math depends on.
+//
+// decorate emits ONLY <br> and <span …>/</span> wrappers around ESCAPED text, so
+// the text never contains a literal '<' or '>' (they're &lt;/&gt;). That lets us
+// recover the source by a STRUCTURAL split on '<' — taking each tag up to its '>'
+// and keeping the text after it — rather than a tag-matching regexp, which static
+// analysis rightly distrusts as an HTML filter (and which this helper isn't: it
+// reverses our own trusted markup). Entities decode with &amp; LAST, so a decoded
+// '&' can never re-form an entity (the double-unescape trap).
 function sourceOf(html) {
-  return html
-    .replace(/<br>/g, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
+  let text = "";
+  let first = true;
+  for (const piece of html.split("<")) {
+    if (first) { text += piece; first = false; continue; }
+    const gt = piece.indexOf(">");
+    const tag = piece.slice(0, gt);   // e.g. "br", "span class=…", "/span"
+    if (tag === "br") text += "\n";
+    text += piece.slice(gt + 1);      // the text following the tag
+  }
+  return text
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 // ---- fidelity: the load-bearing invariant ----

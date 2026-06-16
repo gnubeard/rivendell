@@ -1731,8 +1731,8 @@ function createPC(remoteUserId) {
     }
   };
 
-  // Renegotiation (mid-call camera enable, ICE restart fallback, future screen
-  // share): addTrack fires onnegotiationneeded and we offer. EITHER peer may
+  // Renegotiation (mid-call camera enable, screen-share add/swap, ICE restart
+  // fallback): addTrack fires onnegotiationneeded and we offer. EITHER peer may
   // need to renegotiate — whoever adds the track must be the one to offer,
   // because a fresh offer carries only the offerer's own m-lines. So this is
   // NOT gated on isOfferer: the deterministic offerer rule governs the
