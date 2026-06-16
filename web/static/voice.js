@@ -455,11 +455,21 @@ export function setVolumeForUser(userId, vol) {
 // null — the dormant slot a turned-off screen share leaves behind (screen-off does
 // replaceTrack(null), unlike camera-off which keeps a disabled track). Reusing it
 // via replaceTrack lets video come back on with NO renegotiation; absent one, the
-// caller falls back to addTrack (which fires onnegotiationneeded). Detection is
-// best-effort across engines: a track-less sender whose transceiver receives video.
+// caller falls back to addTrack (which fires onnegotiationneeded).
+//
+// CRITICAL: only a transceiver that is already negotiated to SEND
+// (currentDirection sendrecv/sendonly) qualifies. A pure RECEIVE transceiver — the
+// one carrying a peer's video in a 2-way call — also has a null-track sender and a
+// video receiver, but it's recvonly: replaceTrack onto it sets the track without
+// flipping direction or firing onnegotiationneeded, so our video would never
+// actually be sent. (That was the 2-way regression: whoever turned their camera on
+// SECOND matched the recvonly receive slot and silently never offered.) Matching on
+// currentDirection keeps the screen-off→camera-on reuse while excluding receivers,
+// which fall through to addTrack and renegotiate correctly.
 function idleVideoSender(pc) {
   for (const t of pc.getTransceivers()) {
     if (t.sender && t.sender.track === null &&
+        (t.currentDirection === "sendrecv" || t.currentDirection === "sendonly") &&
         t.receiver && t.receiver.track && t.receiver.track.kind === "video") {
       return t.sender;
     }

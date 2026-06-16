@@ -29,6 +29,9 @@ web/e2e/.e2e-state.json
 web/e2e/server.log
 web/blobs
 
+# Ad-hoc debug logs pulled from a deployed instance (kept locally, never committed)
+/rivendell_chat.log
+
 # OS / editor cruft
 .DS_Store
 *.swp
