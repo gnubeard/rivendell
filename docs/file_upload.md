@@ -1,6 +1,43 @@
-**The recommendation: content-addressed files on a local volume, metadata in Postgres, hidden behind a tiny interface.** This is the sweet spot for "cheapest, no cliff, philosophically harmonious." Everything is Go stdlib — `crypto/sha256`, `io`, `os`, `http.DetectContentType`, `mime`. No new dependency, which matters given the repo's whole identity is "one dependency, zero transitive."
+# File uploads — content-addressed blob store
 
-The shape:
+Target: paste, drop, or attach an image and have it appear inline in a message,
+without standing up object storage or pulling in a dependency. Uploads land as
+content-addressed blobs on a local volume, with metadata in Postgres, hidden
+behind a small `BlobStore` interface. Everything is Go stdlib — `crypto/sha256`,
+`io`, `os`, `http.DetectContentType` — consistent with the prime directive: one
+backend dependency, zero transitive.
+
+---
+
+## Storage model
+
+Content-addressing: the SHA-256 of the bytes *is* the name. `FSStore`
+(`internal/blobs/blobs.go`) writes each blob to `blobs/<2-hex-prefix>/<sha256>`
+under `RIVENDELL_BLOBS_DIR`, and a row in Postgres (migration `0014_blobs.sql`)
+holds the metadata:
+
+```sql
+CREATE TABLE blobs (
+    hash         TEXT        PRIMARY KEY,   -- 64-char lowercase sha256 hex
+    uploader_id  BIGINT      REFERENCES users(id) ON DELETE SET NULL,
+    content_type TEXT        NOT NULL,      -- sniffed, never the client's header
+    size         BIGINT      NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Naming by hash buys three things for free:
+
+- **Dedup.** The same meme pasted ten times is one file and one row — `ON CONFLICT (hash) DO NOTHING` on the metadata, and a same-hash write is a no-op on disk.
+- **Immutability.** Bytes never change under a hash, so reads carry an `immutable` cache header and an `ETag` and the app touches an image once.
+- **Path-traversal immunity.** The filename is a hash, never user input. The read path still re-validates it as 64-char lowercase hex (`isValidBlobHash`) before touching disk.
+
+---
+
+## The interface
+
+`BlobStore` hides the filesystem so swapping in object storage later is an
+afternoon, not a rewrite:
 
 ```go
 type BlobStore interface {
@@ -10,27 +47,55 @@ type BlobStore interface {
 }
 ```
 
-Implement `FSStore` now — hash the upload, write to `blobs/ab/cd/<full-sha256>`, return the hash. Postgres holds a row per image (`hash`, `uploader_id`, `content_type`, `size`, `created_at`, maybe `message_id`). Content-addressing buys you a lot for free: automatic dedup (the same meme pasted ten times is one file), immutable blobs (so you serve `Cache-Control: public, max-age=31536000, immutable` and let nginx or a CDN carry every read — your app touches an image once), and safe filenames with no path-traversal surface because the name is a hash, never user input.
+`Put` tees the reader through SHA-256 while buffering, then writes
+**atomically** — tmp file plus `rename` — so a concurrent reader never sees a
+partial blob. `FSStore` is the only implementation today.
 
-The guardrails that keep this from becoming an infrastructure nightmare or an open file host are not optional, and they're all small:
+---
 
-- **A hard size cap**, mirroring what you did for avatars — `RIVENDELL_MAX_IMAGE_BYTES`, enforced by wrapping the request body in `http.MaxBytesReader` *before* you read a byte. This is the single thing standing between you and someone filling your volume.
-- **Sniff, don't trust.** Run `http.DetectContentType` on the first 512 bytes and allowlist `image/png|jpeg|webp|gif`. Reject everything else. Without this, "image uploads" silently becomes "anonymous file hosting / malware CDN with my domain on it."
-- **Decide read auth.** A sha256 URL is effectively unguessable, so capability-by-hash is probably fine for a private server — but it does mean a leaked URL is a leaked image forever. Gating reads behind the session is a few lines more and keeps images as private as the channels they live in. For a friends server I'd gate them; it matches the "small private room" framing.
-- **EXIF is worth a thought** given phone uploads carry GPS. Stripping it means decoding and re-encoding, which changes the bytes — so do it *before* hashing, or you break content-addressing. Easy to skip for v1, easy to bolt on later, just don't hash-then-strip.
+## Upload path — `POST /api/uploads`
 
-On the frontend, all of this stays inside your no-framework ethos. Clipboard paste is a `paste` listener reading `clipboardData.items`; phone upload is `<input type="file" accept="image/*">` plus a `drop` handler. Roughly:
+`handleUploadBlob` is the whole server side, and its guardrails are the
+load-bearing safety, not polish:
 
-```js
-editor.addEventListener('paste', e => {
-  for (const item of e.clipboardData.items) {
-    if (item.type.startsWith('image/')) uploadBlob(item.getAsFile());
-  }
-});
-```
+- **Hard size cap.** The body is wrapped in `http.MaxBytesReader(w, r.Body, MaxImageBytes)` *before* a byte is read — the one thing standing between the volume and someone filling it. `RIVENDELL_MAX_IMAGE_BYTES` defaults to 5 MiB.
+- **Sniff, don't trust.** `http.DetectContentType` runs on the bytes and the result is allowlisted to `image/png|jpeg|webp|gif` (`isImageContentType`). Without this, "image uploads" silently becomes anonymous file hosting with our domain on it. The client's `Content-Type` header is never trusted.
+- **Idempotent.** `FSStore.Put` dedups on disk and `CreateBlob` dedups the row, so the same bytes always return the same hash.
 
-`uploadBlob` POSTs to your new endpoint, gets back a hash/URL, and inserts a reference into the message — same round-trip your avatar upload already does, no new client deps.
+On success the handler returns `{hash, url, content_type, size}`, where `url` is
+`/api/blobs/<hash>`. The client drops that into the message — the same
+round-trip the avatar upload already does, no new client deps.
 
-I'd deliberately skip thumbnails for v1. CSS `max-width` handles display fine, and stdlib image resizing is crude enough that adding it now is effort spent against a problem you don't have yet.
+---
 
-Net: filesystem + content-addressing + Postgres metadata, behind a `BlobStore` interface, with a size cap and content sniffing as the load-bearing safety. It's all stdlib, it's free on hardware you already run, and the interface means the day you want OCI's bucket you've already paid for, it's an afternoon, not a rewrite.
+## Read path — `GET /api/blobs/{hash}`
+
+`handleGetBlob` is **session-gated**. A SHA-256 URL is effectively unguessable,
+but gating reads behind auth keeps an image as private as the channel it was
+posted in — otherwise a leaked URL is a leaked image forever. Because the blob
+is immutable, the response is aggressively cacheable:
+
+- `Cache-Control: private, max-age=31536000, immutable` — `private`, not `public`, so a shared proxy never caches a gated image.
+- `ETag: "<hash>"`, with an `If-None-Match` fast path returning `304`.
+
+A malformed hash, a missing row, or a missing file all return a bare `404`.
+
+---
+
+## Frontend
+
+All of it stays inside the no-framework ethos — no new client deps. The composer
+picks up images from paste, drop, and an `<input type="file" accept="image/*">`
+attach button, queues them in an attachment tray (`attachments.js`), and uploads
+each via `api.uploadBlob(file)`, which POSTs the raw bytes to `/api/uploads` and
+gets back the `{hash, url, …}`. The reference is then woven into the message body
+on send (`composeMessageBody`). Display is plain CSS `max-width` — no
+thumbnailing.
+
+---
+
+## Deliberately skipped
+
+- **Thumbnails.** CSS `max-width` handles display; stdlib image resizing is crude enough that adding it now is effort against a problem we don't have. Easy to bolt on later.
+- **EXIF stripping.** Phone photos carry GPS, and stripping means decode + re-encode, which *changes the bytes* — so it would have to happen **before** hashing or it breaks content-addressing. Skipped for v1; if it is ever added, strip-then-hash, never hash-then-strip.
+- **Object storage.** The `BlobStore` interface is the seam for the day an OCI bucket is worth it. Until then a local volume is free on hardware we already run.

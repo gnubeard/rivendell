@@ -371,13 +371,15 @@ tmux new-session -d -s claude-bridge 'scripts/claude-bridge'
 
 ## Developer conventions
 
-The authoritative reference is [CLAUDE.md](CLAUDE.md). A few invariants worth
-calling out:
+Two documents carry the detail, at different altitudes: [CLAUDE.md](CLAUDE.md) is
+the condensed checklist of editing rules — the file-by-file map and every "don't do
+X" invariant — while [docs/design.md](docs/design.md) and the per-subsystem notes
+alongside it carry the design rationale. A few invariants worth calling out here:
 
 - **List endpoints return `[]`, never `null`.** `TestEmptyListsReturnArraysNotNull` enforces this.
 - **`users.status` is durable** — `onPresenceChange` must never write it. `TestStatusDurableAcrossReconnect` guards it.
 - **`format.js` escapes first, then makes its markdown pass.** Links are extracted *before* `inlineMarkup` — never invert this.
-- **Per-feature invariants** (voice/WebRTC, secret chat, Web Push, uploads, …) are documented in [docs/design.md](docs/design.md).
+- Voice/WebRTC, secret chat, Web Push, and uploads each carry their own invariants — see the two references above.
 
 ---
 

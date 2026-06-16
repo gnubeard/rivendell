@@ -1,4 +1,4 @@
-# Live markdown decoration in the composer — v1.5.18
+# Composer rich text — live markdown decoration
 
 Type `**bold**`, `*italic*`/`_italic_`, `~~strike~~`, `` `code` ``, `||spoiler||`,
 ` ```fenced code blocks``` `, and known `@mentions` / `#channels` / `:emoji:`, and

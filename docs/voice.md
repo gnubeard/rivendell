@@ -1,4 +1,4 @@
-# Voice calling design — v1.1.0
+# Voice calling — design notes
 
 Target: serviceable voice for ~20 friends. No media server, no ML, no new Go
 dependencies. P2P via WebRTC, signaled over the existing WS hub.

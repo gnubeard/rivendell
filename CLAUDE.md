@@ -78,7 +78,7 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
 docs/                         decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
-                              call-drop-investigation.md, bridge-dm-update-note.md,
+                              call-drop-investigation.md,
                               webkit-e2e.md, richtext.md (composer live-markdown
                               decoration — invariant, undo, Gecko lessons)
 ```
@@ -107,7 +107,7 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 ## Conventions
 
 - **List endpoints return `[]`, never `null`.** Use `out := []T{}`. `TestEmptyListsReturnArraysNotNull` guards this.
-- **Bump `Version` in `internal/config/config.go`** (patch increment) with every meaningful commit to develop.
+- **Bump `Version` in `internal/config/config.go`** (patch increment) with every meaningful commit to develop. Doc-only changes (`README.md`, `CLAUDE.md`, `docs/`) don't need a bump — the `pre-commit` hook only auto-bumps when a source file (server code, web assets, Dockerfile, `go.mod`) is staged.
 - Passwords: PBKDF2 format `pbkdf2-sha256$<iter>$<b64salt>$<b64key>`, 600k iterations. Don't lower.
 - Roles: admin > moderator > member. Guard last-admin removal (`CountAdmins`).
 - `channelVisibleTo` is the single visibility predicate — `audienceForChannel` and `canAccessChannel` both delegate to it.
@@ -130,7 +130,7 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
   `__RIVENDELL_VERSION__` token (templated at serve time). Guarded by the
   `TestVersioned*` / `TestIndexReferencesVersionedEntry` tests in `static_test.go`.
 
-## Critical feature invariants (full design notes in README)
+## Critical feature invariants (full rationale in docs/design.md and the per-subsystem notes alongside it)
 
 **Voice/WebRTC**
 - Offerer = lower user_id. Initial offer from `onVoiceState` only — `sendOffer` returns early while `!pc.remoteDescription`.

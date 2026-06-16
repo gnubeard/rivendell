@@ -1,4 +1,4 @@
-# OTR-style end-to-end encryption design — v1.3.0
+# Secret chat — OTR-style end-to-end encryption
 
 Target: a 🔒 you click on a DM that establishes a live, end-to-end encrypted
 session with the other person. Encrypted in the browser, the server sees only
