@@ -36,7 +36,7 @@ Channel delete is soft (`archived_at`); `UNIQUE(name)` reserves the name. Admin-
 
 ## Scrollback / history
 
-Keyset pagination: `GET …/messages?before=<id>&limit=<n>`. Client loads 50 on open; fetches older on scroll-near-top (`loadOlderMessages`). Short page = `historyComplete`. `renderMessages` preserves scroll position; auto-scrolls to bottom only if already there.
+Keyset pagination: `GET …/messages?before=<id>&limit=<n>` (and `after=<id>` for the forward direction). Client loads `PAGE` (50) on open. The paging state machine lives in `history.js` (`createHistoryPaging` factory): IntersectionObserver sentinels at top/bottom drive `loadOlderMessages`/`loadNewerMessages`, short page = history-window complete in that direction, and a banner signals a non-tail window (after `jumpToMessage`). `renderMessages` preserves scroll position; `isNearBottom`/`scrollToBottom` (free exports, threshold `NEAR_BOTTOM_PX` = 80) auto-scroll only when already at the tail. `loadChannel`/`jumpToMessage` stay in app.js and drive the factory via accessors.
 
 ## Unread indicators
 
@@ -62,6 +62,14 @@ Editable inline by moderator+ (`PATCH /api/channels/{id}`, broadcasts `channel.u
 
 `format.js` extracts links from each escaped run *before* the markdown pass — `inlineMarkup` runs only on the gaps between links. A URL never feeds through the italic rule. Don't refactor to a single regex sweep that linkifies last. `formatMessage(..., {embedImages:false})` for search rows only.
 
+## Composer live-markdown decoration (`composer-richtext.js`)
+
+See `docs/richtext.md` for the full design. The composer is a contenteditable (`upgradeComposerField` facade preserves the textarea API); `createComposerRichText` decorates markdown *in place* as you type, mirroring `format.js`'s inline rules (bold before italic, code pulled out first) — kept in lockstep by a parity test.
+
+- **Load-bearing invariant:** `decorate` only WRAPS runs (markers kept, dimmed), never adds/removes a character, so `.value` stays the exact markdown source and the facade's text-offset caret math holds. The `input` handler captures caret offsets BEFORE its image-harvest/flatten mutations and threads them to `rich.onInput(start,end)`.
+- **Decoration is ORTHOGONAL to behavior:** `prefs.loadRichText()` (default ON, `#richtext-enable`) only controls styled rendering; Ctrl-B/I and undo/redo work either way.
+- **Undo/redo is OURS, always-on:** programmatic mutations (innerHTML rewrite + Ctrl-B/I) desync the browser's native history, so `createUndoHistory` (pure, unit-tested) replaces it and `handleKeydown` preventDefaults Ctrl/Cmd-Z, Cmd-Shift-Z, Ctrl-Y. Any out-of-band `.value` set (channel switch, send-clear, error-restore) must call `rich.resetHistory()`.
+
 ## Voice / WebRTC (phases 1–4 complete)
 
 P2P mesh over WebRTC, signaled through the existing WS hub. No media server; no new Go deps.
@@ -73,11 +81,16 @@ P2P mesh over WebRTC, signaled through the existing WS hub. No media server; no 
 - **TURN credentials are HMAC-SHA1, not SHA256.** coturn validates with SHA1. `TestRTCCredentials` asserts the 20-byte digest.
 - **Both `onconnectionstatechange` AND `oniceconnectionstatechange`** feed `effectiveConnectionState`. Firefox reports ICE failure before (sometimes instead of) connection state.
 - ICE disconnect grace is 5 s on purpose — don't shorten.
-- Video bitrate cap (800 kbps, `applyVideoBitrateCaps`) is a stability cap, NOT a freeze fix.
 - Per-user volume uses `audio.volume`, not a Web Audio GainNode (Chromium no-output bug with WebRTC+WebAudio).
 - Teardown is synchronous (`finishTeardown` → `closeAllPeers` before farewell-tone await). `callGen` guards rapid re-join from colliding with stale teardown.
 - Pure helpers all unit-tested in `voice.test.js`. E2E: `make test-e2e` (Playwright, not part of `make test`).
 - REST: `GET /api/voice/state`, `GET /api/channels/{id}/voice`, `GET /api/rtc/credentials`.
+
+**Video bitrate + congestion control.** The 800 kbps per-sender cap is a CEILING, not a freeze fix. `bitrateCapFor(numPeers,"video")` shrinks it across senders as the roster grows. Per-peer AIMD control (`monitorCongestion`/`congestionTarget`, every 2.5 s) lowers the live target below the ceiling on remote-reported loss/RTT spikes OR a CPU-pinned local encoder (`uplinkStressed`), and climbs back only after `CLIMB_AFTER_HEALTHY` consecutive healthy intervals (`healthyStreak` — the anti-oscillation gate, don't drop to one sample). `applyVideoBitrateCaps(uid,pc)` applies the full encoding shape via `withVideoEncodingCaps`: `effectiveVideoCap` (maxBitrate) PLUS `videoScaleForTarget` (scaleResolutionDownBy/maxFramerate) — bitrate-only back-off does NOT relieve a CPU-bound phone encoder; only dropping resolution/framerate does.
+
+**Server-enforced group caps.** `MaxVoiceAudio`/`MaxVoiceVideo`: over-cap join ⇒ `voice.join_denied{reason:"full"}` (abort); over the video sub-cap ⇒ forced video-muted + `reason:"video_full"` (audio-only). DMs are exempt. `TestVoiceJoinDeniedWhenFull`/`TestVoiceVideoSubCap` guard.
+
+**Screen share (Phase 4, 2.0.0).** A SECOND video source on the single video slot, mutually exclusive with the camera (`setScreenShareEnabled`). Camera↔screen swaps the source on the existing m-line via `replaceTrack` (instant, no reneg); first-enable `addTrack`s + renegotiates. `contentHint="detail"` + `videoScaleForTarget(t, isScreen=true)` HOLD resolution and shed framerate (inverse of the camera's motion trade — sheared text beats choppy). `track.onended` catches the browser's native "Stop sharing" bar and flips to video-off. Screen VIDEO parks its sender on stop (`replaceTrack(null)`, reused via `idleVideoSender`, which must only match an already-SEND transceiver — never a recvonly receive slot, the 2.0.0 regression). Screen AUDIO is `addTrack`ed into the mic's `localStream` (rides its own m-line, so muting the mic never silences it) and FULLY removed on teardown (no `video_muted`-style gate). UI lives in `voiceui.js`; `web/e2e/screen-share` pins share→receive→camera-swap→teardown.
 
 ## Theme (migration `0012`)
 
@@ -87,13 +100,35 @@ P2P mesh over WebRTC, signaled through the existing WS hub. No media server; no 
 
 `users.pronouns` (≤32 chars) + `users.bio` (≤1000 chars). Edited via `PATCH /api/me`. Ride on every user object — no separate profile endpoint. Bio rendered through `formatMessage(..., {embedImages:false})`.
 
+## System messages (migration `0019`)
+
+Server-generated channel-log events (e.g. call started / call ended): `messages.user_id` is NULL and `is_system = TRUE`. The client renders them differently — no avatar, no actions, centred event text. (Migration `0019` drops the `user_id NOT NULL` constraint to allow the authorless row.)
+
+## Avatars (migrations `0020`, `0022`)
+
+`POST /api/me/avatar` uploads; stored as a content-addressed blob (same pipeline as file uploads). `users.avatar_updated_at` is the cache-busting version stamp — `GET /api/users/{id}/avatar` keys on it so a new avatar invalidates client caches; migration `0022` backfills it for existing rows. Admins can set/clear another user's avatar via `POST`/`DELETE /api/admin/users/{id}/avatar`.
+
+## Per-user private notes (migration `0021`)
+
+`user_notes` (PK `(owner_id, subject_id)`) holds a private note one user keeps about another — visible only to the owner. `GET`/`PUT /api/users/{id}/note`. Cascades on either user's deletion.
+
 ## Bot tokens / is_bot flag (migration `0013`)
 
 Bots are users with `is_bot = true`. `PUT /api/admin/users/{id}/bot`. Bot tokens are permanent Bearer credentials managed at `GET/POST/DELETE /api/admin/bot-tokens`. Bots never hold a WebSocket connection — their online status comes from `users.status`, not hub presence.
 
-## Link preview proxy — removed
+## Link preview proxy — allowlist-only (migration `0023`)
 
-The server-side OpenGraph scraper was deleted (SSRF surface, half-dead from deploy IP). **No arbitrary-URL server-side fetch remains.** Client-side YouTube embeds and same-origin message-permalink embeds were deliberately kept.
+> History: an earlier free-form OpenGraph scraper was deleted for SSRF surface. The
+> current proxy is its allowlisted, SSRF-hardened replacement — **not** arbitrary-URL fetch.
+
+`GET /api/link-preview` (`preview.go`) fetches OG tags (Wikipedia via its summary API) for **allowlisted hostnames only**, caching results in Postgres.
+
+- Allowlist: a hardcoded default set in `config.go` (github/wikipedia/major news orgs), overridable via `RIVENDELL_LINK_PREVIEW_DOMAINS`; `domainAllowed` matches subdomains too. An empty allowlist disables the feature.
+- A non-allowlisted or cache-errored URL gets a bare `404` (`http.NotFound`, no JSON — the allowlist isn't leaked), which `api.getLinkPreview` maps to a "no card" marker without throwing.
+- **SSRF hardening (`newPreviewClient`):** the outbound client refuses to dial any non-public IP (loopback/RFC1918/ULA/link-local incl. the `169.254.169.254` metadata endpoint) via a `net.Dialer.Control` hook — vetting the *resolved* IP at connect time, so DNS rebinding can't bypass it — AND re-applies the https + `domainAllowed` checks on **every** redirect hop, so an allowlisted host's open redirect can't pivot off-allowlist or inward.
+- `inFlight` (sync.Map) de-dupes concurrent fetches of the same URL.
+- Guarded by `TestIsPublicIP`, `TestCheckPreviewRedirect`, `TestPreviewClientRefusesInternal`.
+- Client-side YouTube embeds and same-origin message-permalink embeds remain client-only (intentionally not proxied).
 
 ## File / image uploads (migration `0014`)
 
