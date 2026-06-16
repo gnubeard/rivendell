@@ -2,7 +2,9 @@ package ws
 
 import (
 	"bytes"
+	"net"
 	"testing"
+	"time"
 )
 
 // RFC 6455 §1.3 worked example.
@@ -55,6 +57,48 @@ func TestFrameRoundTrip_ExtendedLengths(t *testing.T) {
 		if !bytes.Equal(f.payload, payload) {
 			t.Fatalf("round-trip mismatch at size %d", size)
 		}
+	}
+}
+
+// A quiet-but-alive peer that only sends control frames (here, the browser's
+// pongs) must keep the idle read timeout from firing: every frame re-arms it.
+func TestReadMessageTimeoutRearmsOnControlFrames(t *testing.T) {
+	serverNC, clientNC := net.Pipe()
+	srv := newConn(serverNC)
+	srv.SetReadTimeout(120 * time.Millisecond)
+
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		_, data, err := srv.ReadMessage()
+		done <- result{data, err}
+	}()
+
+	// Drip pongs for ~200ms — well past the 120ms timeout — then a data frame.
+	// Without per-frame re-arming the read would have timed out before "alive".
+	for i := 0; i < 5; i++ {
+		if err := writeFrame(clientNC, true, opPong, nil); err != nil {
+			t.Fatalf("write pong %d: %v", i, err)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	if err := writeFrame(clientNC, true, opText, []byte("alive")); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("ReadMessage err = %v, want nil (pongs should keep it alive)", r.err)
+		}
+		if string(r.data) != "alive" {
+			t.Fatalf("data = %q, want alive", r.data)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadMessage never returned")
 	}
 }
 

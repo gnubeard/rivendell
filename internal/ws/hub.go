@@ -241,8 +241,10 @@ func (c *Client) writePump() {
 
 func (c *Client) readPump() {
 	defer c.conn.Close()
+	// 90s is a "no traffic at all" idle timeout: ReadMessage re-arms it before every
+	// frame, so the client's ~30s ping/pong cadence keeps a quiet connection alive.
+	c.conn.SetReadTimeout(90 * time.Second)
 	for {
-		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {

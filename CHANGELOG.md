@@ -5,6 +5,12 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-06-16
+
+### Fixed
+- Quiet-but-alive realtime connections are no longer dropped after 90s. The server now counts the browser's keep-alive ping/pong traffic toward liveness, not just data messages, so a connection that's idle of chat activity stays up.
+- On reconnect, if you were scrolled up reading older messages, the resync no longer yanks you to the bottom — your place in the scrollback is preserved.
+
 ## [2.0.6] - 2026-06-16
 
 ### Fixed

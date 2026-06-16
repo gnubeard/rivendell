@@ -764,8 +764,17 @@ async function resync() {
     rerenderSidebar();
     notifUI.renderNotificationTotal();
     if (state.activeChannelId) {
-      await loadChannel(state.activeChannelId);
-      if (!tabUnfocused()) markActiveChannelRead();
+      // Preserve scrollback: loadChannel reloads only the latest page and snaps to
+      // the bottom (or unread marker), which would discard the older messages a
+      // reader has paged in and yank them away from where they were reading. Only
+      // reload when they're already at the live tail, where a refresh is invisible.
+      // The resumed event stream keeps a scrolled-up reader current as they read.
+      const ml = $("#message-list");
+      const atTail = !ml || isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight);
+      if (atTail) {
+        await loadChannel(state.activeChannelId);
+        if (!tabUnfocused()) markActiveChannelRead();
+      }
     }
     // A reconnect is a fresh connection (server defaults it to active); re-signal
     // idle over the new socket so the dot stays correct.

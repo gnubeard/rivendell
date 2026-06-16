@@ -53,6 +53,14 @@ type Conn struct {
 	netConn net.Conn
 	br      *bufio.Reader
 	bw      *bufio.Writer
+
+	// readTimeout, when > 0, is the maximum a single frame read may block. It is
+	// (re)armed before every frame read inside ReadMessage, so ANY inbound frame —
+	// including ping/pong control frames the loop consumes silently — counts as
+	// liveness. This makes the timeout a true "no traffic at all" deadline rather
+	// than a "no data message" deadline (a quiet-but-alive peer that only auto-pings
+	// would otherwise be falsely reaped). See SetReadTimeout.
+	readTimeout time.Duration
 }
 
 // newConn wraps an established net.Conn. Used by Accept and by tests.
@@ -180,6 +188,12 @@ func (c *Conn) ReadMessage() (opcode byte, data []byte, err error) {
 	var msg []byte
 	var msgOp byte
 	for {
+		if c.readTimeout > 0 {
+			// Re-arm before every frame so control frames count as liveness too.
+			if err := c.netConn.SetReadDeadline(time.Now().Add(c.readTimeout)); err != nil {
+				return 0, nil, err
+			}
+		}
 		f, err := readFrame(c.br)
 		if err != nil {
 			return 0, nil, err
@@ -232,6 +246,13 @@ func (c *Conn) writeControl(opcode byte, payload []byte) error {
 
 // SetReadDeadline bounds how long a read may block (used for ping timeouts).
 func (c *Conn) SetReadDeadline(t time.Time) error { return c.netConn.SetReadDeadline(t) }
+
+// SetReadTimeout configures an idle timeout that ReadMessage re-arms before every
+// frame read, so any inbound frame (data OR ping/pong) keeps the connection alive.
+// A non-positive d disables it. Prefer this over SetReadDeadline for liveness: the
+// latter only fires relative to the start of a ReadMessage call and so silently
+// swallowed control frames don't extend it.
+func (c *Conn) SetReadTimeout(d time.Duration) { c.readTimeout = d }
 
 // Close sends a close frame and closes the underlying connection.
 func (c *Conn) Close() error {
