@@ -72,7 +72,7 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               link-previews, admin, secret-chat, forward, pins,
                               modals, mobile-ctx, video-grid, notifications,
                               non-admin, bot-dm, history, composer-richtext,
-                              screen-share);
+                              screen-share, live-append, optimistic-send);
                               Chromium by default,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
                               (Safari-engine), opt-in via E2E_WEBKIT — see
