@@ -92,6 +92,10 @@ The `incremental message updates` section (`appendMessageRow`/`patchMessageRow`/
 an event touched — or paints a dimmed pending row on send and reconciles it on the
 echo — so a reader's text selection and scroll survive live traffic, with the full
 `renderMessages` as the channel-open/jump/resync source of truth and the fallback.
+Pending optimistic rows live in the DOM but NOT in `state.messages`, so both the
+append and the reconcile route through `insertionPointFor` to drop a real row at its
+array-sorted DOM slot (above the pending tail), keeping DOM order == array order — a
+cross-user message can't land below your pending row and group avatarless under it.
 
 ### R6 · Composer & Message Actions (2501–3053)
 Authoring, and everything you do *to* a message once it (or its draft) exists: the

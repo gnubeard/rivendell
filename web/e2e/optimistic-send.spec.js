@@ -7,14 +7,18 @@
 // optimistic row back and restores the composer text for a retry. This spec pins:
 //   1. a sent message ends up as a single, non-pending row (reconciled, not doubled)
 //   2. a failed send shows the pending row, then rolls it back + restores the composer
+//   3. another user's message arriving DURING a pending send isn't mis-attributed to
+//      you — it slots ABOVE your pending row, grouped under its own author, not below
+//      yours (the optimistic-row-desyncs-grouping bug)
 import { test, expect } from "@playwright/test";
-import { ADMIN, PASSWORD } from "./global-setup.js";
+import { ADMIN, USER2, PASSWORD } from "./global-setup.js";
 
 test.describe.configure({ mode: "serial" });
 
 const TS = Date.now();
 const SENDS = /\/api\/channels\/\d+\/messages$/;
 let ctx, page, channelId;
+let ctxB, pageB; // a second user, to post cross-user messages mid-send
 
 async function uiLogin(p, username) {
   await p.goto("/");
@@ -41,6 +45,31 @@ async function openChannel(p, channelId) {
   await expect(p.locator(`#channel-list li[data-ch-id="${channelId}"]`)).toHaveClass(/active/);
 }
 
+// postMessage sends as another user via fetch (no optimistic UI), returning the id.
+function postMessage(p, channelId, content) {
+  return p.evaluate(async ({ channelId, content }) => {
+    const msg = await fetch(`/api/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ content, reply_to_id: null }),
+    }).then((r) => r.json());
+    return msg.id;
+  }, { channelId, content });
+}
+
+// rowOrder returns the rendered rows top-to-bottom (pending rows carry a negative
+// data-msg-id, so .msg[data-msg-id] captures them too), enough to assert ordering,
+// grouping, and which author a row visually attributes to.
+function rowOrder(p) {
+  return p.evaluate(() =>
+    [...document.querySelectorAll("#message-list .msg[data-msg-id]")].map((el) => ({
+      pending: el.classList.contains("pending"),
+      grouped: el.classList.contains("grouped"),
+      text: el.querySelector(".msg-body")?.textContent || "",
+    })));
+}
+
 // typeAndSend focuses the contenteditable composer, types, and presses Enter —
 // matching composer-paste.spec.js's keyboard-driven convention.
 async function typeAndSend(p, text) {
@@ -55,11 +84,17 @@ test.beforeAll(async ({ browser }) => {
   ctx = await browser.newContext();
   page = await ctx.newPage();
   await uiLogin(page, ADMIN);
+
+  ctxB = await browser.newContext();
+  pageB = await ctxB.newPage();
+  await uiLogin(pageB, USER2);
+
   channelId = await makeChannel(page, `optimistic-${TS}`);
   await openChannel(page, channelId);
+  await openChannel(pageB, channelId);
 });
 
-test.afterAll(async () => { await ctx?.close(); });
+test.afterAll(async () => { await ctx?.close(); await ctxB?.close(); });
 
 test("a sent message reconciles to a single, non-pending row", async () => {
   const txt = `optimistic happy ${TS}`;
@@ -85,6 +120,54 @@ test("a send with trailing whitespace still reconciles to a single row", async (
 
   await expect(msg(page, txt)).toHaveCount(1);
   await expect(page.locator("#message-list .msg.pending", { hasText: txt })).toHaveCount(0);
+});
+
+test("another user's message during a pending send is not mis-attributed to you", async () => {
+  // B needs a prior message at the tail so their NEXT message would group under it —
+  // the precondition for the bug (a grouped row renders avatarless/headerless).
+  const bPrev = `crossuser B-prev ${TS}`;
+  await postMessage(pageB, channelId, bPrev);
+  await expect(msg(page, bPrev)).toHaveCount(1); // A sees B's prior message live
+
+  // Hold A's POST so the dimmed optimistic row stays on screen for the whole window.
+  // (Continue, not abort — it eventually commits and reconciles.)
+  await page.route(SENDS, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    await new Promise((r) => setTimeout(r, 1500));
+    return route.continue();
+  });
+
+  const aText = `crossuser A-pending ${TS}`;
+  await typeAndSend(page, aText);
+  await expect(page.locator("#message-list .msg.pending", { hasText: aText })).toBeVisible();
+
+  // While A's send is in flight, B posts a message that would group under B-prev.
+  const bNew = `crossuser B-new ${TS}`;
+  await postMessage(pageB, channelId, bNew);
+  await expect(msg(page, bNew)).toHaveCount(1); // landed on A's pane
+
+  // The bug: B-new appended at the DOM tail (BELOW A's pending row) and grouped
+  // avatarless under it — looking like A sent it. The fix slots B-new ABOVE the
+  // pending row, directly under B-prev, so it attributes to its real author.
+  const order = await rowOrder(page);
+  const iPrev = order.findIndex((r) => r.text.includes(bPrev));
+  const iNew = order.findIndex((r) => r.text.includes(bNew));
+  const iPending = order.findIndex((r) => r.pending && r.text.includes(aText));
+  expect(iPrev).toBeGreaterThanOrEqual(0);
+  expect(iPending).toBeGreaterThanOrEqual(0);
+  expect(iNew).toBe(iPrev + 1);        // B-new sits directly under B-prev …
+  expect(iNew).toBeLessThan(iPending); // … and ABOVE A's pending row, never below it
+
+  // Let A's held POST through; it reconciles to a single real row that stays BELOW
+  // B-new (B-new committed first → lower id → array-sorted above A), not scrambled.
+  await expect(page.locator("#message-list .msg.pending", { hasText: aText })).toHaveCount(0);
+  await expect(msg(page, aText)).toHaveCount(1);
+  const after = await rowOrder(page);
+  const jNew = after.findIndex((r) => r.text.includes(bNew));
+  const jA = after.findIndex((r) => r.text.includes(aText));
+  expect(jNew).toBeLessThan(jA);
+
+  await page.unroute(SENDS);
 });
 
 test("a failed send shows the pending row, then rolls it back and restores the composer", async () => {

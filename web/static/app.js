@@ -2341,12 +2341,32 @@ function groupingAnchor(msgs, idx) {
   return null;
 }
 
+// insertionPointFor returns the DOM node a real row for msgs[idx] should be inserted
+// BEFORE so the pane stays in array order. It walks the array forward from idx to the
+// next loaded message that has a rendered row, falling back to the first pending
+// optimistic row, then the bottom sentinel. The pending fallback is load-bearing:
+// optimistic rows live at the DOM tail but NOT in state.messages (showOptimisticSend),
+// so a real row appended/reconciled blindly at the tail would land BELOW your pending
+// row — and then group avatarless under it, mis-attributing another user's message to
+// you (and scrambling order once the echo reconciles). Slotting real rows ABOVE the
+// pending tail keeps DOM order == array order, so the array-based grouping anchor is
+// computed against the row's true DOM predecessor. Guarded by web/e2e/optimistic-send.
+function insertionPointFor(wrap, msgs, idx) {
+  for (let k = idx + 1; k < msgs.length; k++) {
+    const node = wrap.querySelector(`[data-msg-id="${msgs[k].id}"]`);
+    if (node) return node;
+  }
+  return wrap.querySelector(".msg.pending") || wrap.querySelector('[data-sentinel="bottom"]');
+}
+
 // appendMessageRow adds ONE freshly-arrived message to the open pane without
 // rebuilding it — the incremental path for message.new at the live tail. It mirrors
 // renderMessages' per-row decisions (grouping, isMod/canPin) and follow-scroll
-// (atBottom OR forceBottom → stick to the newest). The row goes before the bottom
-// sentinel so infinite-scroll keeps working. Callers guarantee the pane is rendered,
-// not in secret view, not in a history window, and the message is a normal row.
+// (atBottom OR forceBottom → stick to the newest). The row goes at its array-sorted
+// DOM slot via insertionPointFor — above any pending optimistic rows and before the
+// bottom sentinel — so infinite-scroll keeps working AND a cross-user message can't
+// land below your DOM-only pending row. Callers guarantee the pane is rendered, not in
+// secret view, not in a history window, and the message is a normal row.
 function appendMessageRow(m, forceBottom) {
   const wrap = $("#message-list");
   const atBottom = forceBottom || isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
@@ -2359,8 +2379,8 @@ function appendMessageRow(m, forceBottom) {
   const t = new Date(m.created_at).getTime();
   const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, t) : false;
   const row = messageRow(m, { grouped, isMod, canPin });
-  const bottomSentinel = wrap.querySelector('[data-sentinel="bottom"]');
-  if (bottomSentinel) wrap.insertBefore(row, bottomSentinel);
+  const before = insertionPointFor(wrap, msgs, idx);
+  if (before) wrap.insertBefore(row, before);
   else wrap.append(row);
   if (atBottom) scrollToBottom(wrap);
 }
@@ -2449,7 +2469,10 @@ function showOptimisticSend(channelId, content, replyId) {
 
 // reconcileOptimistic swaps the dimmed optimistic row for the real one when its own
 // message.new echo lands. Matches by (channel, exact content) since the server
-// doesn't round-trip a client nonce; oldest match first. Returns false (caller
+// doesn't round-trip a client nonce; oldest match first. The real row is re-placed at
+// its array-sorted DOM slot (insertionPointFor), not blindly where the pending row sat
+// — another user's message can land in the gap and ids interleave either way, so an
+// in-place replace would leave the two out of order. Returns false (caller
 // appends/renders normally) when there's no pending match or the optimistic row was
 // already wiped (e.g. an interleaved full render), in which case the real message
 // simply hasn't been drawn yet.
@@ -2469,7 +2492,15 @@ function reconcileOptimistic(m) {
   const activeCh = state.channels[m.channel_id];
   const canPin = isMod || !!(activeCh && activeCh.is_dm);
   const atBottom = isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
-  pendingEl.replaceWith(messageRow(m, { grouped, isMod, canPin }));
+  // Drop the reconciled row into its array-sorted DOM slot, NOT necessarily where the
+  // pending row sat: another user's message may have arrived (and been appended) in the
+  // gap between the optimistic paint and this echo, and ids can interleave either way.
+  // Remove the pending row first so it isn't picked as our own insertion point.
+  const row = messageRow(m, { grouped, isMod, canPin });
+  pendingEl.remove();
+  const before = insertionPointFor(wrap, msgs, idx);
+  if (before) wrap.insertBefore(row, before);
+  else wrap.append(row);
   if (atBottom) scrollToBottom(wrap);
   return true;
 }

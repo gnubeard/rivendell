@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.21] - 2026-06-17
+
+### Fixed
+- Another person's message could occasionally render directly beneath your own without an avatar or name — making it look like you'd sent it — if it arrived in the brief window while one of your own messages was still sending. Incoming messages now always slot above your in-flight (pending) message, so they're attributed to their real author.
+
 ## [2.0.9] - 2026-06-16
 
 ### Fixed
