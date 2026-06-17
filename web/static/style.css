@@ -712,6 +712,11 @@ body.dm-active #members-toggle { display: none; }
 .lightbox { padding: 2.5rem; cursor: zoom-out; }
 .lightbox-img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: var(--radius); cursor: default; box-shadow: 0 8px 40px rgba(0,0,0,0.6); }
 .lightbox-close { position: fixed; top: 1rem; right: 1rem; width: 36px; height: 36px; font-size: 1.4rem; cursor: pointer; }
+/* Gallery prev/next: vertically-centred arrows pinned to the viewport edges,
+   over the backdrop. Hidden for a lone image (toggled in showLightboxAt). */
+.lightbox-nav { position: fixed; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; font-size: 1.8rem; line-height: 1; cursor: pointer; }
+.lightbox-prev { left: 1rem; }
+.lightbox-next { right: 1rem; }
 /* The pinned-messages list is cramped at the narrow width; give it more room on
    wider screens (.modal-card is width:100%, so phones are unaffected). */
 #pins-modal .modal-card { max-width: 560px; }

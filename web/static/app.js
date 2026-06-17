@@ -3058,13 +3058,40 @@ async function toggleReaction(messageId, emoji, knownMine) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- control wiring: one-time event bindings, grouped by concern -------------
 
+// The lightbox doubles as a per-channel image gallery: openLightbox snapshots
+// every inline image currently loaded in the message pane (DOM order = post
+// order) and remembers which one was opened, so the arrow keys / ‹ › buttons /
+// swipe can step through them without any server round-trip or new state model.
+// The snapshot is a window over the LOADED messages only — history paging beyond
+// the window isn't chased (that'd need a real endpoint). Reset on close.
+let lightboxImages = [];
+let lightboxIndex = 0;
+
 // openLightbox shows an inline image large, centred on a dark backdrop, instead
 // of opening it in a new tab. Dismissed by the × button, Esc, or a backdrop tap
-// (wired in wireModalDismissal alongside the other .modal handlers).
-function openLightbox(src) {
-  if (!src) return;
-  $("#lightbox-img").src = src;
+// (wired in wireModalDismissal alongside the other .modal handlers). Prev/next
+// navigation is wired in wireModalDismissal (buttons/swipe) and wireGlobalKeys
+// (arrows). `images`/`index` default to a single-image gallery for callers that
+// only have a src.
+function openLightbox(images, index = 0) {
+  const list = Array.isArray(images) ? images : [images];
+  if (!list.length || !list[index]) return;
+  lightboxImages = list;
   $("#lightbox").hidden = false;
+  showLightboxAt(index);
+}
+
+// showLightboxAt swaps the displayed image to gallery slot i (wrapping at both
+// ends) and reflects whether stepping is possible by hiding the ‹ › buttons for
+// a lone image. Out-of-range or empty galleries no-op.
+function showLightboxAt(i) {
+  const n = lightboxImages.length;
+  if (!n) return;
+  lightboxIndex = ((i % n) + n) % n; // wrap, handling negatives
+  $("#lightbox-img").src = lightboxImages[lightboxIndex];
+  const single = n < 2;
+  $("#lightbox-prev").hidden = single;
+  $("#lightbox-next").hidden = single;
 }
 
 // closeModal hides a modal and, if it's the profile modal, reverts any live
@@ -3074,8 +3101,9 @@ function closeModal(m) {
   m.hidden = true;
   if (m.id === "profile-modal") applyTheme(myTheme());
   // Drop the lightbox source so a large image stops loading / frees memory and
-  // the next open never flashes the previous picture.
-  if (m.id === "lightbox") $("#lightbox-img").src = "";
+  // the next open never flashes the previous picture; clear the gallery snapshot
+  // so it can't outlive the channel it was taken from.
+  if (m.id === "lightbox") { $("#lightbox-img").src = ""; lightboxImages = []; }
 }
 
 // wireDelegatedClicks installs the single document-level click handler that routes
@@ -3117,7 +3145,12 @@ function wireDelegatedClicks() {
     const imgLink = closest("a.msg-image-link");
     if (imgLink) {
       e.preventDefault();
-      openLightbox(imgLink.getAttribute("href"));
+      // Snapshot every image loaded in the message pane (scoped to #message-list
+      // so pins/search modal bodies don't bleed in) and open at the clicked one,
+      // so the lightbox can step prev/next through the channel's images.
+      const links = [...$("#message-list").querySelectorAll("a.msg-image-link")];
+      const idx = Math.max(0, links.indexOf(imgLink));
+      openLightbox(links.map((a) => a.getAttribute("href")), idx);
       return;
     }
     const a = closest("a[href]");
@@ -3357,6 +3390,29 @@ function wireModalDismissal() {
   // The × is the explicit close affordance (backdrop/Esc also dismiss). It sits
   // over the image, so a direct click never reaches the backdrop handler.
   $("#lightbox-close").onclick = () => closeModal($("#lightbox"));
+
+  // Gallery prev/next: the ‹ › buttons sit over the backdrop like the ×, so
+  // stopPropagation keeps their clicks from bubbling to the backdrop-dismiss.
+  $("#lightbox-prev").onclick = (e) => { e.stopPropagation(); showLightboxAt(lightboxIndex - 1); };
+  $("#lightbox-next").onclick = (e) => { e.stopPropagation(); showLightboxAt(lightboxIndex + 1); };
+
+  // Mobile: horizontal swipe on the image steps the gallery (the counterpart to
+  // the desktop arrow keys). A short/vertical drag is ignored so a tap or scroll
+  // doesn't trip it.
+  let touchX = null, touchY = null;
+  const img = $("#lightbox-img");
+  img.addEventListener("touchstart", (e) => {
+    const t = e.changedTouches[0];
+    touchX = t.clientX; touchY = t.clientY;
+  }, { passive: true });
+  img.addEventListener("touchend", (e) => {
+    if (touchX == null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchX, dy = t.clientY - touchY;
+    touchX = touchY = null;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return; // tap / vertical
+    showLightboxAt(lightboxIndex + (dx < 0 ? 1 : -1)); // swipe-left ⇒ next
+  }, { passive: true });
 }
 
 // wireGlobalKeys wires document-level keyboard shortcuts: Escape unwinds the
@@ -3375,6 +3431,16 @@ function wireGlobalKeys() {
     // Cancel an inline edit when Esc fires outside the edit textarea (the
     // textarea's own handler covers the focused case via stopPropagation).
     if (editingMessageId != null) cancelEdit();
+  });
+
+  // Lightbox gallery: while it's open, Left/Right step through the channel's
+  // loaded images. Only acts when the lightbox is up, so the keys stay free for
+  // text fields and other surfaces otherwise.
+  document.addEventListener("keydown", (e) => {
+    if ($("#lightbox").hidden) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    showLightboxAt(lightboxIndex + (e.key === "ArrowLeft" ? -1 : 1));
   });
 
   // Channel navigation: Ctrl+Up/Down step through the sidebar conversation list;

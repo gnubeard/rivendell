@@ -93,22 +93,26 @@ an event touched — or paints a dimmed pending row on send and reconciles it on
 echo — so a reader's text selection and scroll survive live traffic, with the full
 `renderMessages` as the channel-open/jump/resync source of truth and the fallback.
 
-### R6 · Composer & Message Actions (2482–3018)
+### R6 · Composer & Message Actions (2501–3053)
 Authoring, and everything you do *to* a message once it (or its draft) exists: the
 contenteditable composer (`wireComposer`, ~270 lines) + autocomplete + emoji picker,
 inline message editing (`editorFor`/`startEdit`/`commitEdit`), link previews, and
 reactions.
 
-### R7 · Control Wiring (3019–3417)
+### R7 · Control Wiring (3054–3518)
 The one-time `wire*` control-binding functions that attach static-DOM event
 listeners (`wireDelegatedClicks`, `wireProfileControls`, …, aggregated by
 `wireControls`, run once from `enterApp`), plus the shared `openLightbox`/
-`closeModal` helpers. The 11 `wire*` functions form the single most self-similar
+`showLightboxAt`/`closeModal` helpers. `openLightbox` snapshots `#message-list`'s
+`a.msg-image-link` anchors into a per-channel image gallery (module-level
+`lightboxImages`/`lightboxIndex`); `showLightboxAt` steps it with wrap-around,
+driven by the ‹ › buttons + swipe (`wireModalDismissal`) and the Left/Right arrow
+keys (`wireGlobalKeys`). The 11 `wire*` functions form the single most self-similar
 block left in the file — but a *traced non-candidate* for extraction: its ~35-symbol
 injection surface is ~2× the codebase's widest bag (Finding 2). The feature-module
 plugs that used to live here moved to R8's switchboard.
 
-### R8 · Shell Chrome & Subsystems (3418–3881)
+### R8 · Shell Chrome & Subsystems (3519–3982)
 The remaining shell behaviors and **the consolidated plug switchboard**:
 drawers/swipe/idle, then the `feature-module plugs` section (`forward`, `mobileCtx`,
 `pins`, `search`, `notifUI` — folded here from R7) followed by modals + user card,
