@@ -72,6 +72,21 @@ test("a sent message reconciles to a single, non-pending row", async () => {
   await expect(msg(page, txt)).toHaveCount(1);
 });
 
+test("a send with trailing whitespace still reconciles to a single row", async () => {
+  // The server TrimRight()s trailing space/newlines before storing+echoing, while
+  // the optimistic row is painted from the raw composer text. If the send path
+  // doesn't mirror that trim, reconcileOptimistic's exact-content match misses and
+  // the echo gets appended alongside a stuck pending row (a duplicate). Type a
+  // trailing space to pin that the two agree.
+  const txt = `optimistic trailing ${TS}`;
+  await page.locator("#composer-input").click();
+  await page.keyboard.type(txt + " ");
+  await page.keyboard.press("Enter");
+
+  await expect(msg(page, txt)).toHaveCount(1);
+  await expect(page.locator("#message-list .msg.pending", { hasText: txt })).toHaveCount(0);
+});
+
 test("a failed send shows the pending row, then rolls it back and restores the composer", async () => {
   const txt = `optimistic fail ${TS}`;
 

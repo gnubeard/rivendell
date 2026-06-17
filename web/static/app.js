@@ -105,6 +105,24 @@ const avatarVersion = {};
 // these earn a tombstone, so a fresh history load isn't littered with them.
 const liveDeleted = new Set();
 
+// pruneLiveDeleted bounds that set so it can't grow without limit across a long
+// session: renderDeletedRun can only ever draw a tombstone for an id still present
+// (as a deleted row) in a loaded channel window, so dropping any id that's in NO
+// loaded window is invisible. Called at channel-reload time (a window is replaced),
+// the natural GC point.
+function pruneLiveDeleted() {
+  if (liveDeleted.size === 0) return;
+  const stillLoaded = new Set();
+  for (const cid in state.messages) {
+    for (const m of state.messages[cid] || []) {
+      if (m.deleted_at && liveDeleted.has(m.id)) stillLoaded.add(m.id);
+    }
+  }
+  for (const id of [...liveDeleted]) {
+    if (!stillLoaded.has(id)) liveDeleted.delete(id);
+  }
+}
+
 // Composer: inline message editing + reply target. renderMessages is the source
 // of truth — when a message's id == editingMessageId it draws an inline editor
 // (not body+actions) seeded from editDraft; editDraft + caret are captured and
@@ -1733,6 +1751,7 @@ async function loadChannel(id) {
     const [, msgs] = await Promise.all([refreshActiveMembers(), api.messages(id, { limit: PAGE })]);
     if (id !== state.activeChannelId) return; // user switched away while fetching
     state = S.setMessages(state, id, msgs);
+    pruneLiveDeleted(); // GC session tombstones no longer in any loaded window
     // A short first page means there's nothing older to scroll back to.
     historyPaging.noteLoadedPage(id, msgs.length);
     // Use holdPosition so scrollToBottom's rAF callbacks don't fire and
@@ -2733,7 +2752,12 @@ function wireComposer() {
       // Message body = the typed text followed by each done attachment's image
       // markdown (spoiler-marked ones wrapped in ||..||), one per line; either
       // part alone is enough to send.
-      const content = composeMessageBody(text, composerTray.doneUploads());
+      // Mirror the server's TrimRight(" \t\r\n") (handlers_messages.go) here so the
+      // bytes we send, the optimistic row, and the echoed message.new are identical.
+      // Otherwise reconcileOptimistic's exact-content match misses on a trailing space
+      // or newline — the echo can't find its pending row, so the real message gets
+      // appended while the dimmed optimistic row is left stuck (a duplicate on send).
+      const content = composeMessageBody(text, composerTray.doneUploads()).replace(/[ \t\r\n]+$/, "");
       if (!content.trim()) return;
       input.value = ""; // the div collapses back to a single line on its own
       composerRich?.resetHistory(); // sent → fresh undo baseline (empty)
@@ -2754,12 +2778,23 @@ function wireComposer() {
         await api.sendMessage(cid, content, replyId);
         sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
-        if (optimistic != null) removePending(optimistic); // roll the dimmed row back
-        input.value = text;
-        composerRich?.resetHistory(); // restore failed → baseline the put-back text
-        composerTray.putBack(sent); // put the attachments back so the send can be retried
-        replyingToId = replyId; // restore the reply context too
-        renderReplyBanner();
+        if (optimistic != null) removePending(optimistic); // roll the dimmed row back (no-op if a channel switch already dropped it)
+        if (cid === state.activeChannelId) {
+          // Still on the channel we sent from — restore the live composer for an
+          // in-place retry.
+          input.value = text;
+          composerRich?.resetHistory(); // restore failed → baseline the put-back text
+          composerTray.putBack(sent); // put the attachments back so the send can be retried
+          replyingToId = replyId; // restore the reply context too
+          renderReplyBanner();
+        } else {
+          // The user navigated away during a slow failing send — restoring into the
+          // live composer would inject THIS channel's text/reply/attachments into
+          // whatever channel they're now viewing. Stash the text back into the origin
+          // channel's draft (restored on return) and release the staged uploads.
+          drafts.saveText(cid, text);
+          sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
+        }
         alert(ex.message);
       }
     }
