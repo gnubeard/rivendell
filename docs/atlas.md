@@ -180,9 +180,10 @@ section level; that culture is working.
 
 ## Reorg candidates
 
-Modest, reversible moves the map suggested. The plug consolidation and the
-load-order annotations are done; the R5 legibility pass has a first cut. Remaining
-open work is noted inline below.
+Modest, reversible moves the map suggested. All four are now done — the plug
+consolidation, the load-order annotations, the R5 legibility pass, and the
+incremental-render rebuild (incl. the optimistic-send follow-on). Kept here as a
+record of what was decided and why.
 
 - **~~Acknowledge the de-facto switchboard.~~** ✅ *Done.* The five movable R7 plugs
   (`forward`, `mobileCtx`, `pins`, `search`, `notifUI`) were folded into a new
@@ -194,13 +195,15 @@ open work is noted inline below.
   (`voiceUI`←`videoGrid`, plus the two `mobileCtx` deps in the `feature-module plugs`
   header). `channelDrag` and `modals` got "placed for cohesion / saved by hoisting"
   notes so the *non*-constraints don't read as mysterious either. See Finding 1.
-- **~~Don't chase R5 — but make it legible in place.~~** ◐ *First cut done.* No file
-  split (it's a state projection with no owned state — extraction would just widen a
-  dependency bag). Instead the message-rendering section now opens with a **compose
-  map**: the `renderMessages` call-tree, its builders, and the exact slice of module
-  state it reads. Next passes, if wanted: give `messageRow`/`messageActions` the same
-  header treatment, or split the ~115-line `renderMessages` body into named locals
-  (`renderDeletedRun`, `renderSystemMessage`) — legibility only, still one file.
+- **~~Don't chase R5 — but make it legible in place.~~** ✅ *Done.* No file split
+  (it's a state projection with no owned state — extraction would just widen a
+  dependency bag). The message-rendering section opens with a **compose map** (the
+  `renderMessages` call-tree, its builders, and the exact slice of module state it
+  reads), AND both follow-on passes shipped: the `renderMessages` loop body is now
+  split into named locals (`renderDeletedRun`, `renderSystemMessage`, plus
+  `renderSecretView`/`captureEditState`/`restoreEditState`), and `messageRow`/
+  `messageActions` carry the same header-comment treatment. Legibility only — still
+  one file, no extraction.
 - **~~Stop full-rebuilding the pane on every event.~~** ✅ *Done* (incremental-render
   pass). `renderMessages`'s full `innerHTML` wipe ran on nearly every realtime event,
   wiping any active text selection and re-running `formatMessage` on every loaded row.
@@ -209,8 +212,10 @@ open work is noted inline below.
   `message.update` swap one row, and `read.update`/`markActiveChannelRead` refresh the
   👁 titles in place — full render kept as the fallback. Verified by
   `web/e2e/live-append.spec.js` (selection survives an incoming message + a reaction).
-  Still open as a *separate* idea: an optimistic local echo on send (show the row
-  before the server round-trips) — proposed alongside this pass, intentionally deferred.
+  The *separate* follow-on — an optimistic local echo on send (show the row before the
+  server round-trips) — also shipped (2.0.16): `showOptimisticSend`/`reconcileOptimistic`/
+  `removePending` in the `incremental message updates` section, guarded by
+  `web/e2e/optimistic-send.spec.js`.
 
 ## Maintaining the atlas
 
