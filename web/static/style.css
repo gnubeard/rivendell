@@ -466,15 +466,19 @@ html[data-theme="light"] .msg-body pre.code-block .hl-hunk { color: #0891b2; }
 .yt-thumb:hover .yt-play { background: rgba(0,0,0,.32); }
 
 /* Author-only "remove embed" affordance: a light × that wraps the URL in <> so the
-   card/image collapses to a plain link. .embed-wrap is the positioning host for a
-   preview card; a bare-URL image's own anchor (.embed-host) hosts its own button.
-   Revealed on ROW hover (like .msg-actions) — keying the reveal on the button's own
-   host would deadlock (a pointer-events:none control can't receive the hover that
-   enables it, and it overflows a small image). Hidden on touch (long-press sheet). */
-.embed-wrap { position: relative; display: inline-block; max-width: 100%; }
-.msg-body a.msg-image-link.embed-host { position: relative; }
+   card/image collapses to a plain link. The button is appended INTO the embed
+   element itself (the preview card, or a bare-URL image's anchor), which becomes its
+   own .embed-host positioning box — so the embed's outer margin sits outside the
+   border box and can't push the × up into the gap above it. On an image anchor the
+   img's own margin is moved out to the anchor for the same reason. Revealed on ROW
+   hover (like .msg-actions) — keying the reveal on the button's own host would
+   deadlock (a pointer-events:none control can't receive the hover that enables it).
+   Hidden on touch (the long-press sheet carries the action instead). */
+.embed-host { position: relative; }
+.msg-body a.msg-image-link.embed-host { margin: 0.3rem 0; }
+.msg-body a.msg-image-link.embed-host > img.msg-image { margin: 0; }
 .embed-remove {
-  position: absolute; top: 5px; right: 5px; z-index: 2;
+  position: absolute; top: 6px; right: 6px; z-index: 2;
   width: 20px; height: 20px; padding: 0;
   display: flex; align-items: center; justify-content: center;
   border: none; border-radius: 50%;

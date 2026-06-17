@@ -53,6 +53,30 @@ async function openChannel(p, channelId) {
   await expect(p.locator(`#channel-list li[data-ch-id="${channelId}"]`)).toHaveClass(/active/);
 }
 
+// assertButtonOverEmbed checks the × sits INSIDE the embed's box (top-right corner),
+// not floating in the margin gap above it (the bug this fix targets). The button
+// keeps a layout box even while visibility:hidden, so this is measurable without
+// depending on CSS :hover — which Playwright can't reliably hold across awaits, so
+// the actual click below uses a force click (hover+click atomically) instead.
+async function assertButtonOverEmbed(p, embedSel) {
+  const r = await p.evaluate((sel) => {
+    const embed = document.querySelector(sel);
+    const btn = embed && embed.querySelector(".embed-remove");
+    if (!embed || !btn) return null;
+    const e = embed.getBoundingClientRect();
+    const b = btn.getBoundingClientRect();
+    return { e: { top: e.top, right: e.right, bottom: e.bottom, left: e.left }, b: { top: b.top, right: b.right, bottom: b.bottom, left: b.left } };
+  }, embedSel);
+  expect(r, `embed ${embedSel} and its .embed-remove both present`).not.toBeNull();
+  // Button's center lies within the embed's box (a small tolerance for the inset).
+  const cx = (r.b.left + r.b.right) / 2;
+  const cy = (r.b.top + r.b.bottom) / 2;
+  expect(cx).toBeGreaterThanOrEqual(r.e.left - 1);
+  expect(cx).toBeLessThanOrEqual(r.e.right + 1);
+  expect(cy).toBeGreaterThanOrEqual(r.e.top - 1);
+  expect(cy).toBeLessThanOrEqual(r.e.bottom + 1);
+}
+
 test.beforeAll(async ({ browser }) => {
   ctx = await browser.newContext();
   page = await ctx.newPage();
@@ -77,26 +101,27 @@ test("author removes an og: card embed via the hover ×", async () => {
   await postMessage(page, ch, `read this ${extURL}`);
   await openChannel(page, ch);
 
-  const wrap = page.locator("#message-list .embed-wrap").filter({ has: page.locator("a.link-preview") });
-  await expect(wrap).toBeVisible();
+  const card = page.locator("#message-list a.link-preview");
+  await expect(card).toBeVisible();
 
-  // The × is author-only and inside the wrap; click it (force past the hover gate).
-  await wrap.locator(".embed-remove").click({ force: true });
+  // The × is appended into the card and sits at its top-right corner (not the gap
+  // above). Reveal is CSS row-hover; the force click hovers+clicks atomically.
+  await assertButtonOverEmbed(page, "#message-list a.link-preview");
+  await card.locator(".embed-remove").click({ force: true });
 
   // Card gone, URL now an angle-bracket plain link, message marked edited.
   await expect(page.locator("#message-list a.link-preview")).toHaveCount(0);
-  const link = page.locator(`#message-list a[href="${extURL}"]`);
-  await expect(link).toBeVisible();
+  await expect(page.locator(`#message-list a[href="${extURL}"]`)).toBeVisible();
   await expect(page.locator("#message-list .edited").last()).toBeVisible();
 
   await page.unroute("**/api/link-preview*");
 });
 
 test("author removes a bare-URL inline image via the hover ×", async () => {
-  // 2×2 opaque PNG so the otherwise-unreachable <img> lays out and is clickable
-  // (the offline sandbox can't fetch the remote host) — same trick as the gallery spec.
+  // A real 120×80 PNG so the <img> (and the anchor that hosts the ×) lay out at a
+  // sane size — the offline sandbox can't fetch the remote host, so we fulfill it.
   const PNG_B64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mNkYPhfz0AEYBxVSAYAAAEEAQB2L4hHAAAAAElFTkSuQmCC";
+    "iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAqElEQVR4nO3QAQkAIADAMOMY0YjGsoXCHTzA2Zhr60Lj+cEngQbdCjToVqBBtwINuhVo0K1Ag24FGnQr0KBbgQbdCjToVqBBtwINuhVo0K1Ag24FGnQr0KBbgQbdCjToVqBBtwINuhVo0K1Ag24FGnQr0KBbgQbdCjToVqBBtwINuhVo0K1Ag24FGnQr0KBbgQbdCjToVqBBtwINuhVo0K1Ag24FGnSrA7Pdvw1MhnooAAAAAElFTkSuQmCC";
   await page.route("https://example.invalid/**", (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: Buffer.from(PNG_B64, "base64") }),
   );
@@ -109,6 +134,10 @@ test("author removes a bare-URL inline image via the hover ×", async () => {
   const imgLink = page.locator("#message-list a.msg-image-url");
   await expect(imgLink).toBeVisible();
 
+  // The × is appended into the image anchor and sits over the image's top-right
+  // corner (the inner img margin is moved to the anchor so it doesn't push the ×
+  // into the gap above). Reveal is CSS row-hover; force click hovers+clicks atomically.
+  await assertButtonOverEmbed(page, "#message-list a.msg-image-url");
   await imgLink.locator(".embed-remove").click({ force: true });
 
   // Image gone, URL now a plain (non-image) link.

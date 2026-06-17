@@ -2238,11 +2238,15 @@ function messageRow(m, { grouped, isMod, canPin, pending = false }) {
   const isOwn = m.user_id === state.me.id;
   // Author-only "remove embed" affordance: a light × on the preview card (and on each
   // bare-URL inline image) that edits the post to <wrap> the URL, suppressing the
-  // embed. The card's URL is hideUrl; the images' URLs are decorated after the body
-  // HTML is built (see decorateImageEmbeds). Non-authors and pending rows get nothing.
-  const preview = rawPreview && isOwn && hideUrl
-    ? el("div", { class: "embed-wrap" }, rawPreview, embedRemoveButton(m, hideUrl))
-    : rawPreview;
+  // embed. The button is appended INTO the card/image element (its own .embed-host
+  // positioning box) — not a wrapper — so the embed's outer margin can't push the ×
+  // into the gap above it. The card's URL is hideUrl; image URLs are decorated after
+  // the body HTML is built (see decorateImageEmbeds). Non-authors / pending get none.
+  const preview = rawPreview;
+  if (preview && isOwn && hideUrl) {
+    preview.classList.add("embed-host");
+    preview.append(embedRemoveButton(m, hideUrl));
+  }
   const body = editing
     ? editorFor(m)
     : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
