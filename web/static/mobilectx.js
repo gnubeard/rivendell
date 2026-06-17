@@ -10,13 +10,15 @@
 //
 // Deps: el, $, getState (() => state, read fresh), api (emojiURL), emojiPicker
 // (openForReaction), and the message actions startReply, openForwardModal,
-// startEdit, togglePin, toggleMessageRead, deleteMessage.
+// startEdit, togglePin, toggleMessageRead, deleteMessage, removeEmbed (wrap a URL
+// in <> to drop its embed) + embedURLFor (the message's removable embed URL, or null).
 
 import { canModerate } from "./state.js";
 
 export function createMobileCtx({
   el, $, getState, api, emojiPicker,
   startReply, openForwardModal, startEdit, togglePin, toggleMessageRead, deleteMessage,
+  removeEmbed, embedURLFor,
 }) {
   // openMobileCtx shows the bottom-sheet action menu for a message.
   function openMobileCtx(m) {
@@ -61,6 +63,9 @@ export function createMobileCtx({
     if (!isDeleted) inner.append(closeBtn("↪  Forward", () => openForwardModal(m)));
     if (!isDeleted) inner.append(closeBtn("📋  Copy", () => navigator.clipboard.writeText(m.content)));
     if (isOwn && !isDeleted) inner.append(closeBtn("✏  Edit", () => startEdit(m)));
+    // Author-only "remove embed": shown only when the message renders an embed/image.
+    const embedURL = isOwn && !isDeleted ? embedURLFor(m) : null;
+    if (embedURL) inner.append(closeBtn("🚫  Remove embed", () => removeEmbed(m, embedURL)));
     if ((isMod || !!(activeCh && activeCh.is_dm)) && !isDeleted) inner.append(closeBtn(m.pinned_at ? "📌  Unpin" : "📌  Pin", () => togglePin(m)));
     const isRead = m.id <= (state.lastRead[m.channel_id] || 0);
     inner.append(closeBtn(isRead ? "👁  Mark unread" : "👁  Mark read", () => toggleMessageRead(m)));

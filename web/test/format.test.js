@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, decidePermalinkRoute, ROUTE_DEDUPE_MS, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI, BUILTIN_EMOJI_LIST } from "../static/format.js";
+import { formatMessage, escapeHtml, mentionsUser, atQuery, colonQuery, hashQuery, permalinkHash, parsePermalink, decidePermalinkRoute, ROUTE_DEDUPE_MS, pingLabel, extractMessagePermalinkURL, extractFirstBareURL, suppressEmbedURL, isImageURL, replySnippet, reactionTooltip, classifyReaction, shouldGroupMessage, GROUP_WINDOW_MS, BUILTIN_EMOJI, BUILTIN_EMOJI_LIST } from "../static/format.js";
 import { highlight } from "../static/syntax.js";
 
 // ---- reactionTooltip ----
@@ -200,10 +200,29 @@ test("markdown link URL is not also autolinked or imaged", () => {
   assert.ok(!out.includes("<img"), "explicit link text suppresses image embedding");
 });
 
+test("angle-bracket <url> renders a plain link with brackets stripped", () => {
+  const out = formatMessage("<https://example.com/page>");
+  assert.ok(out.includes('<a href="https://example.com/page" target="_blank" rel="noopener noreferrer">https://example.com/page</a>'), "plain link, no brackets in href/text");
+  assert.ok(!out.includes("&gt;</a>"), "closing bracket not glued onto the URL");
+  assert.ok(!out.includes("&lt;https"), "opening bracket consumed");
+});
+
+test("angle-bracket <imageurl> suppresses the inline image (plain link instead)", () => {
+  const out = formatMessage("<https://example.com/cat.gif>");
+  assert.ok(!out.includes("<img"), "no image embed for an angle-bracketed image URL");
+  assert.ok(out.includes('href="https://example.com/cat.gif"'), "renders as a plain link");
+});
+
+test("angle-bracket autolink preserves a query string with &", () => {
+  const out = formatMessage("<https://example.com/x?a=1&b=2>");
+  assert.ok(out.includes('href="https://example.com/x?a=1&amp;b=2"'), "full query kept, & escaped, no trailing bracket");
+});
+
 test("bare image URL renders inline as an image", () => {
   const out = formatMessage("https://example.com/cat.gif");
   assert.ok(out.includes('<img class="msg-image" src="https://example.com/cat.gif"'));
-  assert.ok(out.includes('class="msg-image-link"'), "image wrapped in a link to the full URL");
+  // Bare-URL images carry msg-image-url so the author "remove embed" affordance can find them.
+  assert.ok(out.includes('class="msg-image-link msg-image-url"'), "image wrapped in a link to the full URL");
 });
 
 test("image embedding can be disabled (search rows)", () => {
@@ -945,6 +964,59 @@ test("extractFirstBareURL returns null for no URL", () => {
 
 test("extractFirstBareURL also returns http:// bare URLs (server rejects non-https)", () => {
   assert.equal(extractFirstBareURL("http://github.com/foo"), "http://github.com/foo");
+});
+
+test("extractFirstBareURL skips an angle-bracketed <url> (embed opted out)", () => {
+  assert.equal(extractFirstBareURL("<https://github.com/foo>"), null);
+});
+
+test("extractFirstBareURL skips <url> but finds a later bare URL", () => {
+  assert.equal(
+    extractFirstBareURL("<https://github.com/foo> then https://wikipedia.org/x"),
+    "https://wikipedia.org/x",
+  );
+});
+
+test("extractMessagePermalinkURL skips an angle-bracketed permalink", () => {
+  assert.equal(extractMessagePermalinkURL("<https://chat.example.com/#c1/m2>", "https://chat.example.com"), null);
+});
+
+// suppressEmbedURL — the author "remove embed" rewrite
+test("suppressEmbedURL wraps the first bare occurrence of the URL in <>", () => {
+  assert.equal(
+    suppressEmbedURL("look https://example.com/cat.gif nice", "https://example.com/cat.gif"),
+    "look <https://example.com/cat.gif> nice",
+  );
+});
+
+test("suppressEmbedURL leaves the URL outside trailing punctuation", () => {
+  assert.equal(
+    suppressEmbedURL("see https://example.com/x.png.", "https://example.com/x.png"),
+    "see <https://example.com/x.png>.",
+  );
+});
+
+test("suppressEmbedURL ignores a markdown-linked or already-wrapped URL", () => {
+  assert.equal(
+    suppressEmbedURL("[pic](https://example.com/c.png)", "https://example.com/c.png"),
+    "[pic](https://example.com/c.png)",
+  );
+  assert.equal(
+    suppressEmbedURL("<https://example.com/c.png>", "https://example.com/c.png"),
+    "<https://example.com/c.png>",
+  );
+});
+
+test("suppressEmbedURL is a no-op when the URL isn't present", () => {
+  assert.equal(suppressEmbedURL("nothing here", "https://example.com/x"), "nothing here");
+});
+
+test("isImageURL recognizes image extensions, bare or with query/trailing dot", () => {
+  assert.equal(isImageURL("https://x.com/a.JPG"), true);
+  assert.equal(isImageURL("https://x.com/a.png?v=2"), true);
+  assert.equal(isImageURL("https://x.com/a.gif."), true);
+  assert.equal(isImageURL("https://x.com/page"), false);
+  assert.equal(isImageURL(""), false);
 });
 
 // --- decidePermalinkRoute: the notification-click routing decision -----------

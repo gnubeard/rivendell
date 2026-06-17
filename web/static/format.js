@@ -18,7 +18,8 @@
 // Supported: ```fenced code```, `inline code`, **bold**, *italic*, _italic_,
 // ~~strike~~, > blockquote (recursive), # headers, * / - lists, | tables |,
 // [text](url) links, autolinked http(s) URLs, inline images (a bare URL pointing
-// at an image renders the image), and newlines.
+// at an image renders the image), <url> angle-bracket autolinks (a plain link with
+// the embed/image suppressed), and newlines.
 //
 // This module is pure (no DOM, no globals) so it can be unit-tested under Node.
 
@@ -121,12 +122,34 @@ function inlineMarkup(escaped, meLower, channels, usernames) {
   return out;
 }
 
-// LINK_RE matches, in priority order, a markdown link [text](url) OR a bare
-// http(s) URL. Run against the *escaped* string: `[`, `]`, `(`, `)` survive
-// escaping untouched, and only https?:// schemes are accepted (so `[x](javascript:…)`
-// and a bare `javascript:` never become links). The markdown URL stops at `)` or
-// whitespace; the bare URL stops at whitespace (the `<` guard is moot post-escape).
-const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+// makeLinkRe builds the link-scanning regex. It has three ordered alternatives:
+//   1. <autolink>          → m[1]  an angle-bracketed URL — a plain link, NEVER an
+//                                  image or preview (the brackets opt the URL out).
+//   2. [text](url)         → m[2] text, m[3] url   a markdown link.
+//   3. bare http(s) URL    → m[4]  an unadorned URL (image/preview-eligible).
+// Only https?:// schemes are accepted (so `[x](javascript:…)` and a bare
+// `javascript:` never become links). The sole thing that differs between the two
+// call sites is how the angle brackets are spelled: inline() scans the HTML-ESCAPED
+// string, where `<`/`>` have become `&lt;`/`&gt;`; the extract*/suppress helpers scan
+// RAW text, where they're literal. One source, two compiled instances — this replaces
+// the five identical literals that used to be copy-pasted (and drift) apart.
+function makeLinkRe(escaped) {
+  const lt = escaped ? "&lt;" : "<";
+  const gt = escaped ? "&gt;" : ">";
+  // The autolink body is non-greedy up to the closing bracket so an escaped `&amp;`
+  // (a `&` in the URL's query) inside it isn't mistaken for the `&gt;` terminator.
+  return new RegExp(
+    `${lt}(https?:\\/\\/[^\\s]+?)${gt}` +
+    `|\\[([^\\]\\n]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)` +
+    `|(https?:\\/\\/[^\\s<]+)`,
+    "g",
+  );
+}
+
+// LINK_RE scans escaped HTML (for inline()); RAW_LINK_RE scans raw text (for the
+// extract*/suppress helpers below). Each consumer resets .lastIndex before use.
+const LINK_RE = makeLinkRe(true);
+const RAW_LINK_RE = makeLinkRe(false);
 
 // BLOB_IMG_RE matches the image markdown written by the client for uploaded blobs:
 // ![alt](/api/blobs/<sha256-hex>). The path is a controlled server-side route and
@@ -155,15 +178,21 @@ function linkAnchor(url, text) {
   return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 }
 
-function imageEmbed(url) {
-  return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="msg-image-link">` +
+// imageEmbed renders a URL as an inline image. urlEmbed marks the ones derived
+// from a *bare* URL in the text (vs an uploaded blob's ![](…) markdown): only those
+// can be un-embedded by wrapping the URL in <>, so the author "remove embed"
+// affordance keys on the .msg-image-url class to find exactly them.
+function imageEmbed(url, urlEmbed) {
+  const cls = urlEmbed ? "msg-image-link msg-image-url" : "msg-image-link";
+  return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}">` +
     `<img class="msg-image" src="${url}" alt="" loading="lazy"></a>`;
 }
 
 // inline renders an escaped, non-code, non-emoji run. It SPLITS out links the same
 // way inlineWithEmoji splits out emoji: the markdown pass (inlineMarkup) only runs
-// on the gaps between links, so it can never mangle a URL. A bare URL pointing at
-// an image renders the image inline (unless embedImages is false, e.g. in search
+// on the gaps between links, so it can never mangle a URL. An <autolink> is always a
+// plain link (the brackets are stripped, never an image/preview). A bare URL pointing
+// at an image renders the image inline (unless embedImages is false, e.g. in search
 // rows, where it falls back to a plain link). A bare URL matching hideUrl is
 // suppressed entirely — its YouTube embed (or message-permalink card) renders it instead.
 function inline(escaped, meLower, channels, embedImages, hideUrl, usernames) {
@@ -174,15 +203,18 @@ function inline(escaped, meLower, channels, embedImages, hideUrl, usernames) {
   while ((m = LINK_RE.exec(escaped)) !== null) {
     out += inlineMarkup(escaped.slice(last, m.index), meLower, channels, usernames);
     if (m[1] !== undefined) {
+      // <autolink>: a plain link with the brackets stripped — never an image/preview.
+      out += linkAnchor(m[1], m[1]);
+    } else if (m[2] !== undefined) {
       // [text](url): keep the author's text (with markup); never an image.
-      out += linkAnchor(m[2], inlineMarkup(m[1], meLower, channels, usernames));
+      out += linkAnchor(m[3], inlineMarkup(m[2], meLower, channels, usernames));
     } else {
-      const raw = m[3];
+      const raw = m[4];
       if (hideUrl && raw === hideUrl) {
         // suppressed: YouTube embed or message-permalink card renders this URL
       } else {
         const { url, trail } = splitTrailingDots(raw);
-        out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url) : linkAnchor(url, url);
+        out += embedImages && IMAGE_URL_RE.test(url) ? imageEmbed(url, true) : linkAnchor(url, url);
         out += trail;
       }
     }
@@ -321,11 +353,11 @@ const YOUTUBE_ID_RE = /^https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*
 // text, or null. Markdown-linked URLs are skipped (author chose the text).
 export function extractYouTubeVideoID(text) {
   if (!text) return null;
-  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  RAW_LINK_RE.lastIndex = 0;
   let m;
-  while ((m = re.exec(String(text))) !== null) {
-    if (m[3] !== undefined) {
-      const id = YOUTUBE_ID_RE.exec(m[3]);
+  while ((m = RAW_LINK_RE.exec(String(text))) !== null) {
+    if (m[4] !== undefined) {
+      const id = YOUTUBE_ID_RE.exec(m[4]);
       if (id) return id[1];
     }
   }
@@ -338,11 +370,11 @@ export function extractYouTubeVideoID(text) {
 // author chose a label; those already render as plain links with their text).
 export function extractMessagePermalinkURL(text, origin) {
   if (!text || !origin) return null;
-  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  RAW_LINK_RE.lastIndex = 0;
   let m;
-  while ((m = re.exec(String(text))) !== null) {
-    if (m[3] === undefined) continue;
-    const url = m[3];
+  while ((m = RAW_LINK_RE.exec(String(text))) !== null) {
+    if (m[4] === undefined) continue;
+    const url = m[4];
     if (!url.startsWith(origin)) continue;
     const rest = url.slice(origin.length); // e.g. "/#c28/m1684"
     const pl = rest.match(/^\/?#c(\d+)\/m(\d+)$/);
@@ -355,10 +387,10 @@ export function extractMessagePermalinkURL(text, origin) {
 // in text, or null. Used to locate URLs eligible for an external link preview.
 export function extractFirstBareURL(text) {
   if (!text) return null;
-  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  RAW_LINK_RE.lastIndex = 0;
   let m;
-  while ((m = re.exec(String(text))) !== null) {
-    if (m[3] !== undefined) return splitTrailingDots(m[3]).url;
+  while ((m = RAW_LINK_RE.exec(String(text))) !== null) {
+    if (m[4] !== undefined) return splitTrailingDots(m[4]).url;
   }
   return null;
 }
@@ -372,14 +404,43 @@ export function extractHideURL(text, origin) {
     const pl = extractMessagePermalinkURL(text, origin);
     if (pl) return pl.url;
   }
-  const re = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g;
+  RAW_LINK_RE.lastIndex = 0;
   let m;
-  while ((m = re.exec(String(text))) !== null) {
-    if (m[3] !== undefined && YOUTUBE_ID_RE.test(m[3])) {
-      return m[3];
+  while ((m = RAW_LINK_RE.exec(String(text))) !== null) {
+    if (m[4] !== undefined && YOUTUBE_ID_RE.test(m[4])) {
+      return m[4];
     }
   }
   return null;
+}
+
+// isImageURL reports whether a bare URL would render as an inline image (its path
+// ends in a known image extension). Exported so callers outside the render pass —
+// e.g. the mobile "remove embed" affordance — can recognize a bare-URL image embed.
+export function isImageURL(url) {
+  return !!url && IMAGE_URL_RE.test(splitTrailingDots(String(url)).url);
+}
+
+// suppressEmbedURL rewrites `content` so the first BARE occurrence of `url` becomes
+// an <autolink> (angle-bracket wrapped) — which renders as a plain link with no
+// inline image or preview card. This is the edit the author's "remove embed"
+// affordance applies. `url` always comes from one of the extract* helpers above, so
+// it's known to be bare (a markdown [text](url) or an already-<wrapped> URL is never
+// returned by them and so is left untouched here). Trailing punctuation peeled off by
+// splitTrailingDots stays outside the brackets. Returns content unchanged if no bare
+// occurrence is found. Pure — the caller persists the result via editMessage.
+export function suppressEmbedURL(content, url) {
+  if (!content || !url) return content;
+  RAW_LINK_RE.lastIndex = 0;
+  let m;
+  while ((m = RAW_LINK_RE.exec(String(content))) !== null) {
+    if (m[4] === undefined) continue;
+    const bare = splitTrailingDots(m[4]).url;
+    if (bare !== url) continue;
+    const i = m.index; // a bare match starts at m.index (no preceding group matched)
+    return content.slice(0, i) + "<" + bare + ">" + content.slice(i + bare.length);
+  }
+  return content;
 }
 
 // EMOJI_RE matches a :shortcode: token. Shortcodes are [+a-z0-9_]{2,32}; the

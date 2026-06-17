@@ -6,7 +6,7 @@
 
 import { api } from "./api.js";
 import { connectRealtime } from "./ws.js";
-import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, replySnippet, dataUriToFile, reactionTooltip, classifyReaction, shouldGroupMessage, BUILTIN_EMOJI } from "./format.js";
+import { formatMessage, mentionsUser, permalinkHash, parsePermalink, extractHideURL, extractFirstBareURL, isImageURL, suppressEmbedURL, replySnippet, dataUriToFile, reactionTooltip, classifyReaction, shouldGroupMessage, BUILTIN_EMOJI } from "./format.js";
 import * as S from "./state.js";
 import {
   initSecret,
@@ -2150,6 +2150,53 @@ function renderSecretView(wrap, secretSess, atBottom, prevTop) {
   else wrap.scrollTop = prevTop;
 }
 
+// embedRemoveButton builds the author-only "remove embed" control (a light ×) shown
+// on a preview card or a bare-URL inline image. Clicking edits the message to wrap
+// `url` in <> so the embed/image collapses to a plain link. preventDefault keeps the
+// surrounding anchor (the image link / og card) from activating the same click.
+function embedRemoveButton(m, url) {
+  return el("button", {
+    class: "embed-remove",
+    title: "Remove embed",
+    "aria-label": "Remove embed",
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); removeEmbed(m, url); },
+  }, "×");
+}
+
+// removeEmbed persists the <wrap> edit (the embed-suppressing rewrite); the resulting
+// message.update broadcast re-renders the row without the embed. A no-op rewrite
+// (URL not found bare) does nothing.
+function removeEmbed(m, url) {
+  const next = suppressEmbedURL(m.content, url);
+  if (next === m.content) return;
+  guard(() => api.editMessage(m.id, next));
+}
+
+// embedURLFor returns the URL of the message's primary embed (preview card, else the
+// first bare-URL inline image) — the one a "remove embed" action would <wrap> — or
+// null when the message shows no removable embed. The desktop affordance attaches a
+// button per visible embed directly; this single-URL view is for the mobile
+// long-press sheet. buildLinkPreview is idempotent (the row already warmed its cache).
+function embedURLFor(m) {
+  const card = buildLinkPreview(m.content);
+  if (card) return extractHideURL(m.content, location.origin) || card._previewUrl || null;
+  const bare = extractFirstBareURL(m.content);
+  return bare && isImageURL(bare) ? bare : null;
+}
+
+// decorateImageEmbeds adds the author "remove embed" × to each bare-URL inline image
+// in a freshly built body — the .msg-image-url anchors format.js tags. Uploaded blob
+// images (![](…) markdown) are untagged and skipped: there's no URL to wrap. The
+// anchor becomes the positioning host for its overlay button.
+function decorateImageEmbeds(body, m) {
+  body.querySelectorAll("a.msg-image-url").forEach((a) => {
+    const url = a.getAttribute("href");
+    if (!url) return;
+    a.classList.add("embed-host");
+    a.append(embedRemoveButton(m, url));
+  });
+}
+
 // messageActions builds the hover action row for one message. React and Reply are
 // always present; Forward hides on a tombstone; Edit/Pin/Delete are gated by the
 // ownership/role flags the caller computed (isOwn/canPin/canDelete).
@@ -2181,17 +2228,25 @@ function messageRow(m, { grouped, isMod, canPin, pending = false }) {
   // reply quote (already known) but skips actions/reactions/preview-fetch/permalink.
   const interactive = !editing && !pending;
   const replyQuote = editing ? null : buildReplyQuote(m);
-  const preview = interactive ? buildLinkPreview(m.content) : null;
-  const hideUrl = preview
-    ? (extractHideURL(m.content, location.origin) || preview._previewUrl || null)
+  const rawPreview = interactive ? buildLinkPreview(m.content) : null;
+  const hideUrl = rawPreview
+    ? (extractHideURL(m.content, location.origin) || rawPreview._previewUrl || null)
     : null;
-  const body = editing
-    ? editorFor(m)
-    : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
   const mentionsMe = m.user_id !== state.me.id &&
     (mentionsUser(m.content, state.me.username) || m.reply_to_user_id === state.me.id);
 
   const isOwn = m.user_id === state.me.id;
+  // Author-only "remove embed" affordance: a light × on the preview card (and on each
+  // bare-URL inline image) that edits the post to <wrap> the URL, suppressing the
+  // embed. The card's URL is hideUrl; the images' URLs are decorated after the body
+  // HTML is built (see decorateImageEmbeds). Non-authors and pending rows get nothing.
+  const preview = rawPreview && isOwn && hideUrl
+    ? el("div", { class: "embed-wrap" }, rawPreview, embedRemoveButton(m, hideUrl))
+    : rawPreview;
+  const body = editing
+    ? editorFor(m)
+    : el("div", { class: "msg-body", html: formatMessage(m.content, state.me.username, state.emojis, { hideUrl, channels: state.channels, users: state.users }) + (m.edited_at ? ' <span class="edited">(edited)</span>' : "") });
+  if (interactive && isOwn) decorateImageEmbeds(body, m);
   const canDelete = isOwn || isMod; // non-mods can only delete their own
   // Anyone who can see a message can react to it, so "react" is always present;
   // edit/pin/delete stay conditional (see messageActions).
@@ -3674,6 +3729,8 @@ const mobileCtx = createMobileCtx({
   togglePin,
   toggleMessageRead,
   deleteMessage,
+  removeEmbed,
+  embedURLFor,
 });
 const openMobileCtx = mobileCtx.openMobileCtx;
 const closeMobileCtx = mobileCtx.closeMobileCtx;

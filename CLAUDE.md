@@ -73,7 +73,7 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               modals, mobile-ctx, video-grid, notifications,
                               non-admin, bot-dm, history, composer-richtext,
                               screen-share, live-append, optimistic-send,
-                              lightbox-gallery);
+                              lightbox-gallery, remove-embed);
                               Chromium by default,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
                               (Safari-engine), opt-in via E2E_WEBKIT — see
@@ -119,7 +119,7 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
   Private non-DM channels include all admins; DMs are strictly members-only.
 - `users.status` is durable — `onPresenceChange` must **never** write it. `TestStatusDurableAcrossReconnect` guards this.
 - Presence debounce (~1s, `schedulePresenceUpdate`) — don't "simplify" to immediate apply. Own user is exempt.
-- `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last.
+- `format.js`: escape first, then markdown pass. Links extracted *before* `inlineMarkup` — never refactor to linkify-last. The link scanner is **one** regex built by `makeLinkRe(escaped)`: `LINK_RE` (escaped-HTML context, for `inline()`) and `RAW_LINK_RE` (raw text, for the `extract*`/`suppressEmbedURL` helpers) are its two instances — don't re-introduce per-function copies. Groups: `m[1]` `<autolink>`, `m[2]`/`m[3]` `[text](url)`, `m[4]` bare URL. An `<angle-bracketed>` URL is a deliberate opt-OUT: it renders as a plain link (never an image/preview) and every `extract*` skips it. The author "remove embed" affordance (a hover × on a card / `.msg-image-url` image, or the mobile long-press sheet) is just `suppressEmbedURL` wrapping the embed's URL in `<>` via an edit. `e2e/remove-embed` pins it.
 - `composer-richtext.js`: live composer decoration **mirrors** `format.js`'s inline rules (bold before italic, code pulled out first) — keep them in lockstep; the parity test guards it. Load-bearing invariant: `decorate` only WRAPS runs (markers kept, dimmed), never adds/removes a character, so `.value` stays the exact markdown source and the facade's text-offset caret math holds. The composer's `input` handler captures the caret offsets BEFORE its image-harvest/flatten mutations and threads them to `rich.onInput(start,end)` — those mutations destroy the live Selection but not the offsets.
   - **Decoration toggle is ORTHOGONAL to behavior.** `prefs.loadRichText()` (default ON, profile checkbox `#richtext-enable`) only controls whether markdown is *rendered styled*; Ctrl-B/I and undo/redo work either way. Don't re-couple them.
   - **Undo/redo is OURS, always-on.** Because both the decoration rewrite and Ctrl-B/I mutate the field programmatically (innerHTML / `.value`), the browser's native history is desynced and unreliable — so `createUndoHistory` (pure, unit-tested) replaces it wholesale and `handleKeydown` preventDefaults Ctrl/Cmd-Z, Cmd-Shift-Z, Ctrl-Y. Typing coalesces into word-ish steps; Ctrl-B/I and the URL-wrap paste (`rich.commit()`) are discrete steps. Any out-of-band `.value` set (channel switch, send-clear, error-restore) must call `rich.resetHistory()` so undo can't bridge that boundary.
