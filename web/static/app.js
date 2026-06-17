@@ -1,7 +1,7 @@
 // app.js — the rivendell web client. Wires the API, websocket, formatter, and the
 // pure state reducer to the DOM. Deliberately framework-free.
 //
-// Big file. It's mapped: 8 `// ▌ REGION N` banners (coarse) over 30 `// --- `
+// Big file. It's mapped: 8 `// ▌ REGION N` banners (coarse) over 31 `// --- `
 // section markers (fine). Read docs/atlas.md first for the overview + the index.
 
 import { api } from "./api.js";
@@ -593,22 +593,26 @@ function sendWS(msg) {
 // MAP — the inbound-WS dispatch table. Every frame is first folded into `state` by
 // the PURE reducer (S.applyEvent, total in state.js); what remains here is "given
 // the event type, which DOM re-renders fire" plus the voice/secret hand-offs. It
-// writes `state` only through the reducers, never ad hoc.
+// writes `state` only through the reducers, never ad hoc. Repaints route through
+// scheduleRender (batched — one paint per task; see the render-batching note) or,
+// for the message pane, the incremental appendMessageRow/patchMessageRow fast paths
+// with a full renderMessages fallback.
 //
 //   presence.update    → schedulePresenceUpdate (DEBOUNCED ~1.5s), early-return
-//   presence*/user.update → renderMembers · renderMe · renderDMs
-//                           (user.update also: avatar cache-bust + renderMessages)
-//   channel*           → renderChannels · renderDMs (+ header/members if active)
+//   presence*/user.update → schedule members · me · dms
+//                           (user.update also: avatar cache-bust + schedule messages)
+//   channel*           → schedule channels · dms (+ header/members if active)
 //   member.remove      → me: drop/reload active channel · other: prune the roster
 //   hello              → server version ≠ ours → show #update-banner (deploy happened)
-//   read/mute.update   → renderSidebarBadges (+ renderMessages if active)
-//   typing.update      → renderTypingIndicator (if active)
-//   emoji.add/delete   → renderMessages · picker.rerender · refreshEmojiManagerIfOpen
-//   reaction.update    → renderMessages + refreshPinsIfOpen (if active)
+//   read/mute.update   → schedule channels·dms·total (+ messages if active)
+//   typing.update      → schedule typing (if active)
+//   emoji.add/delete   → schedule messages · picker.rerender · refreshEmojiManagerIfOpen
+//   reaction.update    → patchMessageRow (full-render fallback) + refreshPinsIfOpen
 //   voice.* / secret.* → voiceUI.onVoiceEvent / handleSecretEvent
 //   message*           → classifyIncomingMessage (PURE, unread.js) decides
 //                        unread/mention/ping; here is only the DOM fallout (DM
-//                        resort, renderMessages, read cursor, badges, firePing)
+//                        resort, append/patch/full message render, read cursor,
+//                        badges, firePing)
 //
 // The unread/mention/ping matrix is intentionally NOT inlined — it's pure and
 // unit-tested in unread.js. Keep the policy there; keep only the side effects here.
@@ -641,28 +645,34 @@ function handleRealtimeEvent(evt) {
   if (evt.type === "read.update" || evt.type === "read.unread" || evt.type === "mute.update") {
     // A session caught up on / marked unread / muted a channel (state.applyEvent
     // already folded it in); reflect the badges and the global total.
-    renderSidebarBadges();
-    // Keep 👁 button labels current in the open channel.
+    scheduleRender("channels", "dms", "total");
+    // Keep 👁 titles current in the open channel — a targeted refresh, NOT a full
+    // render. (This event self-echoes back to the session that marked the channel
+    // read, so a full render here would wipe an active text selection on every
+    // incoming message; the divider marker is local session state a remote read
+    // doesn't move, so titles are the only pane effect.)
     if ((evt.type === "read.update" || evt.type === "read.unread") &&
         evt.payload.channel_id === state.activeChannelId) {
-      renderMessages();
+      refreshReadMarks();
     }
   }
   if (evt.type === "typing.update") {
-    if (evt.payload.channel_id === state.activeChannelId) renderTypingIndicator();
+    if (evt.payload.channel_id === state.activeChannelId) scheduleRender("typing");
   }
   if (evt.type === "emoji.add" || evt.type === "emoji.delete") {
     // The registry changed: re-render the open messages so :shortcode: tokens
-    // start/stop rendering as images, and refresh any open emoji surfaces.
-    renderMessages();
+    // start/stop rendering as images (a full pass — any message may carry one),
+    // and refresh any open emoji surfaces.
+    scheduleRender("messages");
     if (emojiPicker.isOpen()) emojiPicker.rerender();
     refreshEmojiManagerIfOpen();
   }
   if (evt.type === "reaction.update") {
-    // applyEvent already folded the new groups into the message; just repaint
-    // the open channel (and the pins panel, which renders reactions too).
+    // applyEvent already folded the new groups into the message; patch just that
+    // row (and the pins panel, which renders reactions too). A full render only if
+    // the row isn't on screen to patch.
     if (evt.payload.channel_id === state.activeChannelId) {
-      renderMessages();
+      if (!patchMessageRow(evt.payload.message_id)) scheduleRender("messages");
       refreshPinsIfOpen();
     }
   }
@@ -687,11 +697,9 @@ function onPresenceOrUserUpdate(evt) {
     avatarVersion[evt.payload.id] = Date.now();
     imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
   }
-  renderMembers();
-  renderMe();
-  renderDMs(); // a DM row shows the other participant's name + presence
+  scheduleRender("members", "me", "dms"); // a DM row shows the other participant's name + presence
   // Author display name / avatar in the open message list may have changed.
-  if (evt.type === "user.update") renderMessages();
+  if (evt.type === "user.update") scheduleRender("messages");
 }
 
 // onChannelEvent repaints the channel/DM lists on any channel.* event, and — when it
@@ -699,8 +707,7 @@ function onPresenceOrUserUpdate(evt) {
 // header. A topic edit by another mod arrives here too; skip the header repaint while
 // I'm mid-edit (an open input under #channel-topic) so I don't clobber my own input.
 function onChannelEvent(evt) {
-  renderChannels();
-  renderDMs();
+  scheduleRender("channels", "dms");
   if (evt.payload && evt.payload.id === state.activeChannelId) {
     if (!$("#channel-topic").querySelector("input")) {
       renderChannelHeader(state.channels[state.activeChannelId]);
@@ -756,15 +763,36 @@ function onMessageEvent(evt) {
   });
   // applyEvent bumped last_message_at so the DM list stays sorted by recency;
   // reflect a DM I just sent (ch is post-fold, already current).
-  if (d.isNewFromMe && ch && ch.is_dm) renderDMs();
+  if (d.isNewFromMe && ch && ch.is_dm) scheduleRender("dms");
   if (active) {
-    if (d.isNewFromMe && historyPaging.isViewingHistory(cid)) {
+    const viewingHistory = historyPaging.isViewingHistory(cid);
+    if (d.isNewFromMe && viewingHistory) {
       // I sent while viewing a history window (below the live tail): reload the
       // channel so my message shows at the bottom in proper context, not appended
       // after a gap of unloaded messages.
       loadChannel(cid);
+    } else if (evt.type === "message.new") {
+      // New message at the live tail: append just this row — no full rebuild, so a
+      // reader's text selection, in-flight images, and scroll all survive. Fall back
+      // to a full render when we can't safely append: a secret view, a history
+      // window, a system line, or a scrolled-up reader (who may need the "New
+      // messages" divider drawn the way renderMessages does it).
+      const m = (state.messages[cid] || []).find((x) => x.id === evt.payload.id);
+      // My own send may already be on screen as an optimistic row — reconcile it
+      // (replace the dimmed row in place) instead of appending a second copy.
+      if (m && reconcileOptimistic(m)) {
+        // handled: the optimistic row became the real one
+      } else {
+        const ml = $("#message-list");
+        const nearBottom = !ml || isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight);
+        const canAppend = m && !m.is_system && !inSecretView(cid) && !viewingHistory && (d.isNewFromMe || nearBottom);
+        if (canAppend) appendMessageRow(m, d.isNewFromMe); // mine forces a jump to the newest
+        else renderMessages(d.isNewFromMe);
+      }
+    } else if (evt.type === "message.update" && patchMessageRow(evt.payload.id)) {
+      // An edit or pin/unpin touches one row — swapped in place above.
     } else {
-      renderMessages(d.isNewFromMe); // mine forces a jump to the newest
+      renderMessages(); // message.delete (collapses runs), or a patch that didn't apply
     }
     refreshPinsIfOpen(); // a pin/unpin arrives as a message.update
     if (focused && d.isNewFromOther) {
@@ -787,7 +815,7 @@ function onMessageEvent(evt) {
   if (d.countUnread) {
     state = S.bumpUnread(state, cid);
     if (d.countMention) state = S.bumpMention(state, cid);
-    renderSidebarBadges();
+    scheduleRender("channels", "dms", "total");
   }
   // Chime + (if opted in) an OS notification for pings; plain channel chatter stays
   // silent with just the badge.
@@ -883,6 +911,45 @@ async function resync() {
 // ▌ state, and the channel header. Five sub-sections below.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- rendering ---------------------------------------------------------------
+
+// Render batching. Event-driven repaints mark a SURFACE dirty and coalesce into a
+// single paint on the next task, instead of every inbound WS frame rebuilding every
+// surface synchronously (one message used to fire renderMessages + renderChannels +
+// renderDMs + the title total, each a full innerHTML rebuild). Only the realtime
+// handlers route through here; the synchronous load/jump/scroll paths (loadChannel,
+// jumpToMessage, resync, selectChannel) keep calling the render fns DIRECTLY — they
+// measure scroll right after painting and must not be deferred.
+//
+// The flush runs on a 0ms timer, NOT requestAnimationFrame: rAF is paused while the
+// tab is hidden, but the unread total in the document title must keep climbing in a
+// backgrounded tab. A 0ms timer fires either way and still collapses a burst — every
+// frame in the burst marks its surfaces and finds the flush already scheduled.
+const RENDER_SURFACES = {
+  channels: () => renderChannels(),
+  dms: () => renderDMs(),
+  members: () => renderMembers(),
+  me: () => renderMe(),
+  total: () => notifUI.renderNotificationTotal(),
+  typing: () => renderTypingIndicator(),
+  messages: () => renderMessages(), // FULL rebuild, default args (holds scroll position)
+};
+const dirtySurfaces = new Set();
+let renderFlushPending = false;
+function scheduleRender(...surfaces) {
+  for (const s of surfaces) dirtySurfaces.add(s);
+  if (renderFlushPending) return;
+  renderFlushPending = true;
+  setTimeout(flushRenders, 0);
+}
+function flushRenders() {
+  renderFlushPending = false;
+  const due = dirtySurfaces;
+  // Fixed order, deterministic; a render fn re-scheduling lands in a fresh batch.
+  for (const key of Object.keys(RENDER_SURFACES)) {
+    if (due.has(key)) RENDER_SURFACES[key]();
+  }
+  due.clear();
+}
 
 // applyTheme paints the chosen UI theme by setting data-theme on <html>; the CSS
 // re-points its color variables for that theme (style.css). normalizeTheme
@@ -1332,12 +1399,12 @@ async function markActiveChannelRead() {
   if (state.unread[cid] || state.mentions[cid]) {
     state = S.clearUnread(state, cid);
     state = S.clearMention(state, cid);
-    renderSidebarBadges();
+    scheduleRender("channels", "dms", "total");
   }
   if (unread.alreadyMarked(cid, newest)) return; // server already knows
   unread.recordMarked(cid, newest);
   state = S.setLastRead(state, cid, newest);
-  renderMessages(); // update 👁 button labels now that cursor advanced
+  refreshReadMarks(); // update 👁 titles in place — no full rebuild, so selection survives
   try {
     await api.markRead(cid, newest);
   } catch (e) {
@@ -1647,6 +1714,9 @@ function beginTopicEdit() {
 // --- message loading, history & scrolling ------------------------------------
 
 async function loadChannel(id) {
+  // The pane is about to be rebuilt — drop any optimistic rows tracked for the
+  // channel we're leaving (their DOM is wiped; the entries would only dangle).
+  clearPendingSends();
   // Startup path calls loadChannel directly without selectChannel, so the divider
   // may not be set yet — seed it from the live cursor only when there are actual
   // unreads (same rule as selectChannel; idempotent).
@@ -2070,7 +2140,7 @@ function messageActions(m, { isOwn, canPin, canDelete, isRead }) {
       onclick: (e) => { e.stopPropagation(); emojiPicker.openForReaction(m.id, e.currentTarget); } }, "😄"),
     el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
     !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
-    el("button", { class: "msg-act", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
+    el("button", { class: "msg-act msg-read-toggle", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
     isOwn ? el("button", { class: "msg-act", title: "Edit", onclick: () => startEdit(m) }, "✏") : null,
     canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", onclick: () => togglePin(m) }, "📌") : null,
     canDelete ? el("button", { class: "msg-act danger", title: "Delete", onclick: () => deleteMessage(m) }, "🗑") : null);
@@ -2081,11 +2151,18 @@ function messageActions(m, { isOwn, canPin, canDelete, isRead }) {
 // preview, reactions, and the hover action row. While this message is being edited
 // inline (m.id === editingMessageId) the body becomes the editor and the
 // quote/preview/reactions/actions are suppressed. isMod/canPin are computed once
-// per render by the caller and threaded through.
-function messageRow(m, { grouped, isMod, canPin }) {
+// per render by the caller and threaded through. `pending` marks an optimistic row
+// (a just-sent message not yet acked by the server): it dims the row, shows
+// "sending…" for the time, and suppresses the interactive affordances (actions,
+// reactions, link-preview fetch, permalink) until the real message.new echo
+// reconciles it (see showOptimisticSend / reconcileOptimistic).
+function messageRow(m, { grouped, isMod, canPin, pending = false }) {
   const editing = m.id === editingMessageId;
+  // Interactive affordances only on a real, non-editing row. A pending row keeps its
+  // reply quote (already known) but skips actions/reactions/preview-fetch/permalink.
+  const interactive = !editing && !pending;
   const replyQuote = editing ? null : buildReplyQuote(m);
-  const preview = editing ? null : buildLinkPreview(m.content);
+  const preview = interactive ? buildLinkPreview(m.content) : null;
   const hideUrl = preview
     ? (extractHideURL(m.content, location.origin) || preview._previewUrl || null)
     : null;
@@ -2100,20 +2177,23 @@ function messageRow(m, { grouped, isMod, canPin }) {
   // Anyone who can see a message can react to it, so "react" is always present;
   // edit/pin/delete stay conditional (see messageActions).
   const isRead = m.id <= (state.lastRead[state.activeChannelId] || 0);
-  const rowActions = editing ? null : messageActions(m, { isOwn, canPin, canDelete, isRead });
-  const reactions = editing ? null : reactionsRow(m);
+  const rowActions = interactive ? messageActions(m, { isOwn, canPin, canDelete, isRead }) : null;
+  const reactions = interactive ? reactionsRow(m) : null;
   const pinMark = m.pinned_at ? el("span", { class: "pin-mark", title: "Pinned" }, "📌") : null;
   let cls = "msg";
   if (m.pinned_at) cls += " pinned";
   if (mentionsMe) cls += " mentioned";
+  if (pending) cls += " pending";
   if (m.id === flashMessageId) cls += " msg-anchor"; // jumped-to highlight, applied each render
 
-  const permalink = el("a", {
-    class: "msg-time",
-    href: permalinkHash(state.activeChannelId, m.id),
-    title: "Permalink",
-    onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
-  }, formatTime(m.created_at));
+  const timeEl = pending
+    ? el("span", { class: "msg-time msg-time-pending", title: "Sending…" }, "sending…")
+    : el("a", {
+        class: "msg-time",
+        href: permalinkHash(state.activeChannelId, m.id),
+        title: "Permalink",
+        onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
+      }, formatTime(m.created_at));
 
   if (grouped) {
     return el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, replyQuote, body, preview, reactions, rowActions));
@@ -2134,7 +2214,7 @@ function messageRow(m, { grouped, isMod, canPin }) {
         el("span", author
           ? { class: "msg-author clickable", title: "View profile", onclick: openCard }
           : { class: "msg-author" }, author ? author.display_name : "unknown"),
-        permalink,
+        timeEl,
         pinMark
       ),
       replyQuote,
@@ -2144,6 +2224,191 @@ function messageRow(m, { grouped, isMod, canPin }) {
       rowActions
     )
   );
+}
+
+// --- incremental message updates ---------------------------------------------
+//
+// The full renderMessages above wipes #message-list and rebuilds every loaded row
+// (re-running formatMessage + buildLinkPreview on each). That's correct but wipes
+// any active text selection, reflows in-flight images, and is O(N) per event. The
+// helpers below patch the ONE row an event actually touched — the fast path the
+// realtime handlers prefer, falling back to a full render when a row can't be
+// surgically updated. Every row carries data-msg-id, so targeting is cheap.
+
+// inSecretView reports whether `channelId` is showing the in-memory OTR transcript
+// (an active or ended secret session) rather than server history — the modes where
+// these incremental paths don't apply (secret.js owns that DOM; renderMessages
+// routes them to renderSecretView).
+function inSecretView(channelId) {
+  const ch = state.channels[channelId];
+  const sess = ch && ch.is_dm ? getSession(channelId) : null;
+  return !!(sess && (sess.phase === "active" || sess.phase === "ended"));
+}
+
+// groupingAnchor returns the {user, time} the message at msgs[idx] would group
+// under, mirroring renderMessages' run-breaking rules: a system line or a DRAWN
+// tombstone (a live-deleted message) resets grouping; an invisible deleted run is
+// transparent. null when nothing groupable precedes it. appendMessageRow uses it so
+// a single appended row gets the same grouped/full shape the full rebuild would.
+function groupingAnchor(msgs, idx) {
+  for (let k = idx - 1; k >= 0; k--) {
+    const p = msgs[k];
+    if (p.is_system) return null;
+    if (p.deleted_at) {
+      if (liveDeleted.has(p.id)) return null; // a drawn tombstone breaks the run
+      continue;                               // an invisible deleted run is transparent
+    }
+    return { user: p.user_id, time: new Date(p.created_at).getTime() };
+  }
+  return null;
+}
+
+// appendMessageRow adds ONE freshly-arrived message to the open pane without
+// rebuilding it — the incremental path for message.new at the live tail. It mirrors
+// renderMessages' per-row decisions (grouping, isMod/canPin) and follow-scroll
+// (atBottom OR forceBottom → stick to the newest). The row goes before the bottom
+// sentinel so infinite-scroll keeps working. Callers guarantee the pane is rendered,
+// not in secret view, not in a history window, and the message is a normal row.
+function appendMessageRow(m, forceBottom) {
+  const wrap = $("#message-list");
+  const atBottom = forceBottom || isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
+  const msgs = state.messages[state.activeChannelId] || [];
+  const idx = msgs.findIndex((x) => x.id === m.id);
+  const isMod = S.canModerate(state.me);
+  const activeCh = state.channels[state.activeChannelId];
+  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const anchor = groupingAnchor(msgs, idx);
+  const t = new Date(m.created_at).getTime();
+  const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, t) : false;
+  const row = messageRow(m, { grouped, isMod, canPin });
+  const bottomSentinel = wrap.querySelector('[data-sentinel="bottom"]');
+  if (bottomSentinel) wrap.insertBefore(row, bottomSentinel);
+  else wrap.append(row);
+  if (atBottom) scrollToBottom(wrap);
+}
+
+// patchMessageRow replaces a SINGLE rendered message in place — the incremental path
+// for reaction.update and message.update (edit / pin). Returns false (caller falls
+// back to a full render) when it isn't a clean 1:1 swap: the row isn't currently
+// rendered (paged out), it's mid inline-edit, or it's now a system/deleted row (a
+// delete collapses runs). Grouping is read off the existing row — neighbors are
+// unchanged, so the grouped/full shape is preserved.
+function patchMessageRow(messageId) {
+  const wrap = $("#message-list");
+  const existing = wrap.querySelector(`[data-msg-id="${messageId}"]`);
+  if (!existing) return false;
+  if (messageId === editingMessageId) return false;
+  const msgs = state.messages[state.activeChannelId] || [];
+  const m = msgs.find((x) => x.id === messageId);
+  if (!m || m.is_system || m.deleted_at) return false;
+  const isMod = S.canModerate(state.me);
+  const activeCh = state.channels[state.activeChannelId];
+  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const grouped = existing.classList.contains("grouped");
+  existing.replaceWith(messageRow(m, { grouped, isMod, canPin }));
+  return true;
+}
+
+// refreshReadMarks updates the 👁 toggle's title on rendered rows after the read
+// cursor advances — a targeted alternative to a full renderMessages whose ONLY
+// visible effect there is that tooltip (toggleMessageRead recomputes read state
+// from state.lastRead at click time, so a stale title is never acted on). Keeping
+// this off the full-render path is what lets a focused reader's text selection
+// survive each incoming message.
+function refreshReadMarks() {
+  const wrap = $("#message-list");
+  if (!wrap) return;
+  const cursor = state.lastRead[state.activeChannelId] || 0;
+  for (const btn of wrap.querySelectorAll(".msg-read-toggle")) {
+    const row = btn.closest("[data-msg-id]");
+    if (!row) continue;
+    const isRead = Number(row.getAttribute("data-msg-id")) <= cursor;
+    btn.title = isRead ? "Mark unread" : "Mark read";
+  }
+}
+
+// Optimistic send. On Enter we paint the message at the live tail immediately —
+// before the server round-trips — as a dimmed "pending" row, so sending feels
+// instant on a slow link. The row carries a NEGATIVE temp id (can't collide with a
+// server id) and is tracked in pendingSends until its own message.new echo arrives:
+// reconcileOptimistic then REPLACES the dimmed row with the real one in place (no
+// duplicate, no jump). A failed POST rolls the row back (removePending) and restores
+// the composer. A channel switch wipes the pane, so clearPendingSends drops the
+// now-detached entries. Only used at the live tail (not a history window or secret
+// view — those keep the existing reload/secret paths). Guarded by
+// web/e2e/optimistic-send.spec.js.
+let optimisticSeq = -1;
+const pendingSends = []; // { tempId, channelId, content, el } awaiting the message.new echo
+
+function showOptimisticSend(channelId, content, replyId) {
+  const tempId = optimisticSeq--;
+  let replyToUserId = null;
+  if (replyId != null) {
+    const parent = (state.messages[channelId] || []).find((x) => x.id === replyId);
+    replyToUserId = parent ? parent.user_id : null;
+  }
+  const m = {
+    id: tempId, channel_id: channelId, user_id: state.me.id, content,
+    created_at: new Date().toISOString(),
+    reply_to_id: replyId ?? null, reply_to_user_id: replyToUserId,
+    reactions: [], edited_at: null, pinned_at: null, deleted_at: null, is_system: false,
+  };
+  const wrap = $("#message-list");
+  const msgs = state.messages[channelId] || [];
+  const anchor = groupingAnchor(msgs, msgs.length); // group under the current live tail
+  const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, new Date(m.created_at).getTime()) : false;
+  const isMod = S.canModerate(state.me);
+  const activeCh = state.channels[channelId];
+  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const row = messageRow(m, { grouped, isMod, canPin, pending: true });
+  const bottomSentinel = wrap.querySelector('[data-sentinel="bottom"]');
+  if (bottomSentinel) wrap.insertBefore(row, bottomSentinel);
+  else wrap.append(row);
+  scrollToBottom(wrap);
+  pendingSends.push({ tempId, channelId, content, el: row });
+  return tempId;
+}
+
+// reconcileOptimistic swaps the dimmed optimistic row for the real one when its own
+// message.new echo lands. Matches by (channel, exact content) since the server
+// doesn't round-trip a client nonce; oldest match first. Returns false (caller
+// appends/renders normally) when there's no pending match or the optimistic row was
+// already wiped (e.g. an interleaved full render), in which case the real message
+// simply hasn't been drawn yet.
+function reconcileOptimistic(m) {
+  if (!m || m.user_id !== state.me.id) return false;
+  const i = pendingSends.findIndex((p) => p.channelId === m.channel_id && p.content === m.content);
+  if (i < 0) return false;
+  const { el: pendingEl } = pendingSends[i];
+  pendingSends.splice(i, 1);
+  if (!pendingEl || !pendingEl.isConnected) return false;
+  const wrap = $("#message-list");
+  const msgs = state.messages[m.channel_id] || [];
+  const idx = msgs.findIndex((x) => x.id === m.id);
+  const anchor = groupingAnchor(msgs, idx);
+  const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, new Date(m.created_at).getTime()) : false;
+  const isMod = S.canModerate(state.me);
+  const activeCh = state.channels[m.channel_id];
+  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const atBottom = isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
+  pendingEl.replaceWith(messageRow(m, { grouped, isMod, canPin }));
+  if (atBottom) scrollToBottom(wrap);
+  return true;
+}
+
+// removePending rolls an optimistic row back after a failed send.
+function removePending(tempId) {
+  if (tempId == null) return;
+  const i = pendingSends.findIndex((p) => p.tempId === tempId);
+  if (i < 0) return;
+  const { el: pendingEl } = pendingSends.splice(i, 1)[0];
+  if (pendingEl && pendingEl.isConnected) pendingEl.remove();
+}
+
+// clearPendingSends drops all tracked optimistic rows — called when the pane is
+// rebuilt for a different channel (loadChannel), where the rows are gone anyway.
+function clearPendingSends() {
+  pendingSends.length = 0;
 }
 
 // --- replies -----------------------------------------------------------------
@@ -2477,10 +2742,19 @@ function wireComposer() {
       const replyId = replyingToId; // capture, then clear the banner optimistically
       replyingToId = null;
       renderReplyBanner();
+      // Optimistic echo: paint the message at the live tail now, before the server
+      // round-trips. The message.new echo reconciles the dimmed row into the real
+      // one; a failed send rolls it back below. Only at the live tail — a history
+      // window / secret view keep their existing reload / secret paths.
+      const cid = state.activeChannelId;
+      const optimistic = (cid && !historyPaging.isViewingHistory(cid) && !inSecretView(cid))
+        ? showOptimisticSend(cid, content, replyId)
+        : null;
       try {
-        await api.sendMessage(state.activeChannelId, content, replyId);
+        await api.sendMessage(cid, content, replyId);
         sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
+        if (optimistic != null) removePending(optimistic); // roll the dimmed row back
         input.value = text;
         composerRich?.resetHistory(); // restore failed → baseline the put-back text
         composerTray.putBack(sent); // put the attachments back so the send can be retried
@@ -2639,7 +2913,7 @@ const linkPreviews = createLinkPreviews({
   getState: () => state,
   api,
   jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
-  rerender: () => renderMessages(),
+  rerender: () => scheduleRender("messages"),
 });
 const buildLinkPreview = linkPreviews.buildLinkPreview;
 

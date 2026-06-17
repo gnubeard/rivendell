@@ -1,6 +1,6 @@
 # app.js — the atlas
 
-`web/static/app.js` is the web client's orchestrator: ~3,470 lines wiring the API,
+`web/static/app.js` is the web client's orchestrator: ~3,770 lines wiring the API,
 websocket, formatter, and the pure `state.js` reducer to the DOM. Years of
 extraction (see [decomposition.md](decomposition.md)) pulled the *pure* logic and
 the *self-contained DOM widgets* out into ~30 sibling modules. What's left is the
@@ -19,8 +19,9 @@ Two tiers of in-file signage, plus this doc:
 
 - **Regions** (`// ▌ REGION N · NAME`, heavy `━` rule) — 8 continents. The coarse
   tier this atlas added.
-- **Sections** (`// --- name ---`, light rule) — 30 pre-existing fine-grained
-  markers. Each region is an exact superset of some of these; none were moved.
+- **Sections** (`// --- name ---`, light rule) — 31 fine-grained markers (30
+  pre-existing, plus `incremental message updates` added in R5 with the
+  incremental-render work). Each region is an exact superset of some of these.
 - **This doc** — the index, the role of each region, and the cross-cutting findings
   the banners can't carry.
 
@@ -34,13 +35,13 @@ text over the numbers, and re-run the grep in "Maintaining the atlas" to refresh
 | # | Region | Lines | Contains (`// ---` sections) |
 |---|--------|-------|------------------------------|
 | 1 | **Foundations** | 65–205 | module state |
-| 2 | **Boot & Auth** | 206–553 | mobile viewport · notification chime · bootstrapping |
-| 3 | **Realtime** | 554–822 | realtime |
-| 4 | **Sidebar & Channels** | 823–1581 | rendering · channel reordering · channel & DM actions · channel selection + read state · channel header |
-| 5 | **Message Pane** | 1582–2110 | message loading/history/scrolling · message rendering · replies |
-| 6 | **Composer & Message Actions** | 2111–2619 | inline autocomplete · composer wiring · emoji picker · inline message editing · link previews · reactions |
-| 7 | **Control Wiring** | 2620–3018 | control wiring |
-| 8 | **Shell Chrome & Subsystems** | 3019–3478 | drawers/swipe/idle · **feature-module plugs** · modals + user card · admin panel · notifications & ring alerts · presence · avatars & image preloading · loading screen · voice calling · secret session UI |
+| 2 | **Boot & Auth** | 206–567 | mobile viewport · notification chime · bootstrapping |
+| 3 | **Realtime** | 568–901 | realtime |
+| 4 | **Sidebar & Channels** | 902–1702 | rendering (incl. the render-batching substrate) · channel reordering · channel & DM actions · channel selection + read state · channel header |
+| 5 | **Message Pane** | 1703–2378 | message loading/history/scrolling · message rendering · incremental message updates · replies |
+| 6 | **Composer & Message Actions** | 2379–2906 | inline autocomplete · composer wiring · emoji picker · inline message editing · link previews · reactions |
+| 7 | **Control Wiring** | 2907–3305 | control wiring |
+| 8 | **Shell Chrome & Subsystems** | 3306–3769 | drawers/swipe/idle · **feature-module plugs** · modals + user card · admin panel · notifications & ring alerts · presence · avatars & image preloading · loading screen · voice calling · secret session UI |
 
 ### R1 · Foundations (65–205)
 The module's vocabulary. All mutable module-level state — `state` (the immutable
@@ -50,7 +51,7 @@ it) plus the ephemeral session cursors (`editingMessageId`, `replyingToId`,
 `guard`, `safeLocalGet/Set`. Three plugs (`prefs`, `unread`, `drafts`) are seeded
 here because later regions depend on them at eval time.
 
-### R2 · Boot & Auth (206–553)
+### R2 · Boot & Auth (206–567)
 Page-load → live app. Viewport/audio priming, the `/set-password` and `/invite`
 routes (`bootSetPassword`/`bootSignup`), `wireLogin`, and `enterApp()` — the single
 big async that fetches users+channels, seeds unread/voice/emoji, restores the last
@@ -58,22 +59,26 @@ channel (or a permalink jump), renders the first frame, inits voice + secret, an
 wires every control *before* `startRealtime()` (so a transport failure can never
 leave handlers unattached — a load-bearing ordering, see CLAUDE.md).
 
-### R3 · Realtime (554–822)
+### R3 · Realtime (568–901)
 The inbound WebSocket pump. `handleRealtimeEvent` folds each frame into `state` via
 the pure `S.applyEvent`/`classifyIncomingMessage` reducers, then dispatches the
 *targeted* DOM re-renders by event type and hands `voice.*`/`secret.*` frames to
 their subsystems. `resync` re-pulls server state after a reconnect to close the gap
 a dead socket left. This is DOM-dispatch territory, not a further pure carve.
 
-### R4 · Sidebar & Channels (823–1581)
+### R4 · Sidebar & Channels (902–1702)
 Everything left of the message pane, and the channel as an object you act on:
 me/theme rendering, the channel/DM/member list builders + badges, `channelDrag`
 reorder wiring, the channel-&-DM action verbs (`deleteChannel`, `toggleMute`,
 `leaveActiveChannel`, `closeDM`, `startDM`, `selectChannel`), read-state
 (`markActiveChannelRead`, `toggleMessageRead`), and the channel header (regular +
-DM variants, topic edit, affordances).
+DM variants, topic edit, affordances). The `rendering` section also opens with the
+**render-batching substrate** (`scheduleRender`): realtime event repaints mark a
+surface dirty and coalesce into one paint per task (`setTimeout(0)`, deliberately
+*not* rAF — see the message-pane invariant in CLAUDE.md). The synchronous load/
+jump/scroll paths still call the render fns directly.
 
-### R5 · Message Pane (1582–2110)
+### R5 · Message Pane (1703–2378)
 The message list itself and the densest DOM+state knot in the file. Paging/history
 (`loadChannel`, `jumpToMessage`, driving `historyPaging`), `renderMessages` + the
 row builders + edit-state capture/restore (so an inbound event mid-edit can't blow
@@ -81,14 +86,20 @@ the editor away), the secret-view render, and the reply banner. **This is the
 gravity well every prior extraction attempt bounced off** — so instead of carving
 it, the `message rendering` section now opens with a **compose map** of the
 `renderMessages` call-tree and the state it reads. Legibility in place, not a split.
+The `incremental message updates` section (`appendMessageRow`/`patchMessageRow`/
+`refreshReadMarks`, plus the optimistic-send trio `showOptimisticSend`/
+`reconcileOptimistic`/`removePending`) is the event fast path: it patches the one row
+an event touched — or paints a dimmed pending row on send and reconciles it on the
+echo — so a reader's text selection and scroll survive live traffic, with the full
+`renderMessages` as the channel-open/jump/resync source of truth and the fallback.
 
-### R6 · Composer & Message Actions (2111–2619)
+### R6 · Composer & Message Actions (2379–2906)
 Authoring, and everything you do *to* a message once it (or its draft) exists: the
 contenteditable composer (`wireComposer`, ~270 lines) + autocomplete + emoji picker,
 inline message editing (`editorFor`/`startEdit`/`commitEdit`), link previews, and
 reactions.
 
-### R7 · Control Wiring (2620–3018)
+### R7 · Control Wiring (2907–3305)
 The one-time `wire*` control-binding functions that attach static-DOM event
 listeners (`wireDelegatedClicks`, `wireProfileControls`, …, aggregated by
 `wireControls`, run once from `enterApp`), plus the shared `openLightbox`/
@@ -97,7 +108,7 @@ block left in the file — but a *traced non-candidate* for extraction: its ~35-
 injection surface is ~2× the codebase's widest bag (Finding 2). The feature-module
 plugs that used to live here moved to R8's switchboard.
 
-### R8 · Shell Chrome & Subsystems (3019–3478)
+### R8 · Shell Chrome & Subsystems (3306–3769)
 The remaining shell behaviors and **the consolidated plug switchboard**:
 drawers/swipe/idle, then the `feature-module plugs` section (`forward`, `mobileCtx`,
 `pins`, `search`, `notifUI` — folded here from R7) followed by modals + user card,
@@ -162,8 +173,8 @@ those would break the uniform "modules own behavior, app.js wires the static DOM
 rule and trade consistency for nothing. Resolved.
 
 ### 3. The file already self-documents; what was missing was hierarchy.
-30 section markers and dense rationale comments throughout — the navigation problem
-wasn't *absence* of labels but *flatness*: 30 equal-weight sections and no overview.
+31 section markers and dense rationale comments throughout — the navigation problem
+wasn't *absence* of labels but *flatness*: equal-weight sections and no overview.
 The regions + this doc add the missing tier. Keep leaning on prose comments at the
 section level; that culture is working.
 
@@ -190,6 +201,16 @@ open work is noted inline below.
   state it reads. Next passes, if wanted: give `messageRow`/`messageActions` the same
   header treatment, or split the ~115-line `renderMessages` body into named locals
   (`renderDeletedRun`, `renderSystemMessage`) — legibility only, still one file.
+- **~~Stop full-rebuilding the pane on every event.~~** ✅ *Done* (incremental-render
+  pass). `renderMessages`'s full `innerHTML` wipe ran on nearly every realtime event,
+  wiping any active text selection and re-running `formatMessage` on every loaded row.
+  Added a `scheduleRender` batching substrate (R4) and the `incremental message
+  updates` section (R5): `message.new` appends one row, `reaction.update`/
+  `message.update` swap one row, and `read.update`/`markActiveChannelRead` refresh the
+  👁 titles in place — full render kept as the fallback. Verified by
+  `web/e2e/live-append.spec.js` (selection survives an incoming message + a reaction).
+  Still open as a *separate* idea: an optimistic local echo on send (show the row
+  before the server round-trips) — proposed alongside this pass, intentionally deferred.
 
 ## Maintaining the atlas
 

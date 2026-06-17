@@ -29,9 +29,16 @@ export function createChannelDrag({ $, getState, setChannels, renderChannels, re
     startY: 0,
   };
   let chMousePending = null; // {li, id} captured on mousedown, before the move threshold
+  let chMouseHoldTimer = null; // desktop press-and-hold-to-lift timer (null once fired/cancelled)
+
+  // Desktop can engage the drag two ways: move the mouse past a small threshold
+  // (a quick click-drag), OR press and hold in place this long — the deliberate
+  // "pick it up" gesture. Either way beginDrag lifts the row (pronounced shadow).
+  const HOLD_TO_LIFT_MS = 300;
 
   // beginDrag lifts a row out of the flow so it visibly follows the pointer.
   function beginDrag(li, id) {
+    if (chDrag.active) return; // already lifted (move and hold-timer can both fire)
     chDrag.active = true;
     chDrag.li = li;
     chDrag.id = id;
@@ -143,6 +150,14 @@ export function createChannelDrag({ $, getState, setChannels, renderChannels, re
       chDrag.startX = e.clientX;
       chDrag.startY = e.clientY;
       chMousePending = { li, id };
+      // Press-and-hold-to-lift: if the button is still down and hasn't moved past
+      // the threshold by now, pick the row up in place (the move path clears this).
+      clearTimeout(chMouseHoldTimer);
+      chMouseHoldTimer = setTimeout(() => {
+        chMouseHoldTimer = null;
+        if (!chMousePending || !chMousePending.li.isConnected) return;
+        beginDrag(chMousePending.li, chMousePending.id);
+      }, HOLD_TO_LIFT_MS);
       document.addEventListener("mousemove", onChMouseMove);
       document.addEventListener("mouseup", onChMouseUp);
     });
@@ -155,6 +170,8 @@ export function createChannelDrag({ $, getState, setChannels, renderChannels, re
     }
     if (!chMousePending) return;
     if (Math.abs(e.clientX - chDrag.startX) > 5 || Math.abs(e.clientY - chDrag.startY) > 5) {
+      clearTimeout(chMouseHoldTimer); // the move won the race — engage now, not on the timer
+      chMouseHoldTimer = null;
       if (!chMousePending.li.isConnected) { chMousePending = null; return; }
       beginDrag(chMousePending.li, chMousePending.id);
       updateDrag(e.clientY);
@@ -164,6 +181,8 @@ export function createChannelDrag({ $, getState, setChannels, renderChannels, re
   function onChMouseUp() {
     document.removeEventListener("mousemove", onChMouseMove);
     document.removeEventListener("mouseup", onChMouseUp);
+    clearTimeout(chMouseHoldTimer);
+    chMouseHoldTimer = null;
     chMousePending = null;
     if (chDrag.active) {
       endDrag(true);

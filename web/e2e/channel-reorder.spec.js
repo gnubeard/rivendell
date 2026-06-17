@@ -97,3 +97,19 @@ test("dragging a row reorders it, and the order persists across reload", async (
   await expect(page.locator("#channel-list .channel", { hasText: N3 })).toBeVisible();
   expect(await trioOrder()).toEqual([N3, N1, N2]);
 });
+
+test("desktop press-and-hold lifts the row into the dragging state with no move", async () => {
+  // The other engage path: press and hold in place (no 5px move) past the hold-to-
+  // lift timer, and the row picks up (the .dragging state the pronounced shadow keys
+  // off). Holding then dropping in place is a no-op reorder, so the order is unchanged.
+  const r = page.locator("#channel-list .channel", { hasText: N1 });
+  await r.scrollIntoViewIfNeeded();
+  const box = await r.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // No movement — only the hold-to-lift timer can engage the drag here.
+  await expect(page.locator("#channel-list .channel.dragging")).toBeVisible({ timeout: 2000 });
+  await page.mouse.up();
+  await expect(page.locator("#channel-list .channel.dragging")).toHaveCount(0);
+  expect(await trioOrder()).toEqual([N3, N1, N2]); // dropped in place — no reorder
+});

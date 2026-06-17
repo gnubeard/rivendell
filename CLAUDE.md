@@ -36,7 +36,7 @@ internal/httpapi/             server.go (Server struct + New + the Handler route
                               blobs, push)
 internal/push/                push.go (Web Push: VAPID + RFC 8291/8188)
 web/static/                   app.js (orchestrator; decomposed as far as is
-                              sensible — now mapped by 8 REGION banners over 30
+                              sensible — now mapped by 8 REGION banners over 31
                               section markers, see docs/atlas.md; carve history
                               in docs/decomposition.md), api.js, ws.js, state.js,
                               format.js, syntax.js, voice.js (WebRTC engine),
@@ -78,7 +78,7 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               (Safari-engine), opt-in via E2E_WEBKIT — see
                               docs/webkit-e2e.md
 docs/                         atlas.md (app.js navigation map: 8 regions over
-                              30 sections + structural findings),
+                              31 sections + structural findings),
                               decomposition.md (frontend module breakup),
                               design.md, otr.md, voice.md, video.md,
                               web_push.md, file_upload.md, composer-paste-qa.md,
@@ -153,6 +153,12 @@ Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), 
 **Reactions**
 - `message.update` that omits `reactions` must PRESERVE existing ones (`addMessage` guards this).
 - `toggleReaction` takes the pill's known `mine` — do NOT regress to a `findMessage` lookup.
+
+**Message-pane rendering**
+- Realtime event repaints batch through `scheduleRender(...surfaces)` — one paint per task on a `setTimeout(0)`, **never `requestAnimationFrame`**: rAF is paused in a hidden tab, but the unread count in the document title must keep climbing while backgrounded. The synchronous load/jump/scroll paths (`loadChannel`/`jumpToMessage`/`resync`/`selectChannel`) bypass it and call the render fns directly (they measure scroll right after painting).
+- `message.new` at the live tail appends ONE row (`appendMessageRow`); `reaction.update`/`message.update` swap the single touched row (`patchMessageRow`). Full `renderMessages()` (innerHTML wipe + rebuild) stays the source of truth for channel-open/jump/resync and the fallback when a row can't be patched (delete/system/secret/history/scrolled-up). The fast paths exist so a reader's text selection, in-flight images, and scroll survive live traffic — don't route live events back through the full render.
+- `read.update` (including the self-echo from your own mark-read) and `markActiveChannelRead` must **NOT** full-render — they call `refreshReadMarks()` (👁 titles only). A full render there wipes the selection on every incoming message; the unread divider is local session state a remote read doesn't move. Guarded by `web/e2e/live-append.spec.js`.
+- Sending is **optimistic**: `showOptimisticSend` paints a dimmed `pending` row (NEGATIVE temp id — can't collide with a server id) at the live tail before the POST; the message.new echo reconciles it in place via `reconcileOptimistic`, matched by `(channel, exact content)` because the server round-trips no client nonce (don't "simplify" the match to id — there is no shared id until the echo). A failed POST rolls it back (`removePending`) and restores the composer; a channel switch drops tracked rows (`clearPendingSends`). Optimistic only at the live tail — a history window / secret view keep their reload / secret paths. Guarded by `web/e2e/optimistic-send.spec.js`.
 
 **Web Push**
 - JWT signature is JOSE raw `r||s` (64 bytes), **never DER** — `SignASN1` silently breaks all pushes.
