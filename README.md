@@ -296,7 +296,7 @@ current in [CLAUDE.md](CLAUDE.md); deeper design notes live in
 
 ### Git hooks
 
-Two hooks live in `scripts/hooks/`. Install them with:
+Three hooks live in `scripts/hooks/`. Install them with:
 
 ```sh
 make install-hooks
@@ -307,8 +307,12 @@ scripts.
 
 | Hook | What it does |
 | --- | --- |
-| `pre-commit` | On `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a meaningful source file is staged (server code, web assets, Dockerfile, `go.mod`). Keeps the version constant in sync with every commit, no manual edit required. |
+| `pre-commit` | Runs the fast test tier whenever source is staged, on any branch (`gofmt` + `go vet` + `go test` when Go changed; the web unit tests when `web/` changed) — the gate that keeps the `develop` auto-deploy from shipping red code. Then, on `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a meaningful source file is staged (server code, web assets, Dockerfile, `go.mod`). Skips both for doc-only commits. Escape hatch: `RUN_TESTS=0 git commit …`. |
+| `pre-push` | Runs the Playwright e2e suite (`make test-e2e`) when the push range touches runtime source (`cmd/server`, `internal/`, `web/`) — the gate for shipping to `main`. Skips docs/tooling-only pushes. Escape hatch: `RUN_E2E=0 git push …`. |
 | `post-commit` | On `develop`, builds a fresh container image and replaces the running container when server source changed. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. |
+
+Prefer the `RUN_TESTS=0` / `RUN_E2E=0` escape hatches over `--no-verify`, which
+also disables the version bump.
 
 The `post-commit` hook is environment-specific. Edit the `USER-CONFIGURABLE` block
 near the top of `scripts/hooks/post-commit` to set your container name, network,
