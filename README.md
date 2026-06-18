@@ -12,7 +12,6 @@ PostgreSQL, with a vanilla-JavaScript web client and no frontend build step.
 
 ## Contents
 
-- [Features](#features)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
@@ -20,52 +19,7 @@ PostgreSQL, with a vanilla-JavaScript web client and no frontend build step.
 - [Development](#development)
 - [Architecture](#architecture)
 - [Project tooling](#project-tooling)
-- [Developer conventions](#developer-conventions)
-- [Roadmap](#roadmap)
 - [License](#license)
-
----
-
-## Features
-
-**Messaging**
-
-- Public and private channels with topics, plus direct messages
-- Realtime delivery over a hand-rolled RFC 6455 WebSocket
-- Edit and soft-delete messages, pin messages, and forward a message to another channel or DM
-- Emoji reactions, including instance-wide custom `:shortcode:` emoji
-- @-mentions with inline autocomplete, and live typing indicators
-- Markdown formatting — bold, italic, `code`, fenced code blocks, strikethrough, spoilers — rendered in messages and shown live in the composer as you type (Ctrl/Cmd-B/I to format; the markers stay visible, just dimmed)
-- Full-text search, scoped to the channels you can access
-- Scrollback with keyset pagination; every timestamp is a permalink into history
-
-**Calls**
-
-- Voice channels and 1:1 or group calls, with optional camera
-- Desktop screen sharing as an alternative video source — including shared tab/system audio (Chrome), tuned to keep text sharp under congestion
-- Peer-to-peer WebRTC mesh — no media server (STUN/TURN configurable, with server-enforced participant caps)
-
-**Privacy and security**
-
-- Secret chat — opt-in end-to-end encrypted DMs with a verifiable safety number; sessions live only in browser memory, never on the server
-- Roles: admin, moderator, and member
-- Magic-link onboarding (no email server required), private-channel invites, and bot accounts with Bearer tokens for scripting
-
-**Media and embeds**
-
-- Image and file uploads to a content-addressed blob store — paste, drop, or attach — with inline rendering
-- Markdown links and image embeds; same-origin permalink embeds, YouTube embeds, and og: preview cards for allowlisted domains
-- Avatars (PNG, JPEG, WebP, GIF) and per-user UI themes
-
-**Presence and notifications**
-
-- Status (online, away, do-not-disturb, invisible) with automatic idle detection
-- Unread badges with a DM chime, per-channel and per-DM mute, and opt-in alerts — foreground desktop notifications plus offline Web Push (installable PWA)
-
-**Administration**
-
-- Admin panel with instance stats: users, channels, messages, and live connections
-- Soft-delete channels, with admin restore or hard purge
 
 ---
 
@@ -126,13 +80,12 @@ point elsewhere.
 
 ## Configuration
 
-All configuration is through environment variables — there is no config file. Every
-variable is optional except `RIVENDELL_DATABASE_URL` (required in production). Copy
-[`.env.example`](.env.example) to `.env` as a starting point.
+Every variable is optional except `RIVENDELL_DATABASE_URL`.
+Copy [`.env.example`](.env.example) to `.env` as a starting point.
 
 | Variable | Default | Description |
 | --- | :--- | :--- |
-| `RIVENDELL_DATABASE_URL` | `postgres://chat:chat_dev_pw@localhost:5432/chat?sslmode=disable` | **Required in production.** PostgreSQL connection string. |
+| `RIVENDELL_DATABASE_URL` | _(none)_ | **Required.** PostgreSQL connection string; boot fails if unset. `make run` supplies a dev value. |
 | `RIVENDELL_ADDR` | `:8080` | Listen address. |
 | `RIVENDELL_PUBLIC_URL` | `http://localhost:8080` | Base URL used to build magic links. No trailing slash. |
 | `RIVENDELL_WEB_DIR` | `web` | Path to the static web client, relative to the working directory. `make run` sets this for you; when running `./bin/rivendell` directly, run from the repo root or set an absolute path. |
@@ -247,28 +200,25 @@ cross-browser and manual checks, see **[docs/testing/](docs/testing/README.md)**
 
 ## Architecture
 
-rivendell is one Go binary serving a JSON + WebSocket API and a vanilla-JS client
-straight from disk — no media server, no message broker, no frontend build step.
+rivendell is a Go binary serving a JSON+WebSocket API and a vanilla-JS client.
 State lives in PostgreSQL; uploaded files live in a content-addressed blob directory
 on the filesystem. The backend (`internal/`, Go 1.26) is layered into `store` (SQL
 over `lib/pq`, embedded migrations), `ws` (a hand-rolled RFC 6455 WebSocket + hub),
 `httpapi` (stdlib `net/http`, middleware, handlers split by domain), and stdlib-only
 `auth` and `push`. The frontend (`web/`) is one HTML shell plus ES modules served raw
-with path-based cache-busting; calls are a peer-to-peer WebRTC mesh the server only
-signals for.
+with path-based cache-busting. Voice and video calls are implemented as a peer-to-peer
+WebRTC mesh.
 
-The full picture is in **[docs/architecture.md](docs/architecture.md)**; the
-per-feature design notes and invariants live in
-[docs/design/](docs/design/README.md), and the condensed file-by-file editing
-checklist is [CLAUDE.md](CLAUDE.md).
+See **[docs/architecture.md](docs/architecture.md)**.
+Per-feature design notes and invariants: [docs/design/](docs/design/README.md).
+Conventions and their rationale: [docs/conventions.md](docs/conventions.md).
+Condensed file-by-file editing checklist in [CLAUDE.md](CLAUDE.md).
 
 ---
 
 ## Project tooling
 
 ### Git hooks
-
-Three hooks live in `scripts/hooks/`. Install them with:
 
 ```sh
 make install-hooks
@@ -316,7 +266,7 @@ RIVENDELL_TEST_DATABASE_URL=postgres://chat:<pw>@localhost:55432/chat_test?sslmo
 # RIVENDELL_CLAUDE_CHANNEL=claude
 # RIVENDELL_RELEASE_UPDATE_CHANNEL=general
 EOF
-chmod 600 ~/.config/rivendell/claude-bridge.env
+chmod 400 ~/.config/rivendell/claude-bridge.env
 ```
 
 **2. Install and start the service:**
@@ -335,40 +285,6 @@ journalctl --user -u claude-bridge.service -f
 
 The `post-commit` hook restarts the service whenever `scripts/claude-bridge`
 changes, so new versions take effect on the next `develop` commit.
-
-#### In tmux (alternative)
-
-```sh
-export RIVENDELL_URL=https://chat.example.com
-export RIVENDELL_BOT_TOKEN=<token>
-export RIVENDELL_TEST_DATABASE_URL=postgres://...
-tmux new-session -d -s claude-bridge 'scripts/claude-bridge'
-```
-
----
-
-## Developer conventions
-
-The rationale and the rules live in **[docs/conventions.md](docs/conventions.md)**,
-with the per-feature design notes in [docs/design/](docs/design/README.md) and the
-condensed, file-by-file editing checklist in [CLAUDE.md](CLAUDE.md). A few invariants
-worth calling out here:
-
-- **List endpoints return `[]`, never `null`.** `TestEmptyListsReturnArraysNotNull` enforces this.
-- **`users.status` is durable** — `onPresenceChange` must never write it. `TestStatusDurableAcrossReconnect` guards it.
-- **`format.js` escapes first, then makes its markdown pass.** Links are extracted *before* `inlineMarkup` — never invert this.
-- Voice/WebRTC, secret chat, Web Push, and uploads each carry their own invariants — see the two references above.
-
----
-
-## Roadmap
-
-Screen sharing — the last major feature — shipped in 2.0.0. What's left is
-refinement around the edges of calls:
-
-- **Graceful media fallback** — when a participant has no camera, offer to share their screen instead; when they have no working mic, let them join listen-only (one-way audio beats none).
-- **Per-stream receive control** — let a viewer stop receiving a participant's video to save bandwidth. On the P2P mesh this means signalling the sender to stop, not just hiding the tile.
-
 ---
 
 ## License
