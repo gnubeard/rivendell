@@ -3,6 +3,17 @@ name: Release
 on:
   push:
     branches: [main]
+    # Only build/release when the push touches buildable source — mirrors the
+    # source predicate the git hooks use (cmd/server|internal/|web/|Dockerfile|
+    # go.mod/sum). A docs/tooling-only push skips the workflow entirely; the
+    # version is unchanged on those, so the tag step would no-op anyway.
+    paths:
+      - 'cmd/server/**'
+      - 'internal/**'
+      - 'web/**'
+      - 'Dockerfile'
+      - 'go.mod'
+      - 'go.sum'
 
 jobs:
   release:
