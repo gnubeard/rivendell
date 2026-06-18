@@ -1,6 +1,6 @@
 # app.js — the atlas
 
-`web/static/app.js` is the web client's orchestrator: ~3,880 lines wiring the API,
+`web/static/app.js` is the web client's orchestrator: ~4,080 lines wiring the API,
 websocket, formatter, and the pure `state.js` reducer to the DOM. Years of
 extraction (see [decomposition.md](decomposition.md)) pulled the *pure* logic and
 the *self-contained DOM widgets* out into ~30 sibling modules. What's left is the
@@ -34,16 +34,16 @@ text over the numbers, and re-run the grep in "Maintaining the atlas" to refresh
 
 | # | Region | Lines | Contains (`// ---` sections) |
 |---|--------|-------|------------------------------|
-| 1 | **Foundations** | 65–205 | module state |
-| 2 | **Boot & Auth** | 206–567 | mobile viewport · notification chime · bootstrapping |
-| 3 | **Realtime** | 568–907 | realtime |
-| 4 | **Sidebar & Channels** | 908–1708 | rendering (incl. the render-batching substrate) · channel reordering · channel & DM actions · channel selection + read state · channel header |
-| 5 | **Message Pane** | 1709–2486 | message loading/history/scrolling · message rendering · incremental message updates · replies |
-| 6 | **Composer & Message Actions** | 2487–3023 | inline autocomplete · composer wiring · emoji picker · inline message editing · link previews · reactions |
-| 7 | **Control Wiring** | 3024–3422 | control wiring |
-| 8 | **Shell Chrome & Subsystems** | 3423–3886 | drawers/swipe/idle · **feature-module plugs** · modals + user card · admin panel · notifications & ring alerts · presence · avatars & image preloading · loading screen · voice calling · secret session UI |
+| 1 | **Foundations** | 65–223 | module state |
+| 2 | **Boot & Auth** | 224–585 | mobile viewport · notification chime · bootstrapping |
+| 3 | **Realtime** | 586–925 | realtime |
+| 4 | **Sidebar & Channels** | 926–1726 | rendering (incl. the render-batching substrate) · channel reordering · channel & DM actions · channel selection + read state · channel header |
+| 5 | **Message Pane** | 1727–2595 | message loading/history/scrolling · message rendering · incremental message updates · replies |
+| 6 | **Composer & Message Actions** | 2596–3148 | inline autocomplete · composer wiring · emoji picker · inline message editing · link previews · reactions |
+| 7 | **Control Wiring** | 3149–3613 | control wiring |
+| 8 | **Shell Chrome & Subsystems** | 3614–4079 | drawers/swipe/idle · **feature-module plugs** · modals + user card · admin panel · notifications & ring alerts · presence · avatars & image preloading · loading screen · voice calling · secret session UI |
 
-### R1 · Foundations (65–205)
+### R1 · Foundations (65–223)
 The module's vocabulary. All mutable module-level state — `state` (the immutable
 world model from `state.js`, reassigned every update — read it fresh, never capture
 it) plus the ephemeral session cursors (`editingMessageId`, `replyingToId`,
@@ -51,7 +51,7 @@ it) plus the ephemeral session cursors (`editingMessageId`, `replyingToId`,
 `guard`, `safeLocalGet/Set`. Three plugs (`prefs`, `unread`, `drafts`) are seeded
 here because later regions depend on them at eval time.
 
-### R2 · Boot & Auth (206–567)
+### R2 · Boot & Auth (224–585)
 Page-load → live app. Viewport/audio priming, the `/set-password` and `/invite`
 routes (`bootSetPassword`/`bootSignup`), `wireLogin`, and `enterApp()` — the single
 big async that fetches users+channels, seeds unread/voice/emoji, restores the last
@@ -59,14 +59,14 @@ channel (or a permalink jump), renders the first frame, inits voice + secret, an
 wires every control *before* `startRealtime()` (so a transport failure can never
 leave handlers unattached — a load-bearing ordering, see CLAUDE.md).
 
-### R3 · Realtime (568–907)
+### R3 · Realtime (586–925)
 The inbound WebSocket pump. `handleRealtimeEvent` folds each frame into `state` via
 the pure `S.applyEvent`/`classifyIncomingMessage` reducers, then dispatches the
 *targeted* DOM re-renders by event type and hands `voice.*`/`secret.*` frames to
 their subsystems. `resync` re-pulls server state after a reconnect to close the gap
 a dead socket left. This is DOM-dispatch territory, not a further pure carve.
 
-### R4 · Sidebar & Channels (908–1708)
+### R4 · Sidebar & Channels (926–1726)
 Everything left of the message pane, and the channel as an object you act on:
 me/theme rendering, the channel/DM/member list builders + badges, `channelDrag`
 reorder wiring, the channel-&-DM action verbs (`deleteChannel`, `toggleMute`,
@@ -78,7 +78,7 @@ surface dirty and coalesce into one paint per task (`setTimeout(0)`, deliberatel
 *not* rAF — see the message-pane invariant in CLAUDE.md). The synchronous load/
 jump/scroll paths still call the render fns directly.
 
-### R5 · Message Pane (1709–2486)
+### R5 · Message Pane (1727–2595)
 The message list itself and the densest DOM+state knot in the file. Paging/history
 (`loadChannel`, `jumpToMessage`, driving `historyPaging`), `renderMessages` + the
 row builders + edit-state capture/restore (so an inbound event mid-edit can't blow
@@ -97,13 +97,13 @@ append and the reconcile route through `insertionPointFor` to drop a real row at
 array-sorted DOM slot (above the pending tail), keeping DOM order == array order — a
 cross-user message can't land below your pending row and group avatarless under it.
 
-### R6 · Composer & Message Actions (2506–3058)
+### R6 · Composer & Message Actions (2596–3148)
 Authoring, and everything you do *to* a message once it (or its draft) exists: the
 contenteditable composer (`wireComposer`, ~270 lines) + autocomplete + emoji picker,
 inline message editing (`editorFor`/`startEdit`/`commitEdit`), link previews, and
 reactions.
 
-### R7 · Control Wiring (3059–3523)
+### R7 · Control Wiring (3149–3613)
 The one-time `wire*` control-binding functions that attach static-DOM event
 listeners (`wireDelegatedClicks`, `wireProfileControls`, …, aggregated by
 `wireControls`, run once from `enterApp`), plus the shared `openLightbox`/
@@ -116,7 +116,7 @@ block left in the file — but a *traced non-candidate* for extraction: its ~35-
 injection surface is ~2× the codebase's widest bag (Finding 2). The feature-module
 plugs that used to live here moved to R8's switchboard.
 
-### R8 · Shell Chrome & Subsystems (3524–3987)
+### R8 · Shell Chrome & Subsystems (3614–4079)
 The remaining shell behaviors and **the consolidated plug switchboard**:
 drawers/swipe/idle, then the `feature-module plugs` section (`forward`, `mobileCtx`,
 `pins`, `search`, `notifUI` — folded here from R7) followed by modals + user card,
