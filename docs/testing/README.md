@@ -2,8 +2,11 @@
 
 How rivendell is tested, the databases the tests need, and the git hooks that
 enforce them. The detailed engine- and device-specific notes live alongside this
-file: [cross-browser.md](cross-browser.md) (WebKit + Gecko smoke specs) and
-[image-paste-qa.md](image-paste-qa.md) (the manual clipboard checklist).
+file: [cross-browser.md](cross-browser.md) (WebKit + Gecko smoke specs),
+[image-paste-qa.md](image-paste-qa.md) (the manual clipboard checklist),
+[flaky-e2e.md](flaky-e2e.md) (e2e timing races found + hardened — read before adding
+test retries), and [call-ui-video-staleness.md](call-ui-video-staleness.md) (an OPEN,
+handed-off call-UI bug behind the remaining `dm-call`/`group-call` camera flakes).
 
 ## The test tiers
 

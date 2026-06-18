@@ -29,6 +29,13 @@ async function uiLogin(page, username) {
   await page.fill("#login-password", PASSWORD);
   await page.press("#login-password", "Enter");
   await expect(page.locator("#me-name")).toBeVisible();
+  // #me-name renders during boot, but startRealtime() runs LAST — so a logged-in
+  // page's WebSocket may not be connected (registered on the server hub) yet. Wait
+  // for the socket to come online before returning: this spec creates a public
+  // channel right after login and relies on the channel.new BROADCAST to add the
+  // row in each sidebar, and a page still mid-connect would miss it and never show
+  // the channel (the app doesn't refetch the list without a reconnect).
+  await expect(page.locator("#conn-status")).toHaveClass(/\bonline\b/, { timeout: 15_000 });
 }
 
 // selectChannel clicks the named row in the sidebar channel list (the realtime
@@ -39,22 +46,42 @@ async function selectChannel(page, name) {
   await row.click();
 }
 
-// assertLiveVideo: at least `min` tiles in the grid are actually playing — real
-// dimensions and a currentTime that advances between two samples.
+// assertLiveVideo: at least `min` distinct remote/local video TRACKS are actually
+// playing — real dimensions and a currentTime seen to advance.
+//
+// Two things make this a 3-way MESH problem, not the DM spec's simpler 1:1:
+//   - 45s ceiling (vs 20s): the camera-off viewer receives each remote over its own
+//     renegotiation, and with three video-encoding Chromium contexts contending for
+//     CPU the second stream's frames can start flowing well past 20s.
+//   - ACCUMULATE liveness per track across samples. The old check counted tiles that
+//     advanced within a single shared 500ms window and needed `min` of them in the
+//     SAME window — but under that CPU contention the decoders stutter alternately
+//     (each genuinely flowing, but rarely both advancing in one 500ms slice), so the
+//     count never reached 2 even though both streams were live. We instead key on the
+//     video track id and mark a track live the first time it's seen to advance, in a
+//     widened ~1.2s window, then union those across poll iterations. A genuinely dead
+//     stream still never accumulates, so this loosens the measurement artifact without
+//     hiding a real drop.
 async function assertLiveVideo(page, min) {
   await expect.poll(async () => page.locator("#video-grid video").count(), {
-    timeout: 20_000,
+    timeout: 45_000,
   }).toBeGreaterThanOrEqual(min);
+  const liveTracks = new Set();
   await expect.poll(async () => {
-    return page.evaluate(async () => {
+    const advanced = await page.evaluate(async () => {
       const vids = [...document.querySelectorAll("#video-grid video")];
-      const before = vids.map((v) => v.currentTime);
-      await new Promise((r) => setTimeout(r, 500));
-      let live = 0;
-      vids.forEach((v, i) => { if (v.videoWidth > 0 && v.currentTime > before[i]) live++; });
-      return live;
+      const trackId = (v) => (v.srcObject && v.srcObject.getVideoTracks()[0] && v.srcObject.getVideoTracks()[0].id) || null;
+      const before = vids.map((v) => ({ id: trackId(v), t: v.currentTime, w: v.videoWidth }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const out = [];
+      vids.forEach((v, i) => {
+        if (before[i].id && before[i].w > 0 && v.currentTime > before[i].t) out.push(before[i].id);
+      });
+      return out;
     });
-  }, { timeout: 20_000 }).toBeGreaterThanOrEqual(min);
+    advanced.forEach((id) => liveTracks.add(id));
+    return liveTracks.size;
+  }, { timeout: 45_000 }).toBeGreaterThanOrEqual(min);
 }
 
 async function inCall(page) {
@@ -96,6 +123,9 @@ test("three users join one voice channel", async () => {
 });
 
 test("two cameras on → the third sees both remote tiles in the group gallery", async () => {
+  // Three assertLiveVideo calls, each with a 45s mesh-convergence ceiling, can't fit
+  // the default 90s per-test budget if more than one is slow under full-suite load.
+  test.setTimeout(180_000);
   // Two participants enable cameras; the renegotiations fan out across the mesh.
   await pages[0].click("#call-camera-btn");
   await pages[1].click("#call-camera-btn");

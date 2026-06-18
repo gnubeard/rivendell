@@ -90,6 +90,25 @@ test("dragging a row reorders it, and the order persists across reload", async (
 
   await expect.poll(trioOrder).toEqual([N3, N1, N2]);
 
+  // The live-DOM poll above goes green off the OPTIMISTIC in-DOM move, while the
+  // drop's persistence PATCH(es) are still in flight — and the drop fires one
+  // PATCH per moved channel inside a Promise.all, so there's no single response to
+  // await. Reloading here can beat them: the rebuilt list is fetched once at load,
+  // so a reload that wins the race loads the stale order and never re-sorts. Key
+  // the reload on the SERVER's order instead — poll GET /api/channels directly
+  // until persistence has landed, regardless of how many PATCHes fired.
+  await expect
+    .poll(() =>
+      page.evaluate(async (pfx) => {
+        const chs = await fetch("/api/channels", { credentials: "same-origin" }).then((r) => r.json());
+        return chs
+          .filter((c) => c.name.startsWith(pfx))
+          .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
+          .map((c) => c.name);
+      }, PFX),
+    )
+    .toEqual([N3, N1, N2]);
+
   // The drop PATCHed positions; a reload rebuilds the list from the server and
   // must show the same order (proves persistence, not just a live DOM move).
   await page.reload();

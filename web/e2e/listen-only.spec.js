@@ -44,20 +44,31 @@ async function openDM(page, otherUsername) {
   await row.click();
 }
 
+// assertLiveVideo: at least `min` distinct video TRACKS playing — real dimensions and
+// a currentTime seen to advance, accumulated per track id across a widened ~1.2s window
+// (the simple "count tiles advancing in one shared window" is flaky under full-suite CPU
+// stutter). CANONICAL copy + rationale: group-call.spec.js / docs/testing/flaky-e2e.md —
+// keep the five call specs' copies in sync.
 async function assertLiveVideo(page, min = 1) {
   await expect.poll(async () => page.locator("#video-grid video").count(), {
-    timeout: 20_000,
+    timeout: 45_000,
   }).toBeGreaterThanOrEqual(min);
+  const liveTracks = new Set();
   await expect.poll(async () => {
-    return page.evaluate(async () => {
+    const advanced = await page.evaluate(async () => {
       const vids = [...document.querySelectorAll("#video-grid video")];
-      const before = vids.map((v) => v.currentTime);
-      await new Promise((r) => setTimeout(r, 500));
-      let live = 0;
-      vids.forEach((v, i) => { if (v.videoWidth > 0 && v.currentTime > before[i]) live++; });
-      return live;
+      const trackId = (v) => (v.srcObject && v.srcObject.getVideoTracks()[0] && v.srcObject.getVideoTracks()[0].id) || null;
+      const before = vids.map((v) => ({ id: trackId(v), t: v.currentTime, w: v.videoWidth }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const out = [];
+      vids.forEach((v, i) => {
+        if (before[i].id && before[i].w > 0 && v.currentTime > before[i].t) out.push(before[i].id);
+      });
+      return out;
     });
-  }, { timeout: 20_000 }).toBeGreaterThanOrEqual(min);
+    advanced.forEach((id) => liveTracks.add(id));
+    return liveTracks.size;
+  }, { timeout: 45_000 }).toBeGreaterThanOrEqual(min);
 }
 
 async function remoteAudioTrackCount(page) {

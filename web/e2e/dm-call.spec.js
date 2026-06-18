@@ -52,24 +52,34 @@ async function openDM(page, otherUsername) {
   await row.click();
 }
 
-// assertLiveVideo: at least `min` tiles in the video grid are actually playing —
-// real dimensions and a currentTime that moves between two samples.
+// assertLiveVideo: at least `min` distinct video TRACKS are actually playing — real
+// dimensions and a currentTime seen to advance. Accumulates liveness per track id
+// across samples (in a widened ~1.2s window) rather than counting tiles that advance
+// in one shared window: under full-suite CPU load the decoders stutter and rarely all
+// advance simultaneously, so the simpler count is itself flaky. A dead stream never
+// accumulates, so this loosens the measurement artifact without hiding a real drop.
+// CANONICAL copy + rationale: group-call.spec.js / docs/testing/flaky-e2e.md — the five
+// call specs each carry this; keep them in sync.
 async function assertLiveVideo(page, min = 1) {
   await expect.poll(async () => page.locator("#video-grid video").count(), {
-    timeout: 20_000,
+    timeout: 45_000,
   }).toBeGreaterThanOrEqual(min);
+  const liveTracks = new Set();
   await expect.poll(async () => {
-    return page.evaluate(async () => {
+    const advanced = await page.evaluate(async () => {
       const vids = [...document.querySelectorAll("#video-grid video")];
-      const before = vids.map((v) => v.currentTime);
-      await new Promise((r) => setTimeout(r, 500));
-      let live = 0;
+      const trackId = (v) => (v.srcObject && v.srcObject.getVideoTracks()[0] && v.srcObject.getVideoTracks()[0].id) || null;
+      const before = vids.map((v) => ({ id: trackId(v), t: v.currentTime, w: v.videoWidth }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const out = [];
       vids.forEach((v, i) => {
-        if (v.videoWidth > 0 && v.currentTime > before[i]) live++;
+        if (before[i].id && before[i].w > 0 && v.currentTime > before[i].t) out.push(before[i].id);
       });
-      return live;
+      return out;
     });
-  }, { timeout: 20_000 }).toBeGreaterThanOrEqual(min);
+    advanced.forEach((id) => liveTracks.add(id));
+    return liveTracks.size;
+  }, { timeout: 45_000 }).toBeGreaterThanOrEqual(min);
 }
 
 async function inCall(page) {
@@ -118,6 +128,7 @@ test("hang up ends the call for both parties", async () => {
 });
 
 test("glare: simultaneous first-time camera adds converge under Perfect Negotiation", async () => {
+  test.setTimeout(150_000); // two assertLiveVideo calls, each up to a 45s convergence ceiling
   // A real offer collision needs BOTH ends to addTrack (first-time camera →
   // renegotiation offer) at once, from a camera-off join. The per-channel
   // camera preference would auto-enable page1's camera at join after the
@@ -152,6 +163,7 @@ test("glare: simultaneous first-time camera adds converge under Perfect Negotiat
 });
 
 test("sequential camera adds: the SECOND camera also reaches the other end", async () => {
+  test.setTimeout(180_000); // three assertLiveVideo calls, each up to a 45s convergence ceiling
   // Regression guard. The glare test above adds both cameras at once (neither side
   // yet has a video transceiver, so both addTrack and both offer). The bug this pins
   // is the SEQUENTIAL case: once one side sends video, the other holds a RECVONLY

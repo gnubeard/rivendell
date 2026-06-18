@@ -48,33 +48,58 @@ function postMessage(p, channelId, content) {
   }, { channelId, content });
 }
 
+// openChannel selects the channel AND waits for its messages GET to settle. The
+// wait matters because these specs post AFTER opening: a message is otherwise
+// delivered to this client twice — once by this GET, once by the WS message.new
+// echo — and addMessage OVERWRITES content on the second delivery. If that second
+// delivery lands after the test's "remove embed" edit, it reverts the row to the
+// original (un-wrapped) content and the embed reappears. Opening the empty channel
+// first, with the GET drained, leaves the WS echo as the message's sole delivery,
+// so nothing can race the later edit.
 async function openChannel(p, channelId) {
+  const loaded = p.waitForResponse(
+    (r) =>
+      new RegExp(`/api/channels/${channelId}/messages(\\?|$)`).test(r.url()) &&
+      r.request().method() === "GET" &&
+      r.ok(),
+  );
   await p.click(`#channel-list li[data-ch-id="${channelId}"]`);
   await expect(p.locator(`#channel-list li[data-ch-id="${channelId}"]`)).toHaveClass(/active/);
+  await loaded;
 }
 
 // assertButtonOverEmbed checks the × sits INSIDE the embed's box (top-right corner),
 // not floating in the margin gap above it (the bug this fix targets). The button
 // keeps a layout box even while visibility:hidden, so this is measurable without
-// depending on CSS :hover — which Playwright can't reliably hold across awaits, so
-// the actual click below uses a force click (hover+click atomically) instead.
+// depending on CSS :hover (the click below uses dispatchEvent, also hover-independent).
+//
+// The geometry is read inside an expect.poll because it isn't stable on the first
+// frame: for the bare-URL image case the × is positioned against the anchor's box,
+// which is an unsized inline-block (width ~0) until the routed <img> decodes — and
+// the row is re-rendered out from under us when the message.new WS echo of our own
+// post lands, swapping in a fresh loading="lazy" <img> that resets to not-complete.
+// So we re-measure until the image is loaded AND the button is contained, which is
+// robust to any intervening re-render rather than racing a single snapshot.
 async function assertButtonOverEmbed(p, embedSel) {
-  const r = await p.evaluate((sel) => {
-    const embed = document.querySelector(sel);
-    const btn = embed && embed.querySelector(".embed-remove");
-    if (!embed || !btn) return null;
-    const e = embed.getBoundingClientRect();
-    const b = btn.getBoundingClientRect();
-    return { e: { top: e.top, right: e.right, bottom: e.bottom, left: e.left }, b: { top: b.top, right: b.right, bottom: b.bottom, left: b.left } };
-  }, embedSel);
-  expect(r, `embed ${embedSel} and its .embed-remove both present`).not.toBeNull();
-  // Button's center lies within the embed's box (a small tolerance for the inset).
-  const cx = (r.b.left + r.b.right) / 2;
-  const cy = (r.b.top + r.b.bottom) / 2;
-  expect(cx).toBeGreaterThanOrEqual(r.e.left - 1);
-  expect(cx).toBeLessThanOrEqual(r.e.right + 1);
-  expect(cy).toBeGreaterThanOrEqual(r.e.top - 1);
-  expect(cy).toBeLessThanOrEqual(r.e.bottom + 1);
+  await expect
+    .poll(() =>
+      p.evaluate((sel) => {
+        const embed = document.querySelector(sel);
+        const btn = embed && embed.querySelector(".embed-remove");
+        if (!embed || !btn) return { ready: false, inside: false };
+        // An image embed has no measurable box until its <img> has intrinsic size.
+        const img = embed.querySelector("img.msg-image");
+        if (img && !(img.complete && img.naturalWidth > 0)) return { ready: false, inside: false };
+        const e = embed.getBoundingClientRect();
+        const b = btn.getBoundingClientRect();
+        const cx = (b.left + b.right) / 2;
+        const cy = (b.top + b.bottom) / 2;
+        // Button center within the embed's box (a small tolerance for the inset).
+        const inside = cx >= e.left - 1 && cx <= e.right + 1 && cy >= e.top - 1 && cy <= e.bottom + 1;
+        return { ready: true, inside };
+      }, embedSel),
+    )
+    .toEqual({ ready: true, inside: true });
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -98,16 +123,18 @@ test("author removes an og: card embed via the hover ×", async () => {
   );
 
   const ch = await makeChannel(page, `rmext${TS}`);
+  await openChannel(page, ch); // open the empty channel first; post lands via the WS echo only
   await postMessage(page, ch, `read this ${extURL}`);
-  await openChannel(page, ch);
 
   const card = page.locator("#message-list a.link-preview");
   await expect(card).toBeVisible();
 
   // The × is appended into the card and sits at its top-right corner (not the gap
-  // above). Reveal is CSS row-hover; the force click hovers+clicks atomically.
+  // above). It's pointer-events:none until CSS row-hover, so a real click depends on
+  // the hover landing first (a :hover/pointer-events frame race). dispatchEvent runs
+  // the handler directly — no hover dependency — exactly like emoji-picker.spec.js.
   await assertButtonOverEmbed(page, "#message-list a.link-preview");
-  await card.locator(".embed-remove").click({ force: true });
+  await card.locator(".embed-remove").dispatchEvent("click");
 
   // Card gone, URL now an angle-bracket plain link, message marked edited.
   await expect(page.locator("#message-list a.link-preview")).toHaveCount(0);
@@ -128,17 +155,18 @@ test("author removes a bare-URL inline image via the hover ×", async () => {
 
   const imgURL = `https://example.invalid/pic-${TS}.png`;
   const ch = await makeChannel(page, `rmimg${TS}`);
+  await openChannel(page, ch); // open the empty channel first; post lands via the WS echo only
   await postMessage(page, ch, `look ${imgURL}`);
-  await openChannel(page, ch);
 
   const imgLink = page.locator("#message-list a.msg-image-url");
   await expect(imgLink).toBeVisible();
 
   // The × is appended into the image anchor and sits over the image's top-right
   // corner (the inner img margin is moved to the anchor so it doesn't push the ×
-  // into the gap above). Reveal is CSS row-hover; force click hovers+clicks atomically.
+  // into the gap above). It's pointer-events:none until CSS row-hover, so dispatchEvent
+  // runs the handler directly — no hover/pointer-events frame race (cf. emoji-picker).
   await assertButtonOverEmbed(page, "#message-list a.msg-image-url");
-  await imgLink.locator(".embed-remove").click({ force: true });
+  await imgLink.locator(".embed-remove").dispatchEvent("click");
 
   // Image gone, URL now a plain (non-image) link.
   await expect(page.locator("#message-list img.msg-image")).toHaveCount(0);
