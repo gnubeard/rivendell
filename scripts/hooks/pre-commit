@@ -1,11 +1,66 @@
 #!/bin/bash
-# pre-commit — auto-bump the patch version on develop commits.
+# pre-commit — run the fast test gate, then auto-bump the patch version on
+# develop commits.
+#
+# The test gate runs the cheap, blocking tier of the suite whenever
+# source files are staged, on ANY branch (we want green everywhere): gofmt +
+# go vet + the full Go suite when Go is staged, and the web unit tests when
+# web/ is staged. The slow Playwright e2e suite is NOT here — it gates `git
+# push` from pre-push instead. Doc-only commits skip the gate entirely.
+#
+# This matters because on develop the post-commit hook deploys the moment a
+# source-touching commit lands, so pre-commit is the only point upstream of
+# the deploy — see scripts/hooks/post-commit.
+#
+# Tests run against the WORKING TREE (not the staged tree). For the normal
+# solo flow where you commit your whole working tree these are identical; they
+# differ only if you stage a partial subset. A stash-the-unstaged approach is
+# fragile (pop conflicts) and not worth it here.
+#
+# Escape hatch: RUN_TESTS=0 git commit … skips the gate (the version bump
+# still runs). Use it for deliberate WIP commits — prefer it over --no-verify,
+# which also disables the bump.
 #
 # Install with: make install-hooks
 set -euo pipefail
 
 DEPLOY_BRANCH="develop"
 VERSION_FILE="internal/config/config.go"
+SRC_RE='cmd/server|internal/|web/|Dockerfile|go.(mod|sum)'
+
+# ---------------------------------------------------------------------------
+# Test gate — runs on any branch, before the version bump.
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ "${RUN_TESTS:-1}" != "0" ] && echo "$staged" | grep -qE "$SRC_RE"; then
+  go_staged=$(echo "$staged" | grep -E '\.go$|go\.(mod|sum)$' || true)
+  web_staged=$(echo "$staged" | grep -E '^web/' || true)
+
+  if [ -n "$go_staged" ]; then
+    go_files=$(echo "$go_staged" | grep -E '\.go$' || true)
+    if [ -n "$go_files" ]; then
+      bad=$(gofmt -l $go_files)
+      if [ -n "$bad" ]; then
+        echo "pre-commit: gofmt needs to run on:" >&2
+        echo "$bad" >&2
+        echo "pre-commit: run 'make fmt' and re-stage." >&2
+        exit 1
+      fi
+    fi
+    echo "pre-commit: go vet + go test…"
+    make vet
+    make test-go
+  fi
+
+  if [ -n "$web_staged" ]; then
+    echo "pre-commit: web unit tests…"
+    make test-web
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Version bump — develop only.
 
 branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$branch" != "$DEPLOY_BRANCH" ]; then
@@ -13,8 +68,7 @@ if [ "$branch" != "$DEPLOY_BRANCH" ]; then
 fi
 
 # Only enforce version bump when meaningful source files are staged.
-if ! git diff --cached --name-only \
-     | grep -qE 'cmd/server|internal/|web/|Dockerfile|go.(mod|sum)'; then
+if ! echo "$staged" | grep -qE "$SRC_RE"; then
   exit 0
 fi
 

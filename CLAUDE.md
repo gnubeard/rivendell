@@ -99,6 +99,14 @@ Module path `rivendell`; Go 1.26. Imports `rivendell/internal/...`.
 Always run `gofmt`, `go vet ./...`, `go test ./...` (with `TEST_DATABASE_URL`), and
 `node --test web/test/*.test.js` before declaring work done. Add tests for new behavior.
 
+The git hooks (`make install-hooks`) now **enforce** this — they are the gate, since
+the deploy fires from `post-commit`. `pre-commit` runs the fast tier whenever source
+is staged (gofmt + `make vet` + `make test-go` when Go changed; `make test-web` when
+`web/` changed) on any branch, then the develop-only version bump. `pre-push` runs the
+slow `make test-e2e` when the push range touches `cmd/server|internal/|web/`. Escape
+hatches for deliberate WIP: `RUN_TESTS=0 git commit …` / `RUN_E2E=0 git push …`
+(prefer these over `--no-verify`, which also disables the version bump).
+
 ## Environment quirks
 
 - **Postgres is a container**, not a host service. No `pg_ctlcluster`. Dev creds:
