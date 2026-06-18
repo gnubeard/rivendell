@@ -150,14 +150,31 @@ and the remaining next steps live in [call-ui-video-staleness.md](call-ui-video-
   lands last). Not a test artifact; needs its own fix. Until then these two tests can still
   *rarely* flake under full-suite load — a known, documented gap, not new breakage.
 
-## Suite-wide audit of the non-call specs — clean
+## 6. `uiLogin` raced the WS connect SUITE-WIDE (the #3 race, everywhere) — RESOLVED
 
-Outside the call specs, a full sweep turned up no further genuine races. The candidates
-that looked suspect (`search`, `notifications`, `emoji-picker`, `link-previews`,
-`modals`) all use auto-retrying locator assertions, which already converge on async
-state. The one `waitForTimeout(300)` in `composer-paste.spec.js` is a deliberate
-*negative* assertion ("prove no smuggled fetch fired") — you can't poll for the absence
-of an event, so a bounded wait is correct there, not a flakiness source.
+`typing.spec.js` and `live-append.spec.js` flaked under full-suite load with a 90 s
+`beforeAll` timeout: `openChannel` waited on `#channel-list li[data-ch-id=N]` for a channel
+the `beforeAll` had just POSTed, and the row never appeared. This is **exactly the #3 race**
+— their `uiLogin` waited only for `#me-name`, not for the socket — and an audit showed it
+was latent in **21 of 22** specs that define `uiLogin` (only `group-call.spec.js`, fixed in
+#3, had the gate). Any spec whose setup creates a channel/DM and relies on the `*.new`
+broadcast to paint its row could hit it.
+
+Fix (shipped): apply the #3 gate **uniformly** — every `uiLogin` now waits for
+`#conn-status` to carry `online` before returning, so login means realtime-ready across the
+whole suite. Harmless where a spec didn't strictly need it (the socket connects reliably at
+boot); the point is that no future channel-creating `beforeAll` can silently reintroduce
+the race. (This supersedes #3's note that the DM-based call specs "don't share this" — they
+now carry the gate too, for uniformity.)
+
+## Suite-wide audit of the non-call specs
+
+Beyond the login race fixed in #6, the candidates that looked suspect (`search`,
+`notifications`, `emoji-picker`, `link-previews`, `modals`) all use auto-retrying locator
+assertions, which already converge on async state. The one `waitForTimeout(300)` in
+`composer-paste.spec.js` is a deliberate *negative* assertion ("prove no smuggled fetch
+fired") — you can't poll for the absence of an event, so a bounded wait is correct there,
+not a flakiness source.
 
 ## General lessons (the antipatterns that actually flake here)
 

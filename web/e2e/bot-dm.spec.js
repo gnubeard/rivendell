@@ -18,6 +18,10 @@ async function uiLogin(p, username) {
   await p.fill("#login-password", PASSWORD);
   await p.press("#login-password", "Enter");
   await expect(p.locator("#me-name")).toBeVisible();
+  // Login isn't realtime-ready until the WS connects (startRealtime runs last), so a
+  // *.new broadcast right after login can outrun the socket and be missed. Wait for it
+  // (see flaky-e2e #3).
+  await expect(p.locator("#conn-status")).toHaveClass(/\bonline\b/, { timeout: 15_000 });
 }
 
 // userId resolves a username to its id via the public API (cookie rides along).

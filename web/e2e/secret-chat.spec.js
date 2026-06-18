@@ -23,6 +23,10 @@ async function uiLogin(page, username) {
   await page.fill("#login-password", PASSWORD);
   await page.press("#login-password", "Enter");
   await expect(page.locator("#me-name")).toBeVisible();
+  // Login isn't realtime-ready until the WS connects (startRealtime runs last), so a
+  // *.new broadcast right after login can outrun the socket and be missed. Wait for it
+  // (see flaky-e2e #3).
+  await expect(page.locator("#conn-status")).toHaveClass(/\bonline\b/, { timeout: 15_000 });
 }
 
 // openDM creates/reopens the DM with otherUsername via the API (cookie rides

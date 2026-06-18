@@ -30,6 +30,10 @@ async function uiLogin(page, username) {
   // Logged in when the sidebar user profile renders (always non-empty, unlike
   // #channel-list which has zero height on a fresh database with no channels).
   await expect(page.locator("#me-name")).toBeVisible();
+  // Login isn't realtime-ready until the WS connects (startRealtime runs last), so a
+  // *.new broadcast right after login can outrun the socket and be missed. Wait for it
+  // (see flaky-e2e #3).
+  await expect(page.locator("#conn-status")).toHaveClass(/\bonline\b/, { timeout: 15_000 });
 }
 
 // openDM creates (or reopens) the DM with `otherUsername` through the public
