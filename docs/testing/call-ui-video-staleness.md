@@ -1,137 +1,176 @@
-# Call-UI video staleness — investigation hand-off
+# Call-UI video staleness — investigation log
 
-**Status: OPEN, real bug, not yet fixed.** Diagnosed far enough to be confident it's a
-genuine (rare) call-UI bug, then deferred so it can be fixed with fresh context rather
-than rushed in fragile realtime code. Start here.
+**Two distinct bugs hide behind the same e2e symptom.** Bug #1 (glare signaling
+serialization) is **FIXED** (v2.0.25). Bug #2 (a stale `video_muted` roster flag) is
+**still OPEN** — it's the rarer residual and the one the original hand-off described. Read
+the whole thing before touching realtime code; the two have opposite root layers.
 
-## Symptom
+## Symptom (shared by both bugs)
 
-Two e2e tests flake **only under full-suite CPU contention** (this box has **2 cores**;
-the whole Playwright suite running serially starves the browsers). Not reproducible by
-running the spec in isolation. Rate ~1 in 3–8 full-suite runs.
+Two e2e tests flake **only under full-suite CPU contention** (this box has 2 cores; the
+serial Playwright suite starves the video-encoding Chromium contexts). Not reproducible in
+isolation.
 
-- `web/e2e/dm-call.spec.js` → "glare: simultaneous first-time camera adds converge under
-  Perfect Negotiation"
+- `web/e2e/dm-call.spec.js` → "glare: simultaneous first-time camera adds…"
 - `web/e2e/group-call.spec.js` → "two cameras on → the third sees both remote tiles"
 
-Both fail the **first** `assertLiveVideo` poll: `#video-grid video` count is 1, expected
-2. One peer never shows the other's remote video tile (for the full 45s timeout — not
-slow, genuinely absent from the DOM).
+Both fail the **first** `assertLiveVideo` poll: `#video-grid video` count is 1, expected 2.
+One peer shows an avatar tile where the other's live video should be.
 
-## What is PROVEN (instrumented repro, hard data)
+## How the two bugs are told apart (the decisive capture)
 
-The media is fine; only the **UI** is wrong. From a captured failure (page1 = the peer
-missing the tile):
+Instrument the DM-grid render to log, at the branch decision, **both** `hasEl`
+(`!!getVideoEl(peerId)` — does the remote `<video>` element exist?) and `pVm`
+(`participants[peer].video_muted` — the roster flag). The failing render then reads as one
+of two signatures:
+
+- **Bug #1 — `hasEl:false`** → the remote video element was never created (no `ontrack`):
+  a **media/negotiation** failure. The peer's video never arrived.
+- **Bug #2 — `hasEl:true, pVm:true`** → the element EXISTS and is live, but the roster
+  flag says muted, so the render picks the avatar branch: a **stale-flag** failure.
+
+The original hand-off saw only the bug-#2 signature and theorised "stale flag." Adding the
+serialised instrumentation (below) surfaced bug #1 as the *dominant* cause first.
+
+---
+
+## Bug #1 — glare signaling serialization — FIXED (v2.0.25)
+
+**Root cause.** Voice signaling was dispatched **fire-and-forget**: `app.js`'s
+`handleRealtimeEvent` is not async and calls `voiceUI.onVoiceEvent(evt)` without awaiting
+it (`if (evt.type.startsWith("voice.")) voiceUI.onVoiceEvent(evt);`). Those handlers
+(`onOffer`/`onAnswer`) are async and `await pc.setRemoteDescription(...)`. So two voice
+frames arriving back-to-back run their async bodies **concurrently**, violating Perfect
+Negotiation's hard requirement that signaling be processed strictly serially per
+connection.
+
+**The failure, proven by capture.** In a simultaneous-camera glare (both peers `addTrack`
+at once), the polite peer (higher id) rolls back its own offer, accepts the impolite
+peer's, answers it, and then one-shot **re-offers** its own video (`renegotiatePending` →
+`maybeRenegotiate`). The impolite peer (lower id) receives, back-to-back: the **answer** to
+its own offer, then that **re-offer**. Under CPU load `setRemoteDescription(answer)` is
+slow; because the dispatch didn't await, the re-offer's `onOffer` ran **during** that await
+— so the impolite peer was still in `have-local-offer`, declared a collision, and (being
+impolite) **ignored** the re-offer. The one-shot `renegotiatePending` was already spent, so
+the polite peer never re-offered again. That video direction was lost for the whole call.
+
+The ring-buffer trace showed the smoking gun unambiguously — the `voice.offer` handler's
+`sig-begin … glare-ignore … sig-end` nested *inside* the `voice.answer` handler's
+`answer-recv-begin … answer-recv-done`:
 
 ```
-page1: conn=connected, ice=connected,
-  transceiver mid1 video currentDirection=sendrecv   ← negotiated to send AND receive
-  vids=1                                              ← only 1 <video> in #video-grid
-  videoEls=[2]                                        ← the remote element FOR peer 2 EXISTS
-  videoElsState: {uid:2, inDom:FALSE, hasSrc:true, vw:640, paused:false}
-                                                      ← it's LIVE (640px, playing) but NOT in the DOM
-  localVideo: {inDom:true, vw:640}                   ← own preview is fine
-  gridTiles=1                                         ← the remote tile rendered is an AVATAR (.video-tile), not the video
+sig-begin   voice.answer from:2
+answer-recv-begin  sig:have-local-offer          ← await setRemoteDescription(answer) starts
+  sig-begin voice.offer from:2                    ← re-offer dispatched CONCURRENTLY
+  offer-recv polite:false collision:true sig:have-local-offer
+  glare-ignore                                    ← impolite peer drops the re-offer
+  sig-end   voice.offer from:2
+answer-recv-done   sig:stable                      ← answer only NOW applied
+sig-end     voice.answer from:2
 ```
 
-So: the remote video track is negotiated and flowing, `ontrack` created the `<video>`
-element (it's in the `videoEls` map, live, 640px) — but `renderDMVideoGrid` chose the
-**avatar** branch and never put that live element in `#video-grid`.
-
-## The gate that fails
-
-`web/static/videogrid.js`, `renderDMVideoGrid` (~line 151):
+**The fix** (`voice.js`, `handleVoiceSignal`): serialise every voice frame through a
+one-at-a-time FIFO so each handler fully settles before the next begins.
 
 ```js
-const remoteVideoMuted = !otherP || otherP.video_muted;  // line ~130
-...
-if (remoteVideo && !remoteVideoMuted) { remoteTile.appendChild(remoteVideo); }
-else { remoteTile.appendChild(videoAvatarTile(...)); }   // ← this branch ran despite live media
+let signalChain = Promise.resolve();
+export function handleVoiceSignal(evt) {
+  signalChain = signalChain.then(() => dispatchVoiceSignal(evt)).catch(() => {});
+  return signalChain;
+}
+async function dispatchVoiceSignal(evt) { /* the switch over voice.state/offer/answer/ice */ }
 ```
 
-`buildParticipantTile` (group path, ~line 188) has the equivalent gate on `p.video_muted`.
+After the fix the handlers no longer nest and the deterministic loss is gone (the
+`glare-ignore` that remains is now harmless — the answer is fully applied before the next
+offer is processed). It is keyed at the signaling layer, NOT the flag/render layer the
+original hand-off suspected.
 
-So the tile is gated on the **`video_muted` roster flag**, not on whether media is
-actually flowing. The flag came out stale/wrong on the failing peer, OR a re-render after
-`ontrack` was missed. **This is the open question — see "Next step".**
+## Bug #2 — stale `video_muted` roster flag — STILL OPEN
 
-## Why the flag (and not the media) is load-bearing
+After bug #1, residual failures (~3/40 under the pathological 4-hog load below) show the
+bug-#2 signature: the receiver HAS the peer's live `<video>` (`hasEl:true`) but renders an
+avatar because `participants[peer].video_muted` is stuck `true`.
 
-You can't just "trust the live track instead of the flag": camera-OFF in this app **keeps
-the track** and only sets `track.enabled=false` (see `voice.js` ~line 537), which sends
-black frames — the receiver still sees a live track with `videoWidth>0`. So media alone
-cannot distinguish camera-off from camera-on; the `video_muted` signaling flag is
-genuinely necessary. The fix must make the flag (or the render) correct, not discard it.
+**What the capture proved:**
+1. The peer's camera **spuriously toggles off then back on** mid-call — a `voice.mute`
+   with `video_muted:true` is emitted (no offer/answer around it; pure `sendMuteState`
+   with `cameraEnabled===false`), then `video_muted:false` ~400 ms later. The e2e test
+   never asked for a second toggle. **What flips `cameraEnabled` to false is not yet
+   identified** (it is NOT the DM path — `voice.join_denied{video_full}` is group-only and
+   DM-exempt server-side; the camera button isn't re-clicked).
+2. The receiver then sees a **5 ms double-broadcast** of `voice.state`: `[peer vm:false]`
+   immediately followed by `[peer vm:true]`, and the stale `true` lands last — even though
+   that peer's *last* `sendMuteState` was `video_muted:false`. So the server's final
+   broadcast disagrees with the peer's last announced state. Since `VoiceJoin` is
+   idempotent and `VoiceSetMute` only mutates the live entry (`hub.go`), this points at
+   either a server-roster ordering issue or a brief **WS double-socket** delivering frames
+   out of order under load.
 
-## Hypotheses — one DISPROVEN, one OPEN
+**Next captures to take** (re-add instrumentation, then run the repro below):
+- Log `setCameraEnabled` entry with `on` + a caller hint (and `joinVoiceChannel`) to find
+  what drives the spurious camera-off.
+- Log the WS socket identity (so a transient double-socket shows up) alongside every
+  received `voice.state`, to see whether the `false`→`true` regression is out-of-order
+  delivery vs a genuine server broadcast.
 
-- **DISPROVEN: slow-consumer WS drop.** The hub drops+closes a client whose 64-deep send
-  buffer overflows (`internal/ws/hub.go` ~line 150, "dropping slow client"). I suspected a
-  dropped `voice.state` left the flag stale. But a full WS close on the last connection
-  fires `onPresenceChange(online=false)` → `cleanupVoiceForUser` (`realtime.go:96`), which
-  for a DM **ends the call for both**. In the failures the call is still alive (call-strip
-  present, media flowing), so the WS did **not** drop. (Also confirmed `hub.remove()` does
-  NOT prune voice state on disconnect — only the presence-offline path does.)
-- **OPEN: stale flag vs missed re-render.** Two candidates remain, NOT yet distinguished
-  because the dump captured `peerMeta` but **not** `voiceCallState.participants[].video_muted`:
-  1. **Stale flag:** page1's `participants` entry for peer 2 has `video_muted:true` at
-     render time (a `voice.state`/`voice.mute` ordering or lost-update issue). `onVoiceState`
-     (`voice.js:1570`) *replaces* the whole roster from each `voice.state` payload.
-  2. **Missed re-render:** the flag is correct (`false`) but the grid render that would
-     show the now-created `videoEls[2]` never ran after `ontrack`. `ontrack` (`voice.js`
-     ~line 1864) calls `notifyState()` → app.js re-renders; if that render was coalesced/
-     skipped, the element stays out of the DOM.
+**Why you can't just trust the live track instead of the flag:** camera-OFF in this app
+keeps the track and only sets `track.enabled=false` (`voice.js`), sending black frames — so
+the receiver still sees a live track with `videoWidth>0`. Media alone cannot distinguish
+camera-off from camera-on; the `video_muted` flag is genuinely necessary. The fix must make
+the flag (or its delivery) correct, not discard it.
 
-## Next step (the one capture that decides it)
+---
 
-Re-instrument and reproduce, capturing **both**: the live `participants[].video_muted`
-flag for the missing peer, AND whether a grid render happened after `ontrack` created the
-element. Then:
-- if flag is `true` → it's the signaling staleness → fix flag delivery/reconciliation;
-- if flag is `false` → it's a missed render → fix the render trigger (re-render on
-  `ontrack`, or have the render not depend on element-exists-at-that-instant).
+## Instrumentation that cracked it (re-add temporarily; tag every line `// __CALLDBG__`)
 
-### Instrumentation I used (re-add temporarily; remove before commit)
+A per-page ring buffer recording the **ordered** call-event sequence, dumped for all
+involved pages on the first `assertLiveVideo` failure. The shared global lets
+`videogrid.js` + `ws.js` push to the same buffer.
 
-In `web/static/voice.js`, right after the `peerConns`/`peerMeta` declarations:
 ```js
-if (typeof window !== "undefined") window.__voiceDbg = {
-  peerConns: () => peerConns, peerMeta: () => peerMeta, myId: () => myUserId,
-  videoEls: () => videoEls, localVideoEl: () => localVideoEl,
-  participants: () => participants,            // ADD THIS — capture video_muted
-};
+// voice.js, near the top:
+function callDbg(ev, d) {
+  if (typeof window === "undefined") return;
+  const buf = window.__callDbg || (window.__callDbg = []);
+  buf.push(Object.assign({ t: Date.now(), me: myUserId, ev }, d));
+  if (buf.length > 800) buf.shift();
+}
+if (typeof window !== "undefined") window.__callDbgPush = callDbg; // ws.js/videogrid.js reuse
 ```
-Then in the failing spec, on assert failure, `page.evaluate` to dump
-`window.__voiceDbg.participants()` (the `video_muted` per user) alongside the
-`videoEls`/grid state already shown above.
 
-### Repro recipe (don't waste time running specs in isolation — they pass)
+Log points that mattered: `onVoiceState` (per-peer `video_muted`); `ontrack` video
+(`created`); the DM-grid + group-tile branch decision (`hasEl`, `pVm`, branch);
+`sendMuteState` (`vm`); `sendOffer`/`onOffer`/`onAnswer` with `signalingState` +
+collision/ignore; and `sig-begin`/`sig-end` around each handler in `dispatchVoiceSignal`
+(the begin/end pair is what makes concurrent interleaving visible). In ws.js: `ws-open` /
+`ws-close`. The spec helper dumps `window.__callDbg` (JSON per line) for the page under
+assert and its peers.
 
-The bug needs CPU starvation. Either run the full suite 10× (slow), or oversubscribe the
-2 cores and loop the one spec:
+## Repro recipe (don't run the spec in isolation — it passes)
+
+The bug needs CPU starvation. Oversubscribe the 2 cores and loop one spec:
+
 ```sh
 cd web
 export E2E_DATABASE_URL=... E2E_DB_RESET_CMD=... E2E_WEBKIT='' E2E_FIREFOX=''
-for c in 1 2 3 4; do yes > /dev/null & done      # 4 CPU hogs on 2 cores
-for i in $(seq 1 24); do npx playwright test dm-call.spec.js --reporter=line; done
-kill %1 %2 %3 %4
+hogs=(); for c in 1 2 3 4; do yes >/dev/null & hogs+=($!); done   # 4 CPU hogs on 2 cores
+for i in $(seq 1 40); do npx playwright test dm-call.spec.js --project=chromium --reporter=line || break; done
+kill "${hogs[@]}"
 ```
-This reproduced it ~2/24. (1 hog was too weak; 4 reliably starves the browsers.)
 
-## Likely fix shapes (to evaluate once the capture decides)
+Reproduced bug #1 at iter 6 and 11; after the fix, bug #2 at iters 5/16/38/40. (Note: 4
+hogs on 2 cores is *harsher* than a real full-suite run, so some residual churn here may be
+load artifact — but the bug-#2 stale-flag symptom does occur under realistic full-suite
+load too.)
 
-- If stale flag: re-sync the voice roster on signaling reconnect (mirror app.js `resync()`,
-  which currently re-pulls users/channels/messages but **omits voice** — there's no REST
-  voice-roster endpoint, so trigger a server rebroadcast, e.g. re-send `voice.mute` with
-  current posture; note the server does NOT prune voice on disconnect so this is safe),
-  and/or reconcile in the render.
-- If missed render: ensure `ontrack` reliably triggers a grid render for the new element
-  (and that the render isn't coalesced away).
+## Disproven / superseded
 
-## A note on the earlier glare attempt (reverted)
-
-While chasing this I added a `sendOffer` `finally` → `maybeRenegotiate` flush in
-`voice.js` (a real-looking glare re-offer race) and bumped to v2.0.25. The instrumented
-dump later showed the transceiver was already `sendrecv` (negotiation was fine), so that
-change was treating the wrong layer; it was **reverted**. Don't reach for the glare path
-first — the evidence points at the UI/flag layer, not negotiation.
+- **DISPROVEN (original hand-off): "slow-consumer WS drop ends the call."** A drop only ends
+  a DM call if `onPresenceChange(online=false)` fires, and that fires only on the user's
+  *last* connection closing (`hub.go`). A drop + fast reconnect leaves the call alive.
+- **SUPERSEDED: "stale flag vs missed render" as the framing.** Render is never coalesced
+  for voice (`onVoiceStateChange` → `renderVideoGrid` synchronously; `ontrack` →
+  `notifyState` → render synchronously), so a *missed render* was never the issue. Bug #1
+  was a negotiation-layer loss; bug #2 is a genuine stale flag (delivery/source), not a
+  missed paint.

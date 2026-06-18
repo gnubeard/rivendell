@@ -125,26 +125,30 @@ keep them in sync (the helper is intentionally duplicated, matching the self-con
 spec convention). Heavy tests that call it 2–3× also get a raised per-test `setTimeout`
 so the 45s ceilings can't blow the default 90s budget.
 
-## 5. `dm-call` glare + `group-call` camera — a REAL, UNFIXED call-UI bug — HANDED OFF
+## 5. `dm-call` glare + `group-call` camera — TWO real call-UI bugs (one fixed, one open)
 
-After #1–#4, two call tests still flake under *full-suite* CPU contention (~1 in 3–8 full
-runs; not reproducible in isolation, only under load): `dm-call`'s "glare: simultaneous
-first-time camera adds" and `group-call`'s "two cameras → third sees both". Both fail the
-first poll — only 1 `<video>` element where 2 are expected — because one peer never shows
-the other's remote video tile.
+After #1–#4, two call tests still flaked under *full-suite* CPU contention (~1 in 3–8 full
+runs; not reproducible in isolation): `dm-call`'s "glare: simultaneous first-time camera
+adds" and `group-call`'s "two cameras → third sees both". Both fail the first poll — 1
+`<video>` element where 2 are expected — because one peer shows an avatar where the other's
+live video should be. Instrumenting the ordered call-event sequence revealed **two distinct
+root causes** behind the one symptom (full diagnosis, the proven captures, the repro recipe,
+and the remaining next steps live in [call-ui-video-staleness.md](call-ui-video-staleness.md)):
 
-This is **not** a test artifact and **not yet fixed**. Instrumented repro (see the
-hand-off doc) proved the media is fine: the remote video element exists, has a live
-`srcObject`, `videoWidth=640`, is not paused — but is **not in the DOM** (`#video-grid`
-shows an avatar tile instead). So the UI is showing an avatar over genuinely-live remote
-video. It is a real, rare, pre-existing call-UI bug, deferred to a dedicated investigation
-with fresh context rather than rushed in fragile realtime code.
+- **Bug #1 — glare signaling serialization — FIXED (v2.0.25).** Voice frames were
+  dispatched fire-and-forget (`app.js` `handleRealtimeEvent` doesn't await
+  `voiceUI.onVoiceEvent`), so `onOffer`/`onAnswer` ran concurrently and corrupted Perfect
+  Negotiation — the impolite peer ignored the polite peer's one-shot re-offer mid-
+  `setRemoteDescription`, permanently losing one video direction (`hasEl:false` — the
+  remote element never existed). Fix: `voice.js` `handleVoiceSignal` now serialises every
+  voice frame through a one-at-a-time FIFO. This was the **dominant, deterministic** cause.
 
-**Full findings, the exact repro recipe (CPU oversubscription), the disproven hypotheses,
-and the precise next capture needed are in
-[call-ui-video-staleness.md](call-ui-video-staleness.md).** Until it's fixed, these two
-tests remain occasionally red under full-suite load — a known, documented gap, not new
-breakage. Everything in #1–#4 is shipped and solid; no app code changed in this pass.
+- **Bug #2 — stale `video_muted` roster flag — STILL OPEN.** The rarer residual matches the
+  original hand-off symptom: the receiver HAS the peer's live `<video>` (`hasEl:true`) but
+  renders an avatar because `participants[peer].video_muted` is stuck `true` (a spurious
+  camera off/on toggle plus a `voice.state` `false`→`true` regression where the stale value
+  lands last). Not a test artifact; needs its own fix. Until then these two tests can still
+  *rarely* flake under full-suite load — a known, documented gap, not new breakage.
 
 ## Suite-wide audit of the non-call specs — clean
 

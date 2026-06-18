@@ -996,7 +996,25 @@ async function acquireJoinStream() {
 }
 
 // handleVoiceSignal dispatches an incoming voice.* event received over the WS.
-export async function handleVoiceSignal(evt) {
+//
+// Voice signaling MUST be applied strictly in arrival order. Perfect Negotiation
+// (onOffer/onAnswer) drives a state machine on each RTCPeerConnection's
+// signalingState, and the handlers await setRemoteDescription/setLocalDescription
+// — so processing two frames concurrently corrupts that machine. The WS dispatch
+// in app.js calls us fire-and-forget (NOT awaited), so without serialising, a
+// re-offer arriving while we're still applying the answer to our own offer runs
+// CONCURRENTLY: the impolite peer then sees its own still-unsettled have-local-offer,
+// wrongly treats the re-offer as a glare collision, and ignores it — losing that
+// peer's video for the whole call (the CPU-load simultaneous-camera glare flake;
+// see docs/testing/call-ui-video-staleness.md). A one-at-a-time FIFO keeps every
+// frame's async handler fully settled before the next begins.
+let signalChain = Promise.resolve();
+export function handleVoiceSignal(evt) {
+  signalChain = signalChain.then(() => dispatchVoiceSignal(evt)).catch(() => {});
+  return signalChain;
+}
+
+async function dispatchVoiceSignal(evt) {
   const p = evt.payload || {};
   switch (evt.type) {
   case "voice.state":
