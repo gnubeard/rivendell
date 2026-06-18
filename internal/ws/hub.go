@@ -32,6 +32,15 @@ type Hub struct {
 	onMessage     func(c *Client, data []byte)
 	voiceMu       sync.RWMutex
 	voiceChannels map[int64]map[int64]*VoiceParticipant // channelID → userID → participant
+	// voiceSeq is a monotonic counter stamped onto every voice.state broadcast,
+	// assigned under voiceMu at mutation time. Each client connection has its own
+	// readPump goroutine, and a voice.state snapshot is taken under the lock but
+	// sent AFTER releasing it — so two clients' broadcasts to a third party can
+	// arrive out of logical order (a stale roster landing last, showing an avatar
+	// over live video). The receiver drops any voice.state whose seq isn't newer
+	// than the last it applied. Monotonic across all channels; the client compares
+	// per active call. See docs/testing/call-ui-video-staleness.md (bug #2).
+	voiceSeq uint64
 }
 
 // Client is one WebSocket connection belonging to a user. idle is an ephemeral,
@@ -276,8 +285,9 @@ func (h *Hub) SendToUser(userID int64, data []byte) {
 	}
 }
 
-// VoiceJoin adds userID to the voice channel, returning the updated participant list.
-func (h *Hub) VoiceJoin(channelID, userID int64) []VoiceParticipant {
+// VoiceJoin adds userID to the voice channel, returning the updated participant
+// list and the monotonic seq stamped on the resulting broadcast (see voiceSeq).
+func (h *Hub) VoiceJoin(channelID, userID int64) ([]VoiceParticipant, uint64) {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	if h.voiceChannels[channelID] == nil {
@@ -293,11 +303,13 @@ func (h *Hub) VoiceJoin(channelID, userID int64) []VoiceParticipant {
 			VideoMuted: true,
 		}
 	}
-	return voiceList(h.voiceChannels[channelID])
+	h.voiceSeq++
+	return voiceList(h.voiceChannels[channelID]), h.voiceSeq
 }
 
-// VoiceLeave removes userID from the voice channel, returning the updated participant list.
-func (h *Hub) VoiceLeave(channelID, userID int64) []VoiceParticipant {
+// VoiceLeave removes userID from the voice channel, returning the updated
+// participant list and the seq stamped on the resulting broadcast (see voiceSeq).
+func (h *Hub) VoiceLeave(channelID, userID int64) ([]VoiceParticipant, uint64) {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	if m := h.voiceChannels[channelID]; m != nil {
@@ -306,12 +318,13 @@ func (h *Hub) VoiceLeave(channelID, userID int64) []VoiceParticipant {
 			delete(h.voiceChannels, channelID)
 		}
 	}
-	return voiceList(h.voiceChannels[channelID])
+	h.voiceSeq++
+	return voiceList(h.voiceChannels[channelID]), h.voiceSeq
 }
 
 // VoiceSetMute updates a participant's muted, video-muted, and screen-sharing
 // flags, returning the updated list.
-func (h *Hub) VoiceSetMute(channelID, userID int64, muted, videoMuted, sharing bool) []VoiceParticipant {
+func (h *Hub) VoiceSetMute(channelID, userID int64, muted, videoMuted, sharing bool) ([]VoiceParticipant, uint64) {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	if m := h.voiceChannels[channelID]; m != nil {
@@ -321,14 +334,15 @@ func (h *Hub) VoiceSetMute(channelID, userID int64, muted, videoMuted, sharing b
 			p.Sharing = sharing
 		}
 	}
-	return voiceList(h.voiceChannels[channelID])
+	h.voiceSeq++
+	return voiceList(h.voiceChannels[channelID]), h.voiceSeq
 }
 
 // VoiceClear removes everyone from a voice channel and returns the user IDs
 // that were participating, so the caller can notify them. Used for DM calls,
 // which are phone-call style: when one party hangs up (or drops), the call ends
 // for both rather than leaving the other stranded alone in the channel.
-func (h *Hub) VoiceClear(channelID int64) []int64 {
+func (h *Hub) VoiceClear(channelID int64) ([]int64, uint64) {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	m := h.voiceChannels[channelID]
@@ -337,7 +351,8 @@ func (h *Hub) VoiceClear(channelID int64) []int64 {
 		ids = append(ids, id)
 	}
 	delete(h.voiceChannels, channelID)
-	return ids
+	h.voiceSeq++
+	return ids, h.voiceSeq
 }
 
 // VoiceParticipants returns a snapshot of who is in a voice channel.
@@ -367,9 +382,11 @@ func (h *Hub) VoiceCounts(channelID, exclude int64) (total, videoOn int) {
 	return total, videoOn
 }
 
-// VoiceLeaveAll removes userID from every voice channel they are in.
-// Returns a map of channelID → updated participant list for each affected channel.
-func (h *Hub) VoiceLeaveAll(userID int64) map[int64][]VoiceParticipant {
+// VoiceLeaveAll removes userID from every voice channel they are in. Returns a
+// map of channelID → updated participant list for each affected channel, plus the
+// seq stamped on those broadcasts (one bump for the whole operation; monotonic
+// against any concurrent per-channel mutation — see voiceSeq).
+func (h *Hub) VoiceLeaveAll(userID int64) (map[int64][]VoiceParticipant, uint64) {
 	h.voiceMu.Lock()
 	defer h.voiceMu.Unlock()
 	affected := make(map[int64][]VoiceParticipant)
@@ -385,7 +402,8 @@ func (h *Hub) VoiceLeaveAll(userID int64) map[int64][]VoiceParticipant {
 			affected[chID] = voiceList(m)
 		}
 	}
-	return affected
+	h.voiceSeq++
+	return affected, h.voiceSeq
 }
 
 // VoiceAllChannels returns a snapshot of every channel that currently has at

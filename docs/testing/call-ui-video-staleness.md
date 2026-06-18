@@ -1,9 +1,12 @@
 # Call-UI video staleness — investigation log
 
-**Two distinct bugs hide behind the same e2e symptom.** Bug #1 (glare signaling
-serialization) is **FIXED** (v2.0.25). Bug #2 (a stale `video_muted` roster flag) is
-**still OPEN** — it's the rarer residual and the one the original hand-off described. Read
-the whole thing before touching realtime code; the two have opposite root layers.
+**Two distinct bugs hid behind the same e2e symptom; BOTH are now FIXED.** Bug #1 (glare
+signaling serialization, v2.0.25) and bug #2 (a stale/reordered `video_muted` roster flag,
+v2.0.26). Kept as a worked example: the symptom was identical, the two root causes were at
+opposite layers (client signaling vs server broadcast ordering), and only an ordered
+per-page event trace under CPU oversubscription told them apart. Under the 4-hogs-on-2-cores
+repro the `dm-call` glare test went 0/40 after both fixes (was deterministic for #1, ~3/40
+for #2).
 
 ## Symptom (shared by both bugs)
 
@@ -86,39 +89,44 @@ After the fix the handlers no longer nest and the deterministic loss is gone (th
 offer is processed). It is keyed at the signaling layer, NOT the flag/render layer the
 original hand-off suspected.
 
-## Bug #2 — stale `video_muted` roster flag — STILL OPEN
+## Bug #2 — stale/reordered `video_muted` roster flag — FIXED (v2.0.26)
 
-After bug #1, residual failures (~3/40 under the pathological 4-hog load below) show the
+After bug #1, residual failures (~3/40 under the pathological 4-hog load below) showed the
 bug-#2 signature: the receiver HAS the peer's live `<video>` (`hasEl:true`) but renders an
 avatar because `participants[peer].video_muted` is stuck `true`.
 
-**What the capture proved:**
-1. The peer's camera **spuriously toggles off then back on** mid-call — a `voice.mute`
-   with `video_muted:true` is emitted (no offer/answer around it; pure `sendMuteState`
-   with `cameraEnabled===false`), then `video_muted:false` ~400 ms later. The e2e test
-   never asked for a second toggle. **What flips `cameraEnabled` to false is not yet
-   identified** (it is NOT the DM path — `voice.join_denied{video_full}` is group-only and
-   DM-exempt server-side; the camera button isn't re-clicked).
-2. The receiver then sees a **5 ms double-broadcast** of `voice.state`: `[peer vm:false]`
-   immediately followed by `[peer vm:true]`, and the stale `true` lands last — even though
-   that peer's *last* `sendMuteState` was `video_muted:false`. So the server's final
-   broadcast disagrees with the peer's last announced state. Since `VoiceJoin` is
-   idempotent and `VoiceSetMute` only mutates the live entry (`hub.go`), this points at
-   either a server-roster ordering issue or a brief **WS double-socket** delivering frames
-   out of order under load.
+**Root cause — a server-side voice.state delivery REORDER.** The capture's contradiction was
+the tell: the peer's *last* `sendMuteState` was `video_muted:false`, yet the receiver's
+*last* `voice.state` for that peer was `true`. On a single in-order socket (verified: one
+`ws-open`, no `ws-close`) that's impossible unless the server delivers out of order. It does:
+each client connection has its **own `readPump` goroutine** (`hub.go`), so two clients'
+frames are processed concurrently; and a `voice.state` snapshot is taken under `voiceMu`
+(inside `VoiceSetMute`) but **broadcast after the lock is released**. So a broadcast carrying
+a logically-OLDER roster (triggered by client A's frame, snapshotting peer B as still
+`video_muted:true`) can be written to a third party's send queue AFTER a newer broadcast
+(peer B `false`). The receiver adopts the full roster wholesale, so the stale `true` lands
+last → avatar over live video.
 
-**Next captures to take** (re-add instrumentation, then run the repro below):
-- Log `setCameraEnabled` entry with `on` + a caller hint (and `joinVoiceChannel`) to find
-  what drives the spurious camera-off.
-- Log the WS socket identity (so a transient double-socket shows up) alongside every
-  received `voice.state`, to see whether the `false`→`true` regression is out-of-order
-  delivery vs a genuine server broadcast.
+The "spurious camera off/on toggle" seen in the trace (a peer emitting `video_muted:true`
+then `false` with no offer/answer around it) is just the **churn that produces the stale
+snapshot to race** — under extreme CPU starvation; it is harmless on its own (the final
+state is camera-on). It was NOT separately chased because the reorder fix makes the receiver
+robust to it regardless.
 
-**Why you can't just trust the live track instead of the flag:** camera-OFF in this app
-keeps the track and only sets `track.enabled=false` (`voice.js`), sending black frames — so
-the receiver still sees a live track with `videoWidth>0`. Media alone cannot distinguish
-camera-off from camera-on; the `video_muted` flag is genuinely necessary. The fix must make
-the flag (or its delivery) correct, not discard it.
+**The fix.** The hub stamps every `voice.state` with a per-channel monotonic `seq` assigned
+under `voiceMu` at mutation time (`Hub.voiceSeq`; all mutators return it, all broadcasts go
+through `Server.broadcastVoiceState`). The client (`voice.js` `onVoiceState`) tracks
+`lastVoiceSeq` for the active call and **drops any `voice.state` whose seq isn't newer** —
+so a reordered/stale snapshot can't overwrite a newer one. `lastVoiceSeq` resets to 0 on
+join (the server seq is globally monotonic, so the first post-join state always applies);
+a missing seq applies, for forward-compat. Guarded by `TestVoiceSeqMonotonic` (hub) and the
+0/40 e2e validation.
+
+**Why not just trust the live track instead of the flag:** camera-OFF keeps the track and
+only sets `track.enabled=false` (`voice.js`), sending black frames — so the receiver still
+sees a live track with `videoWidth>0`. Media alone cannot distinguish camera-off from
+camera-on; the `video_muted` flag is necessary. The fix makes its *delivery* correct rather
+than discarding it.
 
 ---
 
@@ -159,10 +167,9 @@ for i in $(seq 1 40); do npx playwright test dm-call.spec.js --project=chromium 
 kill "${hogs[@]}"
 ```
 
-Reproduced bug #1 at iter 6 and 11; after the fix, bug #2 at iters 5/16/38/40. (Note: 4
-hogs on 2 cores is *harsher* than a real full-suite run, so some residual churn here may be
-load artifact — but the bug-#2 stale-flag symptom does occur under realistic full-suite
-load too.)
+Reproduced bug #1 at iters 6 and 11; after the #1 fix, bug #2 at iters 5/16/38/40; after the
+#2 fix, **0/40**. (Note: 4 hogs on 2 cores is *harsher* than a real full-suite run, so it's
+a deliberately mean stress test — clean here is a strong signal.)
 
 ## Disproven / superseded
 

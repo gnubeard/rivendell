@@ -84,7 +84,7 @@ func TestVoiceClear(t *testing.T) {
 	hub.VoiceJoin(7, 1)
 	hub.VoiceJoin(7, 2)
 
-	ids := hub.VoiceClear(7)
+	ids, _ := hub.VoiceClear(7)
 	if len(ids) != 2 {
 		t.Fatalf("VoiceClear returned %v, want 2 ids", ids)
 	}
@@ -96,9 +96,40 @@ func TestVoiceClear(t *testing.T) {
 		t.Fatalf("channel not empty after VoiceClear: %v", p)
 	}
 	// Clearing an empty/unknown channel is a harmless no-op.
-	if ids := hub.VoiceClear(7); len(ids) != 0 {
+	if ids, _ := hub.VoiceClear(7); len(ids) != 0 {
 		t.Fatalf("VoiceClear of empty channel returned %v, want none", ids)
 	}
+}
+
+// TestVoiceSeqMonotonic guards the per-broadcast sequence stamped on voice.state:
+// every roster mutation must return a strictly larger seq than the last, across
+// join/mute/leave and across channels, so a client can drop a reordered (stale)
+// snapshot. Per-connection readPump goroutines + snapshot-under-lock/send-after
+// can otherwise deliver a logically-older roster last (the avatar-over-live-video
+// bug). See docs/testing/call-ui-video-staleness.md.
+func TestVoiceSeqMonotonic(t *testing.T) {
+	hub := NewHub(nil, nil)
+	var last uint64
+	check := func(seq uint64, what string) {
+		if seq <= last {
+			t.Fatalf("%s seq = %d, want > %d (must be strictly increasing)", what, seq, last)
+		}
+		last = seq
+	}
+	_, s := hub.VoiceJoin(7, 1)
+	check(s, "join u1")
+	_, s = hub.VoiceJoin(7, 2)
+	check(s, "join u2")
+	_, s = hub.VoiceSetMute(7, 1, false, false, false)
+	check(s, "mute u1")
+	_, s = hub.VoiceJoin(9, 3) // a different channel still advances the shared counter
+	check(s, "join other-channel u3")
+	_, s = hub.VoiceLeave(7, 2)
+	check(s, "leave u2")
+	_, s = hub.VoiceClear(7)
+	check(s, "clear")
+	_, s = hub.VoiceLeaveAll(3)
+	check(s, "leave-all")
 }
 
 // writeClientFrame sends one text frame to the server side of a pipe. readFrame

@@ -125,15 +125,15 @@ keep them in sync (the helper is intentionally duplicated, matching the self-con
 spec convention). Heavy tests that call it 2–3× also get a raised per-test `setTimeout`
 so the 45s ceilings can't blow the default 90s budget.
 
-## 5. `dm-call` glare + `group-call` camera — TWO real call-UI bugs (one fixed, one open)
+## 5. `dm-call` glare + `group-call` camera — TWO real call-UI bugs — BOTH FIXED
 
 After #1–#4, two call tests still flaked under *full-suite* CPU contention (~1 in 3–8 full
 runs; not reproducible in isolation): `dm-call`'s "glare: simultaneous first-time camera
-adds" and `group-call`'s "two cameras → third sees both". Both fail the first poll — 1
-`<video>` element where 2 are expected — because one peer shows an avatar where the other's
+adds" and `group-call`'s "two cameras → third sees both". Both failed the first poll — 1
+`<video>` element where 2 are expected — because one peer showed an avatar where the other's
 live video should be. Instrumenting the ordered call-event sequence revealed **two distinct
-root causes** behind the one symptom (full diagnosis, the proven captures, the repro recipe,
-and the remaining next steps live in [call-ui-video-staleness.md](call-ui-video-staleness.md)):
+root causes** behind the one symptom (full diagnosis, captures, and repro recipe in
+[call-ui-video-staleness.md](call-ui-video-staleness.md)):
 
 - **Bug #1 — glare signaling serialization — FIXED (v2.0.25).** Voice frames were
   dispatched fire-and-forget (`app.js` `handleRealtimeEvent` doesn't await
@@ -141,14 +141,18 @@ and the remaining next steps live in [call-ui-video-staleness.md](call-ui-video-
   Negotiation — the impolite peer ignored the polite peer's one-shot re-offer mid-
   `setRemoteDescription`, permanently losing one video direction (`hasEl:false` — the
   remote element never existed). Fix: `voice.js` `handleVoiceSignal` now serialises every
-  voice frame through a one-at-a-time FIFO. This was the **dominant, deterministic** cause.
+  voice frame through a one-at-a-time FIFO. The **dominant, deterministic** cause.
 
-- **Bug #2 — stale `video_muted` roster flag — STILL OPEN.** The rarer residual matches the
-  original hand-off symptom: the receiver HAS the peer's live `<video>` (`hasEl:true`) but
-  renders an avatar because `participants[peer].video_muted` is stuck `true` (a spurious
-  camera off/on toggle plus a `voice.state` `false`→`true` regression where the stale value
-  lands last). Not a test artifact; needs its own fix. Until then these two tests can still
-  *rarely* flake under full-suite load — a known, documented gap, not new breakage.
+- **Bug #2 — reordered `video_muted` roster flag — FIXED (v2.0.26).** The rarer residual:
+  the receiver HAS the peer's live `<video>` (`hasEl:true`) but renders an avatar because
+  `participants[peer].video_muted` is stuck `true`. Root cause was a **server-side
+  voice.state delivery reorder** — per-connection `readPump` goroutines + a snapshot taken
+  under `voiceMu` but broadcast after release let a logically-older roster land last. Fix:
+  every `voice.state` carries a per-channel monotonic `seq` (`Hub.voiceSeq`) and the client
+  drops any that isn't newer.
+
+Under the 4-hogs-on-2-cores stress repro the `dm-call` glare test went **0/40** after both
+fixes (deterministic for #1, ~3/40 for #2 before).
 
 ## 6. `uiLogin` raced the WS connect SUITE-WIDE (the #3 race, everywhere) — RESOLVED
 

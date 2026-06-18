@@ -11,12 +11,26 @@ import (
 	"rivendell/internal/ws"
 )
 
+// broadcastVoiceState fans a voice.state out to a channel's audience, stamped
+// with the hub's monotonic seq so receivers can drop a reordered (stale) snapshot
+// — the broadcasts originate from per-connection goroutines and a snapshot taken
+// under lock is sent after release, so logically-older state can arrive last (see
+// Hub.voiceSeq / docs/testing/call-ui-video-staleness.md). Every voice.state
+// broadcast MUST go through here so the seq is always present.
+func (s *Server) broadcastVoiceState(channelID int64, participants any, seq uint64, aud map[int64]bool) {
+	s.broadcast("voice.state", map[string]any{
+		"channel_id":   channelID,
+		"participants": participants,
+		"seq":          seq,
+	}, aud)
+}
+
 // cleanupVoiceForUser removes the user from any voice channel they were in and
 // broadcasts updated voice.state for each affected channel. DM calls are
 // phone-call style: if the dropped user leaves the other party alone in a DM
 // call, that call ends for them too (see endDMVoiceCall).
 func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
-	affected := s.hub.VoiceLeaveAll(userID)
+	affected, seq := s.hub.VoiceLeaveAll(userID)
 	for chID, participants := range affected {
 		ch, err := s.st.GetChannel(ctx, chID)
 		if err != nil {
@@ -27,11 +41,7 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 			s.endDMVoiceCall(ch, userID, true)
 			continue
 		}
-		aud := s.audienceForChannel(ctx, ch)
-		s.broadcast("voice.state", map[string]any{
-			"channel_id":   chID,
-			"participants": participants,
-		}, aud)
+		s.broadcastVoiceState(chID, participants, seq, s.audienceForChannel(ctx, ch))
 	}
 }
 
@@ -49,7 +59,7 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 // surviving client a second chance to detect the call ended — onVoiceState
 // treats an empty roster as a server-side teardown and calls endCallLocally.
 func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool) {
-	ids := s.hub.VoiceClear(ch.ID)
+	ids, seq := s.hub.VoiceClear(ch.ID)
 	endMsg, err := json.Marshal(event{Type: "voice.end", Payload: map[string]int64{"channel_id": ch.ID}})
 	if err != nil {
 		return
@@ -60,11 +70,7 @@ func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool
 		}
 		s.hub.SendToUser(id, endMsg)
 	}
-	aud := s.audienceForChannel(context.Background(), ch)
-	s.broadcast("voice.state", map[string]any{
-		"channel_id":   ch.ID,
-		"participants": []ws.VoiceParticipant{},
-	}, aud)
+	s.broadcastVoiceState(ch.ID, []ws.VoiceParticipant{}, seq, s.audienceForChannel(context.Background(), ch))
 	if wasActive {
 		s.postSystemMessage(context.Background(), ch, "Call ended")
 	}
@@ -229,7 +235,8 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 			}
 		}
 		// Auto-leave any other voice channels first.
-		for chID, pts := range s.hub.VoiceLeaveAll(userID) {
+		leftAll, leftSeq := s.hub.VoiceLeaveAll(userID)
+		for chID, pts := range leftAll {
 			if chID == channelID {
 				continue
 			}
@@ -237,12 +244,11 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 			if err != nil {
 				continue
 			}
-			aud := s.audienceForChannel(ctx, oldCh)
-			s.broadcast("voice.state", map[string]any{"channel_id": chID, "participants": pts}, aud)
+			s.broadcastVoiceState(chID, pts, leftSeq, s.audienceForChannel(ctx, oldCh))
 		}
-		participants := s.hub.VoiceJoin(channelID, userID)
+		participants, seq := s.hub.VoiceJoin(channelID, userID)
 		aud := s.audienceForChannel(ctx, ch)
-		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+		s.broadcastVoiceState(channelID, participants, seq, aud)
 		if ch.IsDM && len(participants) == 2 {
 			s.postSystemMessage(ctx, ch, "Call started")
 		}
@@ -263,9 +269,9 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 			s.endDMVoiceCall(ch, userID, wasActive)
 			return
 		}
-		participants := s.hub.VoiceLeave(channelID, userID)
+		participants, seq := s.hub.VoiceLeave(channelID, userID)
 		aud := s.audienceForChannel(ctx, ch)
-		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+		s.broadcastVoiceState(channelID, participants, seq, aud)
 
 	case "voice.offer", "voice.answer", "voice.ice":
 		if channelID == 0 || toUserID == 0 {
@@ -301,9 +307,9 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		if videoMuted {
 			sharing = false
 		}
-		participants := s.hub.VoiceSetMute(channelID, userID, muted, videoMuted, sharing)
+		participants, seq := s.hub.VoiceSetMute(channelID, userID, muted, videoMuted, sharing)
 		aud := s.audienceForChannel(ctx, ch)
-		s.broadcast("voice.state", map[string]any{"channel_id": channelID, "participants": participants}, aud)
+		s.broadcastVoiceState(channelID, participants, seq, aud)
 
 	case "voice.ring":
 		if dmChannelID == 0 {

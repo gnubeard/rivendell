@@ -35,6 +35,7 @@ let activeChannelId = null;
 // this, a quick hang-up-then-call reused/clobbered the new call's peer + mic.
 let callGen = 0;
 let participants = [];         // latest voice.state roster for the active channel
+let lastVoiceSeq = 0;          // highest voice.state seq applied for the active call (drops reordered/stale snapshots — see onVoiceState)
 let myUserId = null;
 let muted = false;
 let deafened = false;
@@ -293,6 +294,7 @@ export async function joinVoiceChannel(channelId, { enableVideo = false } = {}) 
   activeChannelId = channelId;
   callGen++; // supersede any still-pending teardown from a just-ended call
   participants = []; // reset; the server's voice.state will populate the roster
+  lastVoiceSeq = 0;  // new call: accept the first voice.state regardless of the server's running seq
   if (dbg) { try { dbg.startCall(channelId, myUserId); } catch { /* no-op */ } }
   sendFn({ type: "voice.join", channel_id: channelId });
   // Announce our real mute/camera state immediately. A fresh participant is
@@ -1584,6 +1586,18 @@ function applyVideoBitrateCaps(remoteUserId, pc) {
 
 async function onVoiceState(payload) {
   if (payload.channel_id !== activeChannelId) return;
+  // Drop a reordered / stale snapshot. voice.state broadcasts originate from
+  // per-connection goroutines on the server and a snapshot taken under lock is
+  // sent after release, so a logically-older roster can arrive AFTER a newer one
+  // — and since we adopt the full roster wholesale, a stale `video_muted:true`
+  // landing last would show an avatar over a peer's live video. The server stamps
+  // each broadcast with a per-channel monotonic seq; ignore any that isn't newer
+  // than the last we applied. (Server is authoritative; missing seq ⇒ apply, for
+  // forward-compat.) See docs/testing/call-ui-video-staleness.md (bug #2).
+  if (typeof payload.seq === "number") {
+    if (payload.seq <= lastVoiceSeq) return;
+    lastVoiceSeq = payload.seq;
+  }
   participants = payload.participants || [];
   const remoteIds = new Set(participants.filter(p => p.user_id !== myUserId).map(p => p.user_id));
   const prevPeerCount = peerConns.size;
