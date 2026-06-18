@@ -73,7 +73,7 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               modals, mobile-ctx, video-grid, notifications,
                               non-admin, bot-dm, history, composer-richtext,
                               screen-share, live-append, optimistic-send,
-                              lightbox-gallery, remove-embed);
+                              lightbox-gallery, remove-embed, typing);
                               Chromium by default,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
                               (Safari-engine), opt-in via E2E_WEBKIT, and
@@ -178,6 +178,10 @@ version, e.g. a comment-only edit. See docs/testing/README.md.
 - `read.update` (including the self-echo from your own mark-read) and `markActiveChannelRead` must **NOT** full-render — they call `refreshReadMarks()` (👁 titles only). A full render there wipes the selection on every incoming message; the unread divider is local session state a remote read doesn't move. Guarded by `web/e2e/live-append.spec.js`.
 - Sending is **optimistic**: `showOptimisticSend` paints a dimmed `pending` row (NEGATIVE temp id — can't collide with a server id) at the live tail before the POST; the message.new echo reconciles it via `reconcileOptimistic`, matched by `(channel, exact content)` because the server round-trips no client nonce (don't "simplify" the match to id — there is no shared id until the echo). A failed POST rolls it back (`removePending`) and restores the composer; a channel switch drops tracked rows (`clearPendingSends`). Optimistic only at the live tail — a history window / secret view keep their reload / secret paths. Guarded by `web/e2e/optimistic-send.spec.js`.
 - **A pending optimistic row lives in the DOM but NOT in `state.messages`**, so the DOM tail can disagree with array order. Both `appendMessageRow` and `reconcileOptimistic` therefore drop a real row at its array-sorted DOM slot via `insertionPointFor` (above any `.msg.pending` tail), NOT blindly before the bottom sentinel — otherwise a cross-user `message.new` arriving mid-send lands BELOW your pending row and groups avatarless under it, mis-attributing their message to you (and the echo reconciles out of order). Grouping is computed off `state.messages`, so DOM order MUST mirror it. Guarded by `web/e2e/optimistic-send.spec.js` (the cross-user-mid-send case).
+
+**Typing indicator**
+- Client-side TTL is the source of truth for "is this user still typing", NOT frame delivery. `state.typing[ch][uid]` stores the typer's last-refresh **timestamp** (not bare `true`); `activeTypers(state, ch, now, ttl)` drops anything older than `TYPING_TTL_MS` (4000ms, comfortably above the 1500ms `TYPING_INTERVAL_MS` re-emit). This is the fix for a phantom typer left when a receiver misses the server's `active:false` frame (socket drop / backgrounded tab) — don't regress the storage to a boolean or remove the TTL. `setTyping` takes an injectable `now` so the pure logic is unit-tested (`state.test.js`).
+- `renderTypingIndicator` arms a one-shot timer (`typingExpiryTimer`) to repaint when the soonest live entry ages out, so the indicator clears with **no** further events. Arm only for live entries — a lingering stale entry must not spin an endless timer. `message.new` clears the sender's entry in `applyEvent` (instant, not after the TTL); `presence.update` with `online:false` sweeps the user everywhere via `clearTypingForUser` (no `active:false` ever arrives for a disconnected peer). No server change / no new protocol field backs any of this. `web/e2e/typing.spec.js` pins the TTL + message.new clears by routing the receiver's WS to DROP the `active:false` frame (reproducing the missed-frame condition); the pure TTL/clear logic is unit-tested in `state.test.js`.
 
 **Web Push**
 - JWT signature is JOSE raw `r||s` (64 bytes), **never DER** — `SignASN1` silently breaks all pushes.

@@ -371,14 +371,14 @@ test("initialState includes typing as empty object", () => {
   assert.deepEqual(s.typing, {});
 });
 
-test("setTyping adds and removes typers", () => {
+test("setTyping adds and removes typers (entries are refresh timestamps)", () => {
   let s = S.initialState();
-  s = S.setTyping(s, 10, 1, true);
-  assert.deepEqual(s.typing[10], { 1: true });
-  s = S.setTyping(s, 10, 2, true);
-  assert.deepEqual(s.typing[10], { 1: true, 2: true });
+  s = S.setTyping(s, 10, 1, true, 1000);
+  assert.deepEqual(s.typing[10], { 1: 1000 });
+  s = S.setTyping(s, 10, 2, true, 1500);
+  assert.deepEqual(s.typing[10], { 1: 1000, 2: 1500 });
   s = S.setTyping(s, 10, 1, false);
-  assert.deepEqual(s.typing[10], { 2: true });
+  assert.deepEqual(s.typing[10], { 2: 1500 });
   // Removing the last typer drops the channel key entirely.
   s = S.setTyping(s, 10, 2, false);
   assert.equal(s.typing[10], undefined);
@@ -386,21 +386,71 @@ test("setTyping adds and removes typers", () => {
 
 test("setTyping is isolated between channels", () => {
   let s = S.initialState();
-  s = S.setTyping(s, 10, 1, true);
-  s = S.setTyping(s, 20, 2, true);
-  assert.deepEqual(s.typing[10], { 1: true });
-  assert.deepEqual(s.typing[20], { 2: true });
+  s = S.setTyping(s, 10, 1, true, 1000);
+  s = S.setTyping(s, 20, 2, true, 1000);
+  assert.deepEqual(s.typing[10], { 1: 1000 });
+  assert.deepEqual(s.typing[20], { 2: 1000 });
   s = S.setTyping(s, 10, 1, false);
   assert.equal(s.typing[10], undefined);
-  assert.deepEqual(s.typing[20], { 2: true });
+  assert.deepEqual(s.typing[20], { 2: 1000 });
+});
+
+test("activeTypers ages out a stale entry at the TTL boundary", () => {
+  let s = S.initialState();
+  s = S.setTyping(s, 7, 3, true, 1000);
+  // Still live just inside the window...
+  assert.deepEqual(S.activeTypers(s, 7, 1000 + S.TYPING_TTL_MS - 1), ["3"]);
+  // ...and cleared at/after the boundary, even though no active:false ever arrived.
+  assert.deepEqual(S.activeTypers(s, 7, 1000 + S.TYPING_TTL_MS), []);
+  assert.deepEqual(S.activeTypers(s, 7, 1000 + S.TYPING_TTL_MS + 5000), []);
+  // A fresh refresh frame re-extends the window.
+  s = S.setTyping(s, 7, 3, true, 1000 + S.TYPING_TTL_MS);
+  assert.deepEqual(S.activeTypers(s, 7, 1000 + S.TYPING_TTL_MS + 1), ["3"]);
+  // Unknown channel is simply empty.
+  assert.deepEqual(S.activeTypers(s, 999, 0), []);
 });
 
 test("applyEvent routes typing.update", () => {
   let s = S.initialState();
   s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 3, active: true } });
-  assert.deepEqual(s.typing[7], { 3: true });
+  assert.deepEqual(Object.keys(s.typing[7]), ["3"]);
   s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 3, active: false } });
   assert.equal(s.typing[7], undefined);
+});
+
+test("applyEvent message.new clears the sender's typing entry", () => {
+  let s = S.initialState();
+  s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 3, active: true } });
+  s = S.applyEvent(s, { type: "typing.update", payload: { channel_id: 7, user_id: 4, active: true } });
+  // A message from user 3 lands — their typing entry goes immediately, user 4 stays.
+  s = S.applyEvent(s, { type: "message.new", payload: { id: 1, channel_id: 7, user_id: 3, created_at: "2026-01-01T00:00:00Z" } });
+  assert.deepEqual(Object.keys(s.typing[7]), ["4"]);
+});
+
+test("clearTypingForUser drops a user across every channel", () => {
+  let s = S.initialState();
+  s = S.setTyping(s, 10, 3, true, 1000);
+  s = S.setTyping(s, 20, 3, true, 1000);
+  s = S.setTyping(s, 20, 4, true, 1000);
+  s = S.clearTypingForUser(s, 3);
+  assert.equal(s.typing[10], undefined);          // fully-emptied channel key dropped
+  assert.deepEqual(Object.keys(s.typing[20]), ["4"]); // other typer untouched
+  // No-op when the user isn't typing anywhere — same reference back.
+  const before = s;
+  assert.equal(S.clearTypingForUser(before, 99), before);
+});
+
+test("applyEvent presence.update offline sweeps the user's typing (online leaves it)", () => {
+  let s = S.setUsers(S.initialState(), [{ id: 3, username: "u3", online: true }]);
+  s = S.setTyping(s, 10, 3, true, 1000);
+  s = S.setTyping(s, 20, 3, true, 1000);
+  // An online presence update must not touch typing (e.g. an idle/status flip).
+  s = S.applyEvent(s, { type: "presence.update", payload: { user_id: 3, online: true, status: "active" } });
+  assert.deepEqual(Object.keys(s.typing[10]), ["3"]);
+  // Going offline clears them everywhere — no active:false will arrive for a dead peer.
+  s = S.applyEvent(s, { type: "presence.update", payload: { user_id: 3, online: false, status: "active" } });
+  assert.equal(s.typing[10], undefined);
+  assert.equal(s.typing[20], undefined);
 });
 
 test("setEmojis indexes by shortcode and tolerates null", () => {

@@ -1,6 +1,6 @@
 # app.js — the atlas
 
-`web/static/app.js` is the web client's orchestrator: ~4,080 lines wiring the API,
+`web/static/app.js` is the web client's orchestrator: ~4,100 lines wiring the API,
 websocket, formatter, and the pure `state.js` reducer to the DOM. Years of
 extraction (see [history/frontend-decomposition.md](history/frontend-decomposition.md))
 pulled the *pure* logic and the *self-contained DOM widgets* out into ~30 sibling

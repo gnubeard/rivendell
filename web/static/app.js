@@ -782,6 +782,9 @@ function onMessageEvent(evt) {
   // applyEvent bumped last_message_at so the DM list stays sorted by recency;
   // reflect a DM I just sent (ch is post-fold, already current).
   if (d.isNewFromMe && ch && ch.is_dm) scheduleRender("dms");
+  // applyEvent cleared the sender's typing entry on a message.new; repaint the indicator
+  // (the append/patch fast-paths below don't touch it).
+  if (active && evt.type === "message.new") scheduleRender("typing");
   if (active) {
     const viewingHistory = historyPaging.isViewingHistory(cid);
     if (d.isNewFromMe && viewingHistory) {
@@ -1901,14 +1904,27 @@ function flashNotice(text) {
 // (editingMessageId / editDraft / editFocusPending), liveDeleted, the unread cursor
 // (unread.markerFor), and the per-DM secret session (getSession).
 // renderTypingIndicator stands apart — it paints #typing-indicator alone, driven by
-// typing.update; it isn't part of the renderMessages rebuild.
+// typing.update; it isn't part of the renderMessages rebuild. Entries carry the typer's
+// last-refresh time; S.activeTypers drops any past S.TYPING_TTL_MS, so a stale entry
+// (a missed active:false after a socket drop) can't leave a phantom typer on screen.
 
+let typingExpiryTimer = null;
 function renderTypingIndicator() {
   const el = $("#typing-indicator");
   if (!el) return;
-  const typers = state.typing[state.activeChannelId] || {};
-  const names = Object.keys(typers)
-    .filter((uid) => Number(uid) !== state.me?.id)
+  if (typingExpiryTimer) { clearTimeout(typingExpiryTimer); typingExpiryTimer = null; }
+  const now = Date.now();
+  const cid = state.activeChannelId;
+  const live = S.activeTypers(state, cid, now).filter((uid) => Number(uid) !== state.me?.id);
+  // Arm a one-shot repaint for when the soonest live entry ages out, so a stopped typer
+  // clears even with no further frames. Only for live entries — a lingering stale entry
+  // must not spin an endless timer.
+  if (live.length) {
+    const typers = state.typing[cid] || {};
+    const soonest = Math.min(...live.map((uid) => typers[uid] + S.TYPING_TTL_MS));
+    typingExpiryTimer = setTimeout(renderTypingIndicator, Math.max(0, soonest - now) + 20);
+  }
+  const names = live
     .map((uid) => { const u = state.users[uid]; return u ? (u.display_name || u.username) : null; })
     .filter(Boolean);
   if (!names.length) {
@@ -3906,9 +3922,11 @@ function applyPresence(evt) {
   const ch = state.channels[state.activeChannelId];
   if (ch && ch.is_dm) renderChannelHeader(ch);
   // If a peer just went offline and we have an active secret session with them,
-  // end it gracefully — they can't receive or send anymore.
+  // end it gracefully — they can't receive or send anymore. applyEvent also swept
+  // their typing across all channels; repaint the indicator for the open one.
   if (!evt.payload.online) {
     terminateSessionForPeer(evt.payload.user_id);
+    renderTypingIndicator();
   }
 }
 

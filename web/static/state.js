@@ -16,7 +16,7 @@ export function initialState() {
     mentions: {}, // channelId -> count of unseen @-mentions of me
     muted: {}, // channelId -> true for channels the user has silenced
     lastRead: {}, // channelId -> last_read_message_id (server cursor)
-    typing: {}, // channelId -> { userId -> true } for active typers
+    typing: {}, // channelId -> { userId -> refresh-timestamp(ms) } for active typers
     emojis: {}, // shortcode -> emoji record (custom instance-wide emojis)
   };
 }
@@ -374,12 +374,19 @@ export function setReactions(state, channelId, messageId, reactions) {
   return { ...state, messages: { ...state.messages, [channelId]: next } };
 }
 
+// Typing entries are stored as the last-refresh timestamp rather than a bare flag, so a
+// stale entry (a missed active:false frame after a socket drop) can age out client-side
+// — a live typer re-emits active:true every TYPING_INTERVAL_MS (1500ms), comfortably
+// inside this window. See activeTypers (the TTL read) and clearTypingForUser.
+export const TYPING_TTL_MS = 4000;
+
 // setTyping marks a user as typing (active=true) or done (active=false) in a channel.
-// Removing the last typer in a channel drops the channel key entirely.
-export function setTyping(state, channelId, userId, active) {
+// active stamps the entry with `now` (the refresh time); inactive removes it. Removing
+// the last typer in a channel drops the channel key entirely.
+export function setTyping(state, channelId, userId, active, now = Date.now()) {
   const prev = state.typing[channelId] || {};
   const next = { ...prev };
-  if (active) next[userId] = true;
+  if (active) next[userId] = now;
   else delete next[userId];
   const typing = { ...state.typing };
   if (Object.keys(next).length === 0) delete typing[channelId];
@@ -387,11 +394,38 @@ export function setTyping(state, channelId, userId, active) {
   return { ...state, typing };
 }
 
+// activeTypers returns the userIds typing in a channel whose last refresh is within ttl.
+// A stale entry (a missed active:false frame) ages out here regardless of delivery, so
+// the indicator can't get stuck on. Pure — the renderer drives the DOM/timer off it.
+export function activeTypers(state, channelId, now = Date.now(), ttl = TYPING_TTL_MS) {
+  const typers = state.typing[channelId] || {};
+  return Object.keys(typers).filter((uid) => now - typers[uid] < ttl);
+}
+
+// clearTypingForUser drops a user's typing entry from every channel — used when they go
+// offline, since no active:false frame will ever arrive for a disconnected peer.
+// setTyping is per-channel and can't sweep all. Returns the same state if nothing matched.
+export function clearTypingForUser(state, userId) {
+  const typing = {};
+  let changed = false;
+  for (const [cid, typers] of Object.entries(state.typing)) {
+    if (typers[userId] == null) { typing[cid] = typers; continue; }
+    const next = { ...typers };
+    delete next[userId];
+    changed = true;
+    if (Object.keys(next).length) typing[cid] = next; // drop a fully-emptied channel key
+  }
+  return changed ? { ...state, typing } : state;
+}
+
 // applyEvent folds a realtime websocket event into state. Returns new state.
 export function applyEvent(state, evt) {
   switch (evt.type) {
-    case "presence.update":
-      return setPresence(state, evt.payload.user_id, evt.payload.online, evt.payload.status, !!evt.payload.idle);
+    case "presence.update": {
+      const s = setPresence(state, evt.payload.user_id, evt.payload.online, evt.payload.status, !!evt.payload.idle);
+      // A peer going offline won't send an active:false; sweep their typing everywhere.
+      return evt.payload.online ? s : clearTypingForUser(s, evt.payload.user_id);
+    }
     case "user.update":
       return upsertUser(state, evt.payload);
     case "channel.new":
@@ -403,6 +437,9 @@ export function applyEvent(state, evt) {
       // A new message also advances the channel's last_message_at so the DM list
       // stays sorted by recency. Edits (message.update) must NOT bump it.
       let s = addMessage(state, evt.payload);
+      // The sender just stopped typing by sending — clear it now rather than waiting on
+      // the server's 2s timer / the TTL, so the indicator vanishes as the message lands.
+      s = setTyping(s, evt.payload.channel_id, evt.payload.user_id, false);
       const ch = s.channels[evt.payload.channel_id];
       if (ch) s = upsertChannel(s, { ...ch, last_message_at: evt.payload.created_at });
       return s;
