@@ -99,6 +99,21 @@ async function inCall(page) {
   await expect(page.locator("#call-strip")).toBeVisible({ timeout: 20_000 });
 }
 
+// localVideoHint reads the contentHint off the sharer's OWN screen track via its local
+// preview tile (#video-grid carries getLocalVideoEl(), whose srcObject is localStream).
+// contentHint is a local-only sender property — it never crosses the wire — so this is
+// how we observe the fps-driven auto-switch: a share starts "detail" and the congestion
+// monitor flips it to "motion" once it sees the screen is playing high-fps video.
+async function localVideoHint(page) {
+  return page.evaluate(() => {
+    for (const v of document.querySelectorAll("#video-grid video")) {
+      const t = v.srcObject && v.srcObject.getVideoTracks && v.srcObject.getVideoTracks()[0];
+      if (t && t.contentHint) return t.contentHint; // skip remote tracks (default empty hint)
+    }
+    return null;
+  });
+}
+
 test.beforeAll(async ({ browser }) => {
   ctx1 = await browser.newContext();
   ctx2 = await browser.newContext();
@@ -153,6 +168,11 @@ test("screen share reaches the remote as live video + mixed audio", async () => 
   // Sharer UI: the share button is lit and the camera reads "off" (📷).
   await expect(page1.locator("#header-share-btn")).toHaveClass(/active/);
   await expect(page1.locator("#call-camera-btn")).toHaveText("📷");
+
+  // The stubbed "screen" is Chromium's fake video device — a known high-fps moving
+  // image — so the congestion monitor's fps detection should auto-switch the share
+  // from "detail" to the "motion" profile within a few 2.5s ticks.
+  await expect.poll(() => localVideoHint(page1), { timeout: 25_000 }).toBe("motion");
 });
 
 test("switching to the camera swaps the source and drops the shared audio", async () => {

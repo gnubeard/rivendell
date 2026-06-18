@@ -24,6 +24,7 @@ let videoEls = new Map();     // remoteUserId -> <video> element
 let localVideoEl = null;      // local preview <video> (muted, created on first camera use)
 let cameraEnabled = false;    // "sending video" master for the current call (camera OR screen)
 let videoIsScreen = false;    // when sending video, is the source the screen (getDisplayMedia) vs the camera?
+let screenMotionState = { active: false, ticks: 0 }; // fps latch: is the shared screen playing video (favor framerate over detail)?
 let listenOnly = false;       // joined without a usable mic: we receive only (no local capture, recvonly peers)
 let screenAudioTrack = null;  // the tab/system audio track captured alongside a screen share (Chrome only), or null
 let activeChannelId = null;
@@ -591,6 +592,9 @@ export async function setScreenShareEnabled(on) {
     }
     videoIsScreen = true;
     cameraEnabled = true;
+    // Start every share in detail (contentHint set above); the congestion monitor
+    // promotes it to motion within a few ticks if the screen turns out to be playing.
+    screenMotionState = { active: false, ticks: 0 };
     // A screen share must NOT teach the per-DM "camera was on" memory — the next
     // call should start voice-only, not auto-share the screen.
     saveCameraPref(activeChannelId, false);
@@ -607,6 +611,7 @@ export async function setScreenShareEnabled(on) {
     await stopScreenAudio();
     videoIsScreen = false;
     cameraEnabled = false;
+    screenMotionState = { active: false, ticks: 0 };
     teardownLocalVideo();
     saveCameraPref(activeChannelId, false);
   }
@@ -673,6 +678,7 @@ export async function setCameraEnabled(on) {
     await stopScreenAudio(); // the screen capture is ending — its audio goes with it
     localStream.addTrack(camTrack);
     videoIsScreen = false;
+    screenMotionState = { active: false, ticks: 0 };
     cameraEnabled = true;
     saveCameraPref(activeChannelId, true);
     setupLocalVideo();
@@ -1328,6 +1334,17 @@ const CLIMB_AFTER_HEALTHY = 2;        // need this many consecutive healthy inte
 const VIDEO_SCALE_FULL_BPS = 500000;  // ≥ this → native resolution
 const VIDEO_SCALE_HALF_BPS = 300000;  // ≥ this → ½-scale; below → ¼-scale
 const CONGESTION_INTERVAL_MS = 2500;  // monitor cadence
+// Screen-share motion detection. The encoder's outbound fps is a clean proxy for what
+// the shared screen is doing: a static document/code editor encodes ~0–2 fps (the
+// encoder skips duplicate frames), a playing video/game ~24 fps. When fps stays high we
+// latch into a "motion" profile (favor framerate, let resolution step down — see the
+// isScreen+motion branch of videoScaleForTarget) and flip the track's contentHint to
+// "motion"; when it falls we revert to the detail default. Hysteretic so a scroll or a
+// brief lull doesn't flap the encoder shape.
+const SCREEN_MOTION_ENTER_FPS = 14;   // sustained encode fps at/above this ⇒ video is playing
+const SCREEN_MOTION_EXIT_FPS = 6;     // sustained encode fps at/below this ⇒ back to static/text
+const SCREEN_MOTION_ENTER_TICKS = 2;  // consecutive high-fps intervals to latch ON  (~5s)
+const SCREEN_MOTION_EXIT_TICKS = 3;   // consecutive low-fps intervals to latch OFF (~7.5s)
 
 // uplinkLossFraction is the fraction of our sent video packets the remote lost
 // over one interval, from cumulative sent (outbound-rtp) and lost (remote-
@@ -1372,6 +1389,24 @@ export function congestionTarget(prev, ceiling, sig) {
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, target));
 }
 
+// detectScreenMotion advances the screen-share motion latch from one fps sample.
+// state = { active, ticks }. Hysteretic: needs SCREEN_MOTION_ENTER_TICKS consecutive
+// high-fps samples to engage and SCREEN_MOTION_EXIT_TICKS low-fps to disengage, so a
+// brief lull or a slow scroll doesn't flap the encoder profile. A null/absent fps
+// (a browser that doesn't report framesPerSecond) holds `active` and resets the
+// counter — we never auto-switch on missing data; detail stays the safe default.
+// Pure; exported for unit testing.
+export function detectScreenMotion(state, fps) {
+  const s = state && typeof state === "object" ? state : { active: false, ticks: 0 };
+  if (typeof fps !== "number" || !isFinite(fps)) return { active: s.active, ticks: 0 };
+  if (!s.active) {
+    const ticks = fps >= SCREEN_MOTION_ENTER_FPS ? s.ticks + 1 : 0;
+    return ticks >= SCREEN_MOTION_ENTER_TICKS ? { active: true, ticks: 0 } : { active: false, ticks };
+  }
+  const ticks = fps <= SCREEN_MOTION_EXIT_FPS ? s.ticks + 1 : 0;
+  return ticks >= SCREEN_MOTION_EXIT_TICKS ? { active: false, ticks: 0 } : { active: true, ticks };
+}
+
 // videoScaleForTarget maps an adaptive bitrate target to an encoding shape:
 // scaleResolutionDownBy and maxFramerate. At/above VIDEO_SCALE_FULL_BPS the link
 // can carry native capture; as the target falls we shed resolution (2×, then 4×)
@@ -1382,7 +1417,18 @@ export function congestionTarget(prev, ceiling, sig) {
 // HOLDS native resolution (scaleResolutionDownBy:1) at every target and gives back
 // frame rate instead (a near-static screen barely needs frames). This pairs with
 // the "detail" contentHint the screen track carries. Pure; exported for unit testing.
-export function videoScaleForTarget(target, isScreen = false) {
+//
+// motion (screen only) RE-INVERTS that back: when the shared screen is playing video or
+// a game (detected by sustained high fps, see detectScreenMotion), smoothness wins over
+// a perfectly sharp frame. This "balanced" ladder HOLDS resolution while the link is
+// decent and keeps framerate high (24 even at the mid tier, where the detail ladder
+// drops to 15), and only steps to ½-scale under real congestion — a screen source is
+// large (1080p+), so ½ still reads crisply, unlike a camera's ¼ step.
+export function videoScaleForTarget(target, isScreen = false, motion = false) {
+  if (isScreen && motion) {
+    if (typeof target !== "number" || target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 24 };
+    return { scaleResolutionDownBy: 2, maxFramerate: 20 };
+  }
   if (isScreen) {
     // Hold full resolution at every target (sheared text is worse than choppy),
     // but give framerate back generously: the original 15/8/5 ladder was tuned
@@ -1426,6 +1472,7 @@ function readUplinkSignals(report, prev) {
     ? uplinkLossFraction(sent, lost, prev.sent, prev.lost) : null;
   return {
     sent, lost: lost ?? 0, rttMs, lossFrac,
+    fps: typeof out.framesPerSecond === "number" ? out.framesPerSecond : null, // drives the screen-motion latch
     limited: out.qualityLimitationReason === "bandwidth", // hold the climb (encoder maxed for the link)
     cpuLimited: out.qualityLimitationReason === "cpu",    // back off (shed resolution/framerate)
   };
@@ -1446,6 +1493,7 @@ function effectiveVideoCap(remoteUserId) {
 async function monitorCongestion() {
   if (activeChannelId === null) return;
   const ceiling = bitrateCapFor(participants.length, "video");
+  let maxFps = null; // highest outbound fps across peers this tick (drives the screen-motion latch)
   for (const [uid, pc] of peerConns) {
     const meta = peerMeta.get(uid);
     if (!meta) continue;
@@ -1453,6 +1501,7 @@ async function monitorCongestion() {
     try { report = await pc.getStats(); } catch { continue; }
     const sig = readUplinkSignals(report, meta.lossPrev);
     if (!sig) continue;
+    if (sig.fps != null) maxFps = Math.max(maxFps ?? 0, sig.fps);
     meta.lossPrev = { sent: sig.sent, lost: sig.lost };
     // Maintain the consecutive-healthy streak that gates the climb (congestionTarget
     // reads it via sig.healthyStreak): reset on any stressed interval, else extend.
@@ -1465,8 +1514,21 @@ async function monitorCongestion() {
       applyVideoBitrateCaps(uid, pc);
       dbgEvent(uid, "bitrate-adapt", {
         target: next, lossFrac: sig.lossFrac, rttMs: sig.rttMs,
-        scale: videoScaleForTarget(next, videoIsScreen).scaleResolutionDownBy, cpu: sig.cpuLimited,
+        scale: videoScaleForTarget(next, videoIsScreen, videoIsScreen && screenMotionState.active).scaleResolutionDownBy, cpu: sig.cpuLimited,
       });
+    }
+  }
+  // One shared screen source ⇒ one global motion decision for every peer. Advance the
+  // latch from the highest fps any peer reported (a congested peer's throttled fps must
+  // not mask real motion), and on a flip re-hint the track and re-shape all senders.
+  if (videoIsScreen) {
+    const wasActive = screenMotionState.active;
+    screenMotionState = detectScreenMotion(screenMotionState, maxFps);
+    if (screenMotionState.active !== wasActive) {
+      const vt = localStream && localStream.getVideoTracks()[0];
+      if (vt) vt.contentHint = screenMotionState.active ? "motion" : "detail";
+      for (const [uid, pc] of peerConns) applyVideoBitrateCaps(uid, pc);
+      dbgEvent(0, "screen-motion", { active: screenMotionState.active, fps: maxFps });
     }
   }
 }
@@ -1491,7 +1553,7 @@ function stopCongestionMonitor() {
 // failure never touches the call.
 function applyVideoBitrateCaps(remoteUserId, pc) {
   const cap = effectiveVideoCap(remoteUserId);
-  const shape = { maxBitrate: cap, ...videoScaleForTarget(cap, videoIsScreen) };
+  const shape = { maxBitrate: cap, ...videoScaleForTarget(cap, videoIsScreen, videoIsScreen && screenMotionState.active) };
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     let params;

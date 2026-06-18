@@ -812,6 +812,55 @@ test("videoScaleForTarget: a screen source holds resolution and sheds framerate 
   }
 });
 
+test("videoScaleForTarget: a screen playing video (motion) favors framerate over detail", () => {
+  // Re-inverts the detail ladder: smoothness wins. Hold native res while the link is
+  // decent and keep 24fps — note the mid tier stays 24 where the detail ladder drops to 15.
+  assert.deepEqual(voice.videoScaleForTarget(800000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  assert.deepEqual(voice.videoScaleForTarget(500000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  assert.deepEqual(voice.videoScaleForTarget(400000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  assert.deepEqual(voice.videoScaleForTarget(300000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  // Only under real congestion (below the half-band) does resolution give — to ½, not ¼,
+  // since a 1080p+ screen still reads crisply halved, unlike a camera's quarter step.
+  assert.deepEqual(voice.videoScaleForTarget(150000, true, true), { scaleResolutionDownBy: 2, maxFramerate: 20 });
+  // motion only applies to a screen source: a camera ignores the flag.
+  assert.deepEqual(voice.videoScaleForTarget(400000, false, true), { scaleResolutionDownBy: 2, maxFramerate: 20 });
+  // And a screen with motion off is unchanged from the detail ladder (no regression).
+  assert.deepEqual(voice.videoScaleForTarget(400000, true, false), { scaleResolutionDownBy: 1, maxFramerate: 15 });
+});
+
+test("detectScreenMotion: latches on/off with hysteresis", () => {
+  let s = { active: false, ticks: 0 };
+  // One high sample isn't enough to engage (needs SCREEN_MOTION_ENTER_TICKS = 2).
+  s = voice.detectScreenMotion(s, 24);
+  assert.equal(s.active, false);
+  // Second consecutive high sample latches ON.
+  s = voice.detectScreenMotion(s, 24);
+  assert.equal(s.active, true);
+  // A single low sample does NOT disengage (needs SCREEN_MOTION_EXIT_TICKS = 3).
+  s = voice.detectScreenMotion(s, 1);
+  assert.equal(s.active, true);
+  s = voice.detectScreenMotion(s, 1);
+  assert.equal(s.active, true);
+  // Third consecutive low sample disengages.
+  s = voice.detectScreenMotion(s, 1);
+  assert.equal(s.active, false);
+});
+
+test("detectScreenMotion: a mid-range or interrupted sample resets the streak", () => {
+  let s = { active: false, ticks: 0 };
+  s = voice.detectScreenMotion(s, 24);       // one toward ON
+  assert.equal(s.ticks, 1);
+  s = voice.detectScreenMotion(s, 9);        // below ENTER_FPS — streak resets, no latch
+  assert.deepEqual(s, { active: false, ticks: 0 });
+  // A null/absent fps (browser doesn't report it) holds `active` and zeroes the counter,
+  // so we never auto-switch on missing data — detail stays the safe default.
+  s = { active: true, ticks: 2 };
+  s = voice.detectScreenMotion(s, null);
+  assert.deepEqual(s, { active: true, ticks: 0 });
+  s = voice.detectScreenMotion({ active: false, ticks: 1 }, undefined);
+  assert.deepEqual(s, { active: false, ticks: 0 });
+});
+
 test("uplinkStressed: loss, RTT, or local CPU limitation each trip stress", () => {
   assert.equal(voice.uplinkStressed({ lossFrac: 0.10, rttMs: 100 }), true);  // loss
   assert.equal(voice.uplinkStressed({ lossFrac: 0, rttMs: 700 }), true);     // RTT

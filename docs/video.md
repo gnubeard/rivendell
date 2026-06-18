@@ -186,7 +186,7 @@ resolved as:
 
 Two corners worth keeping straight (full detail in CLAUDE.md):
 
-- **Encoding is inverted for screen content.** `contentHint="detail"` plus `videoScaleForTarget(t, isScreen=true)` HOLD resolution and shed framerate under congestion (15 → 8 → 5 fps) — blurred text is worse than choppy, the opposite of the camera's motion trade.
+- **Encoding is inverted for screen content — until video plays.** By default a screen share runs `contentHint="detail"` plus `videoScaleForTarget(t, isScreen=true)`, which HOLD resolution and shed framerate under congestion (24 → 15 → 10 fps) — blurred text is worse than choppy, the opposite of the camera's motion trade. But that's the wrong trade for streaming a video or a game, so the congestion monitor watches the encoder's outbound `framesPerSecond` (a static screen encodes ~0–2 fps, playing video ~24): when it stays high (`detectScreenMotion`, hysteretic) the share auto-switches to `contentHint="motion"` and a *balanced* ladder that keeps framerate high and only steps to ½-scale under real congestion — re-inverting back toward the camera's trade. It reverts to detail when the motion stops. Fully automatic, no UI.
 - **Audio teardown differs from video.** Shared audio is added into the mic's stream (so the remote plays both through its one `<audio>`) but rides its OWN m-line, so muting the mic never silences it. On stop it is FULLY removed (`pc.removeTrack`), not parked — audio has no `video_muted`-style gate, so a parked-but-silent track would still be audible. Video parks-and-reuses its sender; audio removes.
 
 ---
