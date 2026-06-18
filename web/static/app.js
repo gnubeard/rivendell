@@ -2403,7 +2403,12 @@ function patchMessageRow(messageId) {
   const activeCh = state.channels[state.activeChannelId];
   const canPin = isMod || !!(activeCh && activeCh.is_dm);
   const grouped = existing.classList.contains("grouped");
+  // A reaction pill row makes the replacement taller; re-pin to the bottom if the
+  // viewer was there (mirrors appendMessageRow), so the content above scrolls up to
+  // make room instead of the reacted row pushing the viewport down.
+  const atBottom = isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
   existing.replaceWith(messageRow(m, { grouped, isMod, canPin }));
+  if (atBottom) scrollToBottom(wrap);
   return true;
 }
 

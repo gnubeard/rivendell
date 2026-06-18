@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.0.23] - 2026-06-17
+
+### Fixed
+- When you were scrolled to the bottom of a channel and a reaction was added to the latest message, the new row of reaction pills could nudge the view up a few pixels off the bottom. The message pane now stays pinned to the bottom across reaction repaints.
+
 ## [2.0.21] - 2026-06-17
 
 ### Fixed
