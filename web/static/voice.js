@@ -148,7 +148,7 @@ const VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } };
 // control still adapts freely *below* the ceiling). History note: an earlier
 // live setParameters cap was tried as a fix for the FF-Android encoder freeze
 // and removed when it (correctly) didn't help — that freeze is an upstream
-// encoder bug (see docs/video.md). This cap is not a freeze cure and must not
+// encoder bug (see docs/design/video.md). This cap is not a freeze cure and must not
 // be re-litigated as one; it's bandwidth hygiene for the mesh.
 // 800 kbps comfortably carries the ~360p-class video the mesh is sized for, and
 // is the per-sender CEILING — a 1:1 call (one video sender) gets exactly this.

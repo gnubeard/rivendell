@@ -1,6 +1,6 @@
 // history.js — the message pane's history/paging + scroll-geometry sub-system.
 //
-// The blessed message-pane carve (docs/decomposition.md, "Message pane — NOT a
+// The blessed message-pane carve (docs/history/frontend-decomposition.md, "Message pane — NOT a
 // single lift"): a self-contained sub-system with a clean seam. It owns the
 // back/forward paging state machine (the loading guards, the history-window
 // flags, the IntersectionObserver sentinels) behind a createHistoryPaging(deps)

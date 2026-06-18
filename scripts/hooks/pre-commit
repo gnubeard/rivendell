@@ -17,9 +17,11 @@
 # differ only if you stage a partial subset. A stash-the-unstaged approach is
 # fragile (pop conflicts) and not worth it here.
 #
-# Escape hatch: RUN_TESTS=0 git commit … skips the gate (the version bump
-# still runs). Use it for deliberate WIP commits — prefer it over --no-verify,
-# which also disables the bump.
+# Escape hatches (prefer these over --no-verify, which disables BOTH at once):
+#   RUN_TESTS=0 git commit …   skips the test gate; the version bump still runs.
+#   RUN_BUMP=0  git commit …   skips the version bump; the test gate still runs.
+# Use them for deliberate WIP, or when a shipping file changed in a way that
+# should not ship a new version (e.g. a comment-only edit).
 #
 # Install with: make install-hooks
 set -euo pipefail
@@ -71,6 +73,11 @@ fi
 
 # ---------------------------------------------------------------------------
 # Version bump — develop only.
+
+if [ "${RUN_BUMP:-1}" = "0" ]; then
+  echo "pre-commit: RUN_BUMP=0 — skipping version bump." >&2
+  exit 0
+fi
 
 branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$branch" != "$DEPLOY_BRANCH" ]; then

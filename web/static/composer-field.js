@@ -2,7 +2,7 @@
 //
 // The composer is a `contenteditable="plaintext-only"` div, not a <textarea>:
 // that swap exists because GeckoView/Firefox-Android never delivers image
-// clipboard content to a real <textarea> (see docs/composer-paste-qa.md and the
+// clipboard content to a real <textarea> (see docs/testing/image-paste-qa.md and the
 // project-composer-image-input memory). upgradeComposerField grafts the
 // textarea API every caller already expects onto that div, so the rest of the
 // app reads/writes the composer without knowing it's a div:

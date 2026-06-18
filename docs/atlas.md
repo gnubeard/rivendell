@@ -2,22 +2,22 @@
 
 `web/static/app.js` is the web client's orchestrator: ~4,080 lines wiring the API,
 websocket, formatter, and the pure `state.js` reducer to the DOM. Years of
-extraction (see [decomposition.md](decomposition.md)) pulled the *pure* logic and
-the *self-contained DOM widgets* out into ~30 sibling modules. What's left is the
-glue — deliberately framework-free, unavoidably DOM- and state-entangled — and the
-prevailing wisdom became "the rest can't be cleanly split."
+extraction (see [history/frontend-decomposition.md](history/frontend-decomposition.md))
+pulled the *pure* logic and the *self-contained DOM widgets* out into ~30 sibling
+modules. What's left is the glue — deliberately framework-free, unavoidably DOM- and
+state-entangled — and the prevailing wisdom became "the rest can't be cleanly split."
 
 Maybe. But the goal was never "more files" for its own sake — it's *understandable
-and maintainable*. So instead of forcing another carve, this atlas **maps the
-territory**: it imposes a coarse hierarchy on top of the file so you can navigate it
-from 50,000 feet, and records the structural observations that fall out of seeing
-the whole shape at once.
+and maintainable*. So instead of forcing another carve, this atlas **maps the file**:
+it imposes a coarse hierarchy on top of `app.js` so you can navigate it from the top
+down, and records the structural observations that fall out of seeing the whole shape
+at once.
 
 ## How the map is drawn
 
 Two tiers of in-file signage, plus this doc:
 
-- **Regions** (`// ▌ REGION N · NAME`, heavy `━` rule) — 8 continents. The coarse
+- **Regions** (`// ▌ REGION N · NAME`, heavy `━` rule) — 8 regions. The coarse
   tier this atlas added.
 - **Sections** (`// --- name ---`, light rule) — 31 fine-grained markers (30
   pre-existing, plus `incremental message updates` added in R5 with the
@@ -30,7 +30,7 @@ code). This doc is the source of truth for *why* the shape is what it is and *wh
 it might want to go. Line numbers below drift as the file changes — trust the banner
 text over the numbers, and re-run the grep in "Maintaining the atlas" to refresh.
 
-## The eight continents
+## The eight regions
 
 | # | Region | Lines | Contains (`// ---` sections) |
 |---|--------|-------|------------------------------|
@@ -130,7 +130,7 @@ function declaration, which is what made the fold safe.
 
 ## Cross-cutting findings
 
-What the 50,000-foot view makes obvious:
+What the whole-file view makes obvious:
 
 ### 1. The plugs were scattered across 6 of 8 regions — now partly consolidated.
 The `const x = createX({...})` factory wirings — app.js handing each extracted

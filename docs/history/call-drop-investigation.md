@@ -292,5 +292,5 @@ Both bugs are purely in the signaling/control plane. The WebRTC media path (audi
 video) is unaffected; if the call stays up it works fine. The bugs cause the *call*
 to end earlier than intended, not audio/video quality issues within a working call.
 
-The FF-Android outbound-video freeze (separate, documented in `docs/video.md`) is
-unrelated to the drops described here.
+The FF-Android outbound-video freeze (separate, documented in
+[../design/video.md](../design/video.md)) is unrelated to the drops described here.

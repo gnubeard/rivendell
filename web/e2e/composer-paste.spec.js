@@ -22,7 +22,7 @@
 //     field correctly.
 //
 // Real on-device flavors (Gboard clipboard history, screenshot-copy vs
-// browser Copy-image) can't be automated here — see docs/composer-paste-qa.md.
+// browser Copy-image) can't be automated here — see docs/testing/image-paste-qa.md.
 import { test, expect } from "@playwright/test";
 import { ADMIN, USER2, PASSWORD } from "./global-setup.js";
 

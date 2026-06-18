@@ -1,10 +1,10 @@
-# Web Push — offline notifications design
+# Web Push — offline notifications
 
-Target: a rivendell tab that's been **closed** — laptop asleep, phone in a
-pocket — still surfaces a DM or an @-mention as an OS notification, and tapping
-it opens straight to the message. This is the "full circle" from the foreground
-notifications we already ship (`notify.js`, which only fires while a tab is
-alive).
+**Status: shipped (migration `0016`).** A rivendell tab that's been **closed** —
+laptop asleep, phone in a pocket — still surfaces a DM or an @-mention as an OS
+notification, and tapping it opens straight to the message. This is the "full
+circle" from the foreground notifications (`notify.js`, which only fires while a tab
+is alive).
 
 Like every other crypto-touching feature in this repo (RFC 6455, PBKDF2, OTR),
 the protocol is **composed from the standard library** — no `webpush-go`, no
@@ -230,16 +230,6 @@ decode for `applicationServerKey`) and `pushSubscriptionPayload` (PushSubscripti
   a POST per message.
 
 ---
-
-## Build order
-
-1. `internal/push`: VAPID keygen/encode, JWT, `encryptPayload`, `Send`. Unit
-   tests (RFC 8291 round-trip, JWT verify, header framing) need no DB.
-2. Migration `0016` + store queries.
-3. Config (`RIVENDELL_VAPID_SUBJECT`), boot wiring (load/gen keys → `push.Sender`),
-   endpoints, send hook, `hub.IsConnected`.
-4. `sw.js`, `manifest.json`, `notify.js` helpers, `app.js` wiring.
-5. Tests green (Go + web), version bump, docs.
 
 ## Non-goals
 

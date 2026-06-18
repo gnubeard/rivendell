@@ -16,7 +16,7 @@
 // auto-follow spotlight it calls reflowSpotlightForSpeaker so the big tile tracks
 // the talker.
 //
-// Convention (see docs/decomposition.md): a DOM-carrying feature module takes the
+// Convention (see docs/history/frontend-decomposition.md): a DOM-carrying feature module takes the
 // element builder `el` and `$` as deps and reads reassigned module state through
 // getters (`getState`, `getVoiceCallState` — both are reassigned on every update,
 // so capturing the value would go stale). Already-modular helpers are imported

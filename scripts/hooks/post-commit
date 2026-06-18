@@ -21,6 +21,11 @@
 # working tree stays clean throughout (no "make build" that could pick up
 # unstaged changes). The container is replaced with --replace so there is
 # no downtime window between stop and start.
+#
+# Escape hatch: RUN_DEPLOY=0 git commit … skips the image rebuild + container
+# replace (the claude-bridge restart still runs). Use it when a shipping file
+# changed in a way that need not redeploy — e.g. a comment-only edit. Pairs
+# with RUN_BUMP=0 in pre-commit.
 
 set -euo pipefail
 
@@ -72,7 +77,7 @@ fi
 newrev=$(git rev-parse HEAD)
 echo "post-commit: $newrev on $DEPLOY_BRANCH"
 
-if git diff-tree --no-commit-id --name-only -r --root HEAD \
+if [ "${RUN_DEPLOY:-1}" != "0" ] && git diff-tree --no-commit-id --name-only -r --root HEAD \
   | grep -qE "$DEPLOY_RE"; then
 
   echo "Deploying $newrev..."

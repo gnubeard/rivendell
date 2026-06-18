@@ -1,6 +1,12 @@
 # Feature design notes
 
-Implementation details and invariants for each major subsystem. Intended for contributors — a summary of why things are wired the way they are.
+Why each subsystem is wired the way it is, plus its invariants — for contributors.
+This file is the index. The larger subsystems have their own deep-dive note in this
+directory (linked inline below); the smaller ones are documented here in full.
+
+Deep dives: [voice.md](voice.md) · [video.md](video.md) ·
+[secret-chat.md](secret-chat.md) · [web-push.md](web-push.md) ·
+[uploads.md](uploads.md) · [rich-text.md](rich-text.md).
 
 ---
 
@@ -64,7 +70,7 @@ Editable inline by moderator+ (`PATCH /api/channels/{id}`, broadcasts `channel.u
 
 ## Composer live-markdown decoration (`composer-richtext.js`)
 
-See `docs/richtext.md` for the full design. The composer is a contenteditable (`upgradeComposerField` facade preserves the textarea API); `createComposerRichText` decorates markdown *in place* as you type, mirroring `format.js`'s inline rules (bold before italic, code pulled out first) — kept in lockstep by a parity test.
+See [rich-text.md](rich-text.md) for the full design. The composer is a contenteditable (`upgradeComposerField` facade preserves the textarea API); `createComposerRichText` decorates markdown *in place* as you type, mirroring `format.js`'s inline rules (bold before italic, code pulled out first) — kept in lockstep by a parity test.
 
 - **Load-bearing invariant:** `decorate` only WRAPS runs (markers kept, dimmed), never adds/removes a character, so `.value` stays the exact markdown source and the facade's text-offset caret math holds. The `input` handler captures caret offsets BEFORE its image-harvest/flatten mutations and threads them to `rich.onInput(start,end)`.
 - **Decoration is ORTHOGONAL to behavior:** `prefs.loadRichText()` (default ON, `#richtext-enable`) only controls styled rendering; Ctrl-B/I and undo/redo work either way.
@@ -136,7 +142,7 @@ Content-addressed blobs at `blobs/<2-hex-prefix>/<sha256>`. `POST /api/uploads`:
 
 ## Secret chat / OTR-style E2E encryption (migration `0015`)
 
-Ephemeral, session-scoped E2E encryption for DMs. See `docs/otr.md` for the full design.
+Ephemeral, session-scoped E2E encryption for DMs. See [secret-chat.md](secret-chat.md) for the full design.
 
 - All crypto is SubtleCrypto: Ed25519 (identity), X25519 (ephemeral ECDH), HKDF-SHA-256, AES-256-GCM.
 - Identity private key is non-extractable in IndexedDB. `users.identity_key` holds the SPKI-encoded public key.
@@ -151,7 +157,7 @@ Ephemeral, session-scoped E2E encryption for DMs. See `docs/otr.md` for the full
 
 ## Notifications + Web Push (migration `0016`)
 
-Foreground notifications (`notify.js`) while alive; Web Push for DMs/@-mentions when closed. See `docs/web_push.md`.
+Foreground notifications (`notify.js`) while alive; Web Push for DMs/@-mentions when closed. See [web-push.md](web-push.md).
 
 - All push crypto is stdlib (`internal/push`): VAPID = ECDSA P-256 ES256 JWT (RFC 8292); payload = RFC 8291 `aes128gcm` (RFC 8188).
 - Two distinct keys: VAPID key (long-lived, persisted in `push_vapid`) and message ephemeral key (fresh per push).

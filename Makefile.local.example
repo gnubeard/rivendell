@@ -21,5 +21,5 @@
 # Opt in to the Firefox (Gecko-engine) smoke project. Gecko needs no native host
 # stack on Linux, so just set the flag — the browser bundle is fetched on first
 # `make test-e2e`. (The WebKit smoke is heavier: it needs a provisioned native
-# stack and a setup hook — see docs/webkit-e2e.md.)
+# stack and a setup hook — see docs/testing/cross-browser.md.)
 # E2E_FIREFOX := 1

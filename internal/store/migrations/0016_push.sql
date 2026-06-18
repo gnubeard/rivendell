@@ -1,5 +1,5 @@
 -- Web Push: per-device subscriptions for offline notifications, plus this
--- server's single VAPID identity. See docs/web_push.md.
+-- server's single VAPID identity. See docs/design/web-push.md.
 
 CREATE TABLE push_subscriptions (
     id           BIGSERIAL   PRIMARY KEY,

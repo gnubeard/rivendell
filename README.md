@@ -228,39 +228,20 @@ make fmt        # gofmt
 make vet        # go vet
 ```
 
-### Go integration tests
-
-The Go integration tests hit a real database and are gated on `TEST_DATABASE_URL`.
-Spin up a throwaway instance:
+The Go tests hit a real database (gated on `TEST_DATABASE_URL`); the Playwright e2e
+suite in `web/e2e/` drives the DOM-heavy features in a real browser and needs its
+own disposable database. The git hooks (`make install-hooks`) enforce the suite as
+the gate upstream of the `develop` auto-deploy.
 
 ```sh
-podman run -d --name rivendell-test-pg \
-  -e POSTGRES_USER=chat \
-  -e POSTGRES_PASSWORD=chat_dev_pw \
-  -e POSTGRES_DB=chat_test \
-  -p 55432:5432 \
-  postgres:16-alpine
-
 export TEST_DATABASE_URL='postgres://chat:chat_dev_pw@localhost:55432/chat_test?sslmode=disable'
 make test-go
-```
 
-### End-to-end tests
-
-Playwright specs in `web/e2e/` drive the DOM-heavy features (composer, calls,
-search, modals, …) in a real browser. They are **not** part of `make test` and need
-their own disposable database — separate from your dev DB, since the suite wipes it
-before each run:
-
-```sh
 make test-e2e E2E_DATABASE_URL='postgres://chat:chat_dev_pw@localhost:55432/chat_e2e?sslmode=disable'
 ```
 
-Host-specific details — a nonstandard port, or resetting the database through a
-container when there is no host `psql` — belong in a git-ignored `Makefile.local`
-(copy [`Makefile.local.example`](Makefile.local.example)). The Makefile `-include`s
-it, so once it is in place a bare `make test-e2e` works. A standard setup with a
-host `psql` needs none of this.
+For the test tiers, database setup, the hook gate and its escape hatches, and the
+cross-browser and manual checks, see **[docs/testing/](docs/testing/README.md)**.
 
 ---
 
@@ -268,27 +249,18 @@ host `psql` needs none of this.
 
 rivendell is one Go binary serving a JSON + WebSocket API and a vanilla-JS client
 straight from disk — no media server, no message broker, no frontend build step.
-State lives in PostgreSQL; uploaded files live in a content-addressed blob
-directory on the filesystem.
+State lives in PostgreSQL; uploaded files live in a content-addressed blob directory
+on the filesystem. The backend (`internal/`, Go 1.26) is layered into `store` (SQL
+over `lib/pq`, embedded migrations), `ws` (a hand-rolled RFC 6455 WebSocket + hub),
+`httpapi` (stdlib `net/http`, middleware, handlers split by domain), and stdlib-only
+`auth` and `push`. The frontend (`web/`) is one HTML shell plus ES modules served raw
+with path-based cache-busting; calls are a peer-to-peer WebRTC mesh the server only
+signals for.
 
-**Backend** (`internal/`, module path `rivendell`, Go 1.26) is layered by
-responsibility:
-
-- **`store`** — the data layer: `database/sql` over the pure-Go `lib/pq` driver, plain auditable SQL (no ORM, no query builder), with schema migrations embedded in the binary and applied in order at startup.
-- **`ws`** — a hand-rolled RFC 6455 WebSocket and a hub that fans events out to connected clients and tracks presence.
-- **`httpapi`** — the HTTP layer: routing on the stdlib `net/http` ServeMux (no third-party router), middleware (recover / log / auth / role + sessions), the realtime broadcast + channel-visibility logic, and request handlers split into files by domain.
-- **`auth`** (PBKDF2 passwords, hashed tokens) and **`push`** (Web Push: VAPID + RFC 8291/8188) round it out — both stdlib-only.
-
-**Frontend** (`web/`) is a single HTML shell plus ES modules served raw, with
-path-based cache-busting in place of a bundler. `app.js` is the orchestrator,
-progressively carved into focused feature modules (composer, voice/video UI,
-search, emoji, …); `sw.js` is the service worker for Web Push. Calls are a
-peer-to-peer WebRTC mesh — the server only relays signaling — so media never
-touches the backend.
-
-The authoritative, file-by-file map and the per-feature invariants are kept
-current in [CLAUDE.md](CLAUDE.md); deeper design notes live in
-[docs/design.md](docs/design.md) and the per-subsystem notes alongside it.
+The full picture is in **[docs/architecture.md](docs/architecture.md)**; the
+per-feature design notes and invariants live in
+[docs/design/](docs/design/README.md), and the condensed file-by-file editing
+checklist is [CLAUDE.md](CLAUDE.md).
 
 ---
 
@@ -307,12 +279,14 @@ scripts.
 
 | Hook | What it does |
 | --- | --- |
-| `pre-commit` | Runs the fast test tier whenever source is staged, on any branch (`gofmt` + `go vet` + `go test` when Go changed; the web unit tests when `web/` changed) — the gate that keeps the `develop` auto-deploy from shipping red code. Then, on `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a *shipping* source file is staged (server code, the runtime web assets `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`). A test- or tooling-only commit (`web/e2e`, `web/test`, the playwright config) runs the test gate but does **not** bump or deploy; doc-only commits skip both. Escape hatch: `RUN_TESTS=0 git commit …`. |
+| `pre-commit` | Runs the fast test tier whenever source is staged, on any branch (`gofmt` + `go vet` + `go test` when Go changed; the web unit tests when `web/` changed) — the gate that keeps the `develop` auto-deploy from shipping red code. Then, on `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a *shipping* source file is staged (server code, the runtime web assets `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`). A test- or tooling-only commit (`web/e2e`, `web/test`, the playwright config) runs the test gate but does **not** bump or deploy; doc-only commits skip both. Escape hatches: `RUN_TESTS=0 git commit …` (skip the test gate), `RUN_BUMP=0 git commit …` (skip the version bump). |
 | `pre-push` | Runs the Playwright e2e suite (`make test-e2e`) when the push range touches runtime source (`cmd/server`, `internal/`, `web/`) — the gate for shipping to `main`. Skips docs/tooling-only pushes. Escape hatch: `RUN_E2E=0 git push …`. |
-| `post-commit` | On `develop`, builds a fresh container image and replaces the running container when a *shipping* source file changed — the same `DEPLOY_RE` allowlist the `pre-commit` bump uses (server code, the runtime `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`), so a test-/tooling-only commit doesn't redeploy. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. |
+| `post-commit` | On `develop`, builds a fresh container image and replaces the running container when a *shipping* source file changed — the same `DEPLOY_RE` allowlist the `pre-commit` bump uses (server code, the runtime `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`), so a test-/tooling-only commit doesn't redeploy. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. Escape hatch: `RUN_DEPLOY=0 git commit …` skips the rebuild + redeploy (the bridge restart still runs). |
 
-Prefer the `RUN_TESTS=0` / `RUN_E2E=0` escape hatches over `--no-verify`, which
-also disables the version bump.
+Prefer the targeted `RUN_TESTS=0` / `RUN_BUMP=0` / `RUN_DEPLOY=0` / `RUN_E2E=0`
+escape hatches over `--no-verify`, which disables everything at once (tests *and* the
+version bump). `RUN_BUMP=0` + `RUN_DEPLOY=0` together suit a shipping-file change that
+shouldn't ship a new version — e.g. a comment-only edit.
 
 The `post-commit` hook is environment-specific. Edit the `USER-CONFIGURABLE` block
 near the top of `scripts/hooks/post-commit` to set your container name, network,
@@ -375,10 +349,10 @@ tmux new-session -d -s claude-bridge 'scripts/claude-bridge'
 
 ## Developer conventions
 
-Two documents carry the detail, at different altitudes: [CLAUDE.md](CLAUDE.md) is
-the condensed checklist of editing rules — the file-by-file map and every "don't do
-X" invariant — while [docs/design.md](docs/design.md) and the per-subsystem notes
-alongside it carry the design rationale. A few invariants worth calling out here:
+The rationale and the rules live in **[docs/conventions.md](docs/conventions.md)**,
+with the per-feature design notes in [docs/design/](docs/design/README.md) and the
+condensed, file-by-file editing checklist in [CLAUDE.md](CLAUDE.md). A few invariants
+worth calling out here:
 
 - **List endpoints return `[]`, never `null`.** `TestEmptyListsReturnArraysNotNull` enforces this.
 - **`users.status` is durable** — `onPresenceChange` must never write it. `TestStatusDurableAcrossReconnect` guards it.

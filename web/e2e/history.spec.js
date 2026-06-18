@@ -2,7 +2,7 @@
 // real server.
 //
 // Written BEFORE the planned app.js → history.js paging carve (the blessed
-// sub-system lift in docs/decomposition.md): it must pass green against the
+// sub-system lift in docs/history/frontend-decomposition.md): it must pass green against the
 // un-carved code first, so a later red means the carve regressed. The paging
 // machine (older/newer page fetches, the IntersectionObserver sentinels, the
 // history-window banner) is fetch-then-render DOM with no extractable pure core

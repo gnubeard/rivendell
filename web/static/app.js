@@ -607,7 +607,7 @@ function sendWS(msg) {
 // S.applyEvent / classifyIncomingMessage reducers) and routes the DOM consequences
 // by event type. The state-folding is total in state.js; what's left here is the
 // targeted re-render dispatch and the voice/secret hand-offs — DOM territory, not
-// a further pure carve (see docs/decomposition.md, "Realtime/sync").
+// a further pure carve (see docs/history/frontend-decomposition.md, "Realtime/sync").
 // MAP — the inbound-WS dispatch table. Every frame is first folded into `state` by
 // the PURE reducer (S.applyEvent, total in state.js); what remains here is "given
 // the event type, which DOM re-renders fire" plus the voice/secret hand-offs. It
@@ -2661,7 +2661,7 @@ function richContext() {
 //
 // The three image-paste channels are deliberately redundant across browsers and
 // mutually exclusive per paste (each preventDefaults). Don't collapse them — see
-// docs/composer-paste-qa.md and the caret/decoration invariant in docs/richtext.md.
+// docs/testing/image-paste-qa.md and the caret/decoration invariant in docs/design/rich-text.md.
 function wireComposer() {
   const input = $("#composer-input");
   upgradeComposerField(input); // before anything reads .value / .selectionStart

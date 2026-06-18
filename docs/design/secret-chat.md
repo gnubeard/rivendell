@@ -1,10 +1,10 @@
 # Secret chat — OTR-style end-to-end encryption
 
-Target: a 🔒 you click on a DM that establishes a live, end-to-end encrypted
-session with the other person. Encrypted in the browser, the server sees only
-ciphertext, verified out-of-band by a safety number. No media server analog —
-all the crypto is `SubtleCrypto` (WebCrypto), so **zero new dependencies** on
-either side, consistent with the prime directive.
+**Status: shipped (migration `0015`).** A 🔒 you click on a DM that establishes a
+live, end-to-end encrypted session with the other person. Encrypted in the browser,
+the server sees only ciphertext, verified out-of-band by a safety number. No media
+server analog — all the crypto is `SubtleCrypto` (WebCrypto), so **zero new
+dependencies** on either side, consistent with the prime directive.
 
 This is deliberately **not** the OMEMO-class feature in the backlog. The line
 between "feasible polish feature" and "different product" is exactly the line
@@ -25,7 +25,7 @@ What we are building is the original OTR use case: a **live, ephemeral,
 session-to-session** encrypted conversation between two people who are both
 online right now.
 
-| | This feature (v1.3) | OMEMO-class (backlog, deferred) |
+| | This feature | OMEMO-class (backlog, deferred) |
 |---|---|---|
 | When | Both parties online, live | Anytime, async |
 | Lifetime | Ephemeral — gone on reload | Durable, full history |
@@ -318,36 +318,7 @@ Crypto fails silently, so these are non-negotiable review gates:
 
 ---
 
-## Build order
-
-Each phase is independently testable; the pure pieces get `node:test` units like
-`format.js`/`state.js`/`voice.js` helpers do today.
-
-1. **Identity keys.** Generate (non-extractable), store in IndexedDB, publish
-   public key (1 migration: `users.identity_key`; `PUT /api/me/identity-key` +
-   expose on user objects). Safety-number computation. *Pure & unit-tested:*
-   safety-number formatting, canonical-order fingerprint.
-2. **Handshake relay.** `secret.offer/accept/dismiss` through the hub (server
-   relay + DM membership check + lower-id initiator + sibling dismiss). Establish
-   `rootKey`. No UI — drive it from a test harness with two clients (we now have
-   a WS integration-test client from v1.2.32).
-3. **Message crypto.** Directional chain keys, per-message ratchet, AES-GCM with
-   AAD, counter/replay handling. *Pure & unit-tested:* AAD construction, ratchet
-   step, counter/replay state machine. (Node's `crypto.webcrypto` runs the real
-   primitives in tests.)
-4. **UI.** 🔒 button in the DM header, request banner, secret-mode composer
-   styling, the "not saved" notice, in-memory message rendering through the
-   existing XSS-safe path.
-5. **Verification.** Safety-number modal, mark-verified (stored per peer in
-   IndexedDB), key-change warning, green/yellow lock states.
-
-A reasonable first cut to *prove the spine* is phases 1–3 with no UI: two test
-clients establishing a session and exchanging an encrypted round-trip, asserting
-the server only ever saw ciphertext.
-
----
-
-## Non-goals for v1.3 (the scope fence)
+## Non-goals (the scope fence)
 
 - Persistence / message history / ciphertext at rest.
 - Asynchronous (offline) delivery.
@@ -358,25 +329,9 @@ the server only ever saw ciphertext.
 - Group / channel E2E. This is 1:1 DM only.
 
 Each of these is where "feasible polish feature" turns back into "different
-product." Holding this fence is the whole reason this version is shippable.
-
----
-
-## Decisions (locked for v1.3)
-
-1. **Unverified chat is allowed**, with an upgrade-to-verified path. An
-   unverified session is encrypted-but-unauthenticated (yellow lock); a pair that
-   compares the safety number out-of-band upgrades to verified (green). Matches
-   Signal; the alternative gates the feature behind a chore.
-2. **Curve: X25519 + Ed25519, current browsers only.** No P-256, no dual-stack
-   negotiation. Feature-detect at load; disable 🔒 (with a tooltip) where
-   unsupported. See "Primitives" for the full rationale.
-3. **Identity distribution: server column.** `users.identity_key` holds each
-   user's public key so peers can fetch and verify it *before* chatting. The
-   server could lie about it — caught by out-of-band verification. Tiny, and
-   enables pre-verification; preferred over in-band TOFU.
-4. **Within-session symmetric ratchet (HKDF hash chain) ships in v1.** Cheap,
-   pure, unit-testable, and buys real within-session forward secrecy. (No DH
-   ratchet — that's the OMEMO rabbit hole.)
-5. **The scope fence holds for 1.3.** Everything under "Non-goals" is punted to
-   the separate OMEMO design pass.
+product." Holding this fence is what keeps the feature shippable; everything under
+it is punted to the separate OMEMO design pass. The key decisions behind the shape
+above — unverified-allowed with an upgrade-to-verified path, the X25519 + Ed25519
+single suite, the `users.identity_key` server column, and the within-session
+symmetric ratchet — are each explained where they apply (Threat model, Primitives,
+Identity keys, Message encryption).

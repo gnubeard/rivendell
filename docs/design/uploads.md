@@ -1,7 +1,8 @@
 # File uploads — content-addressed blob store
 
-Target: paste, drop, or attach an image and have it appear inline in a message,
-without standing up object storage or pulling in a dependency. Uploads land as
+**Status: shipped (migration `0014`).** Paste, drop, or attach an image and have it
+appear inline in a message, without standing up object storage or pulling in a
+dependency. Uploads land as
 content-addressed blobs on a local volume, with metadata in Postgres, hidden
 behind a small `BlobStore` interface. Everything is Go stdlib — `crypto/sha256`,
 `io`, `os`, `http.DetectContentType` — consistent with the prime directive: one

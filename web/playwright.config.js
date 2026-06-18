@@ -16,7 +16,7 @@
 //     and byte-identical upload round-trips.
 // Plus two opt-in cross-engine smokes: a WebKit (Safari-engine) project gated
 // behind E2E_WEBKIT, and a Firefox (Gecko-engine) project gated behind
-// E2E_FIREFOX — see the webkit/firefox project notes below and docs/webkit-e2e.md.
+// E2E_FIREFOX — see the webkit/firefox project notes below and docs/testing/cross-browser.md.
 import { defineConfig } from "@playwright/test";
 
 // The WebKit smoke project is opt-in via E2E_WEBKIT=1. WebKit on Linux needs a
@@ -24,7 +24,7 @@ import { defineConfig } from "@playwright/test";
 // libjpeg, a virtual audio source) that Debian/Ubuntu CI images carry but most
 // dev boxes don't — so the DEFAULT `make test-e2e` is Chromium-only and green
 // everywhere, and the WebKit project is added only when a host has been
-// provisioned for it (see docs/webkit-e2e.md). On this dev box, Makefile.local
+// provisioned for it (see docs/testing/cross-browser.md). On this dev box, Makefile.local
 // sets E2E_WEBKIT=1 and runs the host-setup hook.
 const webkitProjects = process.env.E2E_WEBKIT
   ? [

@@ -1,6 +1,6 @@
 # Composer rich text — live markdown decoration
 
-Type `**bold**`, `*italic*`/`_italic_`, `~~strike~~`, `` `code` ``, `||spoiler||`,
+**Status: shipped.** Type `**bold**`, `*italic*`/`_italic_`, `~~strike~~`, `` `code` ``, `||spoiler||`,
 ` ```fenced code blocks``` `, and known `@mentions` / `#channels` / `:emoji:`, and
 they render with their effect **while you type** — without ever hiding the
 markers. The markers stay in the text, just de-emphasized (`.md-mk`, dimmed); the
@@ -117,4 +117,4 @@ These cost the most to find; don't re-introduce them.
   uncaught page errors — so a Gecko parse/eval/feature regression in any module
   (incl. the composer) fails the suite. It does **not** re-run the composer DOM
   behaviors under Gecko; if this feature grows, extending that smoke into a real
-  Firefox composer spec is the next step. See docs/webkit-e2e.md.
+  Firefox composer spec is the next step. See [../testing/cross-browser.md](../testing/cross-browser.md).

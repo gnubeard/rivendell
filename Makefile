@@ -31,7 +31,7 @@ E2E_WEBKIT           ?=
 E2E_FIREFOX          ?=
 # Chromium is always installed; WebKit/Firefox only when their opt-in smoke is
 # enabled (E2E_WEBKIT=1 / E2E_FIREFOX=1) — each is a separate ~100 MB download.
-# WebKit also needs a provisioned native stack (see docs/webkit-e2e.md); Gecko
+# WebKit also needs a provisioned native stack (see docs/testing/cross-browser.md); Gecko
 # does not.
 PLAYWRIGHT_INSTALL   ?= npx playwright install chromium $(if $(E2E_WEBKIT),webkit) $(if $(E2E_FIREFOX),firefox)
 

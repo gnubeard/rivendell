@@ -12,7 +12,7 @@
 //
 // Payload encryption is RFC 8291 ("Message Encryption for Web Push") over the
 // RFC 8188 `aes128gcm` content coding: ECDH → HKDF-SHA-256 → AES-128-GCM. See
-// docs/web_push.md.
+// docs/design/web-push.md.
 package push
 
 import (
