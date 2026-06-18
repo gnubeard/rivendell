@@ -23,7 +23,8 @@
 # Required env:
 #   RIVENDELL_URL               Base URL of your rivendell instance  (e.g. http://localhost:8080)
 #   RIVENDELL_BOT_TOKEN         Bearer token from the admin panel (Bot tokens tab)
-#   RIVENDELL_TEST_DATABASE_URL Postgres URL passed to Claude for running Go tests
+#   RIVENDELL_TEST_DATABASE_URL Postgres URL exported into Claude's environment as
+#                               TEST_DATABASE_URL, so `make test`/hooks run the Go tests
 #
 # Optional env:
 #   RIVENDELL_CLAUDE_CHANNEL         Channel name to watch (default: claude)
@@ -64,19 +65,24 @@ STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
 WORKING_EMOJI="${RIVENDELL_WORKING_EMOJI:-👍}"  # "in progress" reaction (literal Unicode emoji — ships everywhere; see above)
 RELEASE_UPDATE_CHANNEL="${RIVENDELL_RELEASE_UPDATE_CHANNEL:-}"
-TEST_DATABASE_URL="${RIVENDELL_TEST_DATABASE_URL:?RIVENDELL_TEST_DATABASE_URL not set}"
+# Exported (not just assigned) so the `claude` subprocess and everything it spawns —
+# `make test`, the git hooks, raw `go test` — inherit it and the Go integration tests
+# stop silently skipping. This is why the preamble no longer injects the URL by hand.
+export TEST_DATABASE_URL="${RIVENDELL_TEST_DATABASE_URL:?RIVENDELL_TEST_DATABASE_URL not set}"
 MAX_RESPONSE=3800  # chars per chunk; leaves headroom under rivendell's default 4096-byte limit
 
 # Standing instructions prepended to every request before it reaches Claude.
 # These ride on the message itself so they apply regardless of what the project
-# memory does or doesn't retain — the test-database URL in particular has been
-# chronically forgotten. Keep this in sync with the conventions in CLAUDE.md.
+# memory does or doesn't retain. TEST_DATABASE_URL is now exported above (so plain
+# `make test` and the hooks pick it up); the preamble used to inject it inline
+# because it was chronically forgotten — now it just insists the suite is actually
+# run. Keep this in sync with the conventions in CLAUDE.md.
 BRIDGE_PREAMBLE='Project standing instructions (injected by claude-bridge — always apply, do not skip):
 
-1. Running tests: the Go integration tests are gated on TEST_DATABASE_URL and
-   SILENTLY SKIP without it. You MUST run the suite as:
-       make test TEST_DATABASE_URL='\'''"$TEST_DATABASE_URL"'\''
-   Never report tests as run/passing/green unless you ran them with that URL set.
+1. Running tests: TEST_DATABASE_URL is already set in your environment, so plain
+   `make test` runs the full Go + web suite against it. The Go integration tests
+   SILENTLY SKIP if that URL is unset, so never report tests as run/passing/green
+   unless you actually ran `make test` and saw it pass.
 
 2. Committing: when the work is complete and the full suite above is green, commit
    to the develop branch (a develop commit auto-deploys to the test env). Bump the
