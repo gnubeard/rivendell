@@ -7,9 +7,13 @@
 # to match your deployment before installing.
 #
 # What it does:
-#   1. On every commit to the develop branch, if any server source changed
-#      (cmd/server, internal/, web/, Dockerfile, go.mod/sum), it builds a
-#      fresh container image and replaces the running container.
+#   1. On every commit to the develop branch, if any SHIPPING source changed
+#      (cmd/server, internal/, the runtime web assets web/static + web/sw.js +
+#      web/index.html + web/manifest.json, Dockerfile, go.mod/sum), it builds a
+#      fresh container image and replaces the running container. A test- or
+#      tooling-only commit (web/e2e, web/test, playwright config) does NOT
+#      deploy — this allowlist must stay in sync with DEPLOY_RE in
+#      scripts/hooks/pre-commit and the paths in .github/workflows/release.yml.
 #   2. If scripts/claude-bridge changed, it restarts the claude-bridge service
 #      so the new script takes effect immediately.
 #
@@ -54,6 +58,12 @@ BRIDGE_SERVICE="claude-bridge.service"
 # END USER-CONFIGURABLE
 # ---------------------------------------------------------------------------
 
+# DEPLOY_RE — the SHIPPING-source allowlist that decides whether this commit
+# rebuilds the image. Test-/tooling-only commits (web/e2e, web/test, playwright
+# config) do not match and so do not deploy. Keep identical to DEPLOY_RE in
+# scripts/hooks/pre-commit and the paths in .github/workflows/release.yml.
+DEPLOY_RE='cmd/server|internal/|web/static/|web/sw.js|web/index.html|web/manifest.json|Dockerfile|go.(mod|sum)'
+
 branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$branch" != "$DEPLOY_BRANCH" ]; then
   exit 0
@@ -63,7 +73,7 @@ newrev=$(git rev-parse HEAD)
 echo "post-commit: $newrev on $DEPLOY_BRANCH"
 
 if git diff-tree --no-commit-id --name-only -r --root HEAD \
-  | grep -qE 'cmd/server|internal/|web/|Dockerfile|go.(mod|sum)'; then
+  | grep -qE "$DEPLOY_RE"; then
 
   echo "Deploying $newrev..."
   workdir=$(mktemp -d)

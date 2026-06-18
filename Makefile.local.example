@@ -17,3 +17,9 @@
 # "$E2E_RESET_SQL" here (the recipe passes it through for the shell to expand).
 # Replace <pg-container> with your container's name.
 # E2E_DB_RESET_CMD := podman exec -i -e PGPASSWORD=chat_dev_pw <pg-container> psql -U chat -d chat_e2e -v ON_ERROR_STOP=1 -c "$$E2E_RESET_SQL"
+
+# Opt in to the Firefox (Gecko-engine) smoke project. Gecko needs no native host
+# stack on Linux, so just set the flag — the browser bundle is fetched on first
+# `make test-e2e`. (The WebKit smoke is heavier: it needs a provisioned native
+# stack and a setup hook — see docs/webkit-e2e.md.)
+# E2E_FIREFOX := 1

@@ -14,8 +14,9 @@
 //   - Composer paste channels (contenteditable composer): synthetic
 //     ClipboardEvent/InputEvent/DOM-insertion harvest, channel exclusivity,
 //     and byte-identical upload round-trips.
-// Plus one opt-in WebKit (Safari-engine) smoke, gated behind E2E_WEBKIT — see
-// the webkitProjects note below and docs/webkit-e2e.md.
+// Plus two opt-in cross-engine smokes: a WebKit (Safari-engine) project gated
+// behind E2E_WEBKIT, and a Firefox (Gecko-engine) project gated behind
+// E2E_FIREFOX — see the webkit/firefox project notes below and docs/webkit-e2e.md.
 import { defineConfig } from "@playwright/test";
 
 // The WebKit smoke project is opt-in via E2E_WEBKIT=1. WebKit on Linux needs a
@@ -37,6 +38,37 @@ const webkitProjects = process.env.E2E_WEBKIT
         name: "webkit",
         testMatch: /webkit-smoke\.spec\.js/,
         use: { browserName: "webkit" },
+      },
+    ]
+  : [];
+
+// The Firefox smoke project is opt-in via E2E_FIREFOX=1. Like WebKit it boots the
+// whole client under the real engine (Gecko) to catch Firefox-only parse/eval/
+// feature regressions Chromium tolerates — the gap behind the documented Gecko
+// bugs (contenteditable image delivery, Shift+Enter <br> normalize, the
+// FF-Android freeze). Unlike WebKit on Linux, Gecko needs no native host stack,
+// so there's no provisioning hook — Makefile.local just sets the flag. It does
+// NOT complete a real call; see firefox-smoke.spec.js.
+const firefoxProjects = process.env.E2E_FIREFOX
+  ? [
+      {
+        name: "firefox",
+        testMatch: /firefox-smoke\.spec\.js/,
+        use: {
+          browserName: "firefox",
+          // Headless Firefox blocks getUserMedia on a permission prompt that
+          // never gets answered (it would HANG, not settle) — so unlike WebKit
+          // on Linux, Gecko DOES support fake capture: disable the prompt and
+          // hand it a synthetic device so getUserMedia resolves deterministically.
+          // The liveness probe then proves the media pipeline runs to completion
+          // under Gecko rather than stalling.
+          launchOptions: {
+            firefoxUserPrefs: {
+              "media.navigator.permission.disabled": true,
+              "media.navigator.streams.fake": true,
+            },
+          },
+        },
       },
     ]
   : [];
@@ -63,7 +95,7 @@ export default defineConfig({
       // no-prompt permission grant are Chromium-specific, and the call specs
       // need real media flowing between two contexts.
       name: "chromium",
-      testIgnore: /webkit-smoke\.spec\.js/,
+      testIgnore: /(webkit|firefox)-smoke\.spec\.js/,
       use: {
         browserName: "chromium",
         // getUserMedia without prompts or hardware: Chromium's fake capture stack
@@ -80,5 +112,6 @@ export default defineConfig({
       },
     },
     ...webkitProjects,
+    ...firefoxProjects,
   ],
 });

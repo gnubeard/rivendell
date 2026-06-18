@@ -110,6 +110,11 @@ These cost the most to find; don't re-introduce them.
   `flankedDelete`. Pure, run under Node.
 - `web/e2e/composer-richtext.spec.js` — the DOM behaviors (live decoration, caret,
   Ctrl-B/I, undo/redo, toggle, code blocks) against a real engine.
-- **Gap:** the suite is Chromium-only; several bugs here were Gecko-specific and
-  were caught by an ad-hoc Firefox Playwright run, not CI. If this feature grows, a
-  small Firefox composer smoke (mirroring `webkit-smoke`) is the honest follow-up.
+- **Gecko coverage:** the composer *behavior* specs are Chromium-only, and several
+  bugs here were Gecko-specific (caught historically by ad-hoc Firefox Playwright
+  runs, not CI). A `web/e2e/firefox-smoke.spec.js` now boots the whole client under
+  the real Gecko engine on every opt-in (`E2E_FIREFOX=1`) e2e pass, asserting zero
+  uncaught page errors — so a Gecko parse/eval/feature regression in any module
+  (incl. the composer) fails the suite. It does **not** re-run the composer DOM
+  behaviors under Gecko; if this feature grows, extending that smoke into a real
+  Firefox composer spec is the next step. See docs/webkit-e2e.md.

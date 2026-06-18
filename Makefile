@@ -25,10 +25,15 @@ E2E_DB_RESET_CMD     ?=
 #   default so `make test-e2e` is Chromium-only and green on any host. This box
 #   sets it (plus the host-setup hook) in Makefile.local.
 E2E_WEBKIT           ?=
-# Chromium is always installed; WebKit only when the opt-in WebKit smoke is
-# enabled (E2E_WEBKIT=1) — it's a separate ~100 MB download and needs a
-# provisioned native stack (see docs/webkit-e2e.md).
-PLAYWRIGHT_INSTALL   ?= npx playwright install chromium $(if $(E2E_WEBKIT),webkit)
+# E2E_FIREFOX — opt in to the Firefox (Gecko-engine) smoke project. Empty by
+#   default, same as WebKit. Unlike WebKit, Gecko needs no native host stack on
+#   Linux, so there's no setup hook — Makefile.local just flips this to 1.
+E2E_FIREFOX          ?=
+# Chromium is always installed; WebKit/Firefox only when their opt-in smoke is
+# enabled (E2E_WEBKIT=1 / E2E_FIREFOX=1) — each is a separate ~100 MB download.
+# WebKit also needs a provisioned native stack (see docs/webkit-e2e.md); Gecko
+# does not.
+PLAYWRIGHT_INSTALL   ?= npx playwright install chromium $(if $(E2E_WEBKIT),webkit) $(if $(E2E_FIREFOX),firefox)
 
 # Per-host overrides (container names, ports, reset command) live here, untracked.
 -include Makefile.local
@@ -85,7 +90,7 @@ test-web: ## Run frontend unit tests (Node built-in test runner)
 test-e2e: build ## Playwright WebRTC e2e (needs a DISPOSABLE chat_e2e db + ~1.5 GB browser download on first run)
 	cd web && npm install
 	cd web && $(PLAYWRIGHT_INSTALL)
-	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) E2E_DB_RESET_CMD='$(E2E_DB_RESET_CMD)' E2E_WEBKIT='$(E2E_WEBKIT)' npx playwright test
+	cd web && E2E_DATABASE_URL=$(E2E_DATABASE_URL) E2E_DB_RESET_CMD='$(E2E_DB_RESET_CMD)' E2E_WEBKIT='$(E2E_WEBKIT)' E2E_FIREFOX='$(E2E_FIREFOX)' npx playwright test
 
 vet: ## go vet
 	go vet ./...

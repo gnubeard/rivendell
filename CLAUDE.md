@@ -76,8 +76,10 @@ web/e2e/                      Playwright specs (composer-paste, dm-call,
                               lightbox-gallery, remove-embed);
                               Chromium by default,
                               dev-only, run via `make test-e2e`. Plus webkit-smoke
-                              (Safari-engine), opt-in via E2E_WEBKIT — see
-                              docs/webkit-e2e.md
+                              (Safari-engine), opt-in via E2E_WEBKIT, and
+                              firefox-smoke (Gecko-engine sibling), opt-in via
+                              E2E_FIREFOX — both boot the client under the real
+                              engine + probe getUserMedia; see docs/webkit-e2e.md
 docs/                         atlas.md (app.js navigation map: 8 regions over
                               31 sections + structural findings),
                               decomposition.md (frontend module breakup),
@@ -120,7 +122,7 @@ hatches for deliberate WIP: `RUN_TESTS=0 git commit …` / `RUN_E2E=0 git push �
 ## Conventions
 
 - **List endpoints return `[]`, never `null`.** Use `out := []T{}`. `TestEmptyListsReturnArraysNotNull` guards this.
-- **Bump `Version` in `internal/config/config.go`** (patch increment) with every meaningful commit to develop. Doc-only changes (`README.md`, `CLAUDE.md`, `docs/`) don't need a bump — the `pre-commit` hook only auto-bumps when a source file (server code, web assets, Dockerfile, `go.mod`) is staged.
+- **Bump `Version` in `internal/config/config.go`** (patch increment) with every meaningful commit to develop. Doc-only changes (`README.md`, `CLAUDE.md`, `docs/`) don't need a bump — and neither do test-/tooling-only changes (`web/e2e`, `web/test`, the playwright config, Makefiles). The `pre-commit` hook only auto-bumps (and `post-commit` only deploys) when a *shipping* source file is staged: server code, the runtime web assets (`web/static`, `web/sw.js`, `web/index.html`, `web/manifest.json`), `Dockerfile`, or `go.mod`. This `DEPLOY_RE` allowlist lives in `scripts/hooks/pre-commit` + `post-commit` + `.github/workflows/release.yml` — keep the three in sync.
 - Passwords: PBKDF2 format `pbkdf2-sha256$<iter>$<b64salt>$<b64key>`, 600k iterations. Don't lower.
 - Roles: admin > moderator > member. Guard last-admin removal (`CountAdmins`).
 - `channelVisibleTo` is the single visibility predicate — `audienceForChannel` and `canAccessChannel` both delegate to it.

@@ -26,7 +26,17 @@ set -euo pipefail
 
 DEPLOY_BRANCH="develop"
 VERSION_FILE="internal/config/config.go"
+# Two predicates, deliberately different:
+#   SRC_RE    — "is there source worth running the test gate for?" Broad: ANY
+#               web/ change (incl. e2e specs, playwright config, unit tests)
+#               should run the fast web suite. Cheap to over-fire; never wrong.
+#   DEPLOY_RE — "does this change actually SHIP?" Narrow allowlist of runtime
+#               assets the server serves / the binary embeds, so a test- or
+#               tooling-only commit does NOT bump the version or trip the
+#               post-commit deploy. Keep in sync with scripts/hooks/post-commit
+#               and .github/workflows/release.yml.
 SRC_RE='cmd/server|internal/|web/|Dockerfile|go.(mod|sum)'
+DEPLOY_RE='cmd/server|internal/|web/static/|web/sw.js|web/index.html|web/manifest.json|Dockerfile|go.(mod|sum)'
 
 # ---------------------------------------------------------------------------
 # Test gate — runs on any branch, before the version bump.
@@ -67,8 +77,9 @@ if [ "$branch" != "$DEPLOY_BRANCH" ]; then
   exit 0
 fi
 
-# Only enforce version bump when meaningful source files are staged.
-if ! echo "$staged" | grep -qE "$SRC_RE"; then
+# Only enforce version bump when a shipping (runtime) source file is staged —
+# DEPLOY_RE, not SRC_RE: a test/tooling-only commit must not bump or deploy.
+if ! echo "$staged" | grep -qE "$DEPLOY_RE"; then
   exit 0
 fi
 

@@ -307,9 +307,9 @@ scripts.
 
 | Hook | What it does |
 | --- | --- |
-| `pre-commit` | Runs the fast test tier whenever source is staged, on any branch (`gofmt` + `go vet` + `go test` when Go changed; the web unit tests when `web/` changed) — the gate that keeps the `develop` auto-deploy from shipping red code. Then, on `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a meaningful source file is staged (server code, web assets, Dockerfile, `go.mod`). Skips both for doc-only commits. Escape hatch: `RUN_TESTS=0 git commit …`. |
+| `pre-commit` | Runs the fast test tier whenever source is staged, on any branch (`gofmt` + `go vet` + `go test` when Go changed; the web unit tests when `web/` changed) — the gate that keeps the `develop` auto-deploy from shipping red code. Then, on `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a *shipping* source file is staged (server code, the runtime web assets `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`). A test- or tooling-only commit (`web/e2e`, `web/test`, the playwright config) runs the test gate but does **not** bump or deploy; doc-only commits skip both. Escape hatch: `RUN_TESTS=0 git commit …`. |
 | `pre-push` | Runs the Playwright e2e suite (`make test-e2e`) when the push range touches runtime source (`cmd/server`, `internal/`, `web/`) — the gate for shipping to `main`. Skips docs/tooling-only pushes. Escape hatch: `RUN_E2E=0 git push …`. |
-| `post-commit` | On `develop`, builds a fresh container image and replaces the running container when server source changed. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. |
+| `post-commit` | On `develop`, builds a fresh container image and replaces the running container when a *shipping* source file changed — the same `DEPLOY_RE` allowlist the `pre-commit` bump uses (server code, the runtime `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`), so a test-/tooling-only commit doesn't redeploy. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. |
 
 Prefer the `RUN_TESTS=0` / `RUN_E2E=0` escape hatches over `--no-verify`, which
 also disables the version bump.

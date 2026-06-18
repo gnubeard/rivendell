@@ -24,6 +24,22 @@ webkit`. Everything below is for **RHEL-family hosts** (AlmaLinux/Rocky/Fedora),
 where `install-deps` doesn't apply. This box automates it via a git-ignored
 `scripts/webkit-e2e-host-setup.local.sh`, invoked from `Makefile.local`.
 
+## Firefox (Gecko) sibling
+
+`web/e2e/firefox-smoke.spec.js` is the Gecko counterpart, gated behind
+`E2E_FIREFOX=1` (`make test-e2e` adds the project; this box sets the flag in
+`Makefile.local`). It does the same job under Firefox — boot the whole client
+with zero uncaught page errors, run the `voice.js` media-environment helpers
+in-page, and prove `getUserMedia` *settles* rather than hanging — to catch
+Gecko-only regressions (contenteditable image delivery, the Shift+Enter `<br>`
+normalize, the FF-Android freeze) that the Chromium suite can't see.
+
+Unlike WebKit, **Gecko needs no native provisioning** on Linux: Playwright's
+Firefox bundle is self-contained, so there's no host-setup hook — `Makefile.local`
+just flips `E2E_FIREFOX`. If a freshly downloaded Firefox won't launch on a
+RHEL-family host, run `cd web && npx playwright install-deps firefox` once
+(expected to be unnecessary).
+
 ## What a RHEL-family host needs
 
 1. **Native libraries** (dnf; CRB + EPEL enabled):

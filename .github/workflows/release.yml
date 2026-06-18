@@ -3,14 +3,19 @@ name: Release
 on:
   push:
     branches: [main]
-    # Only build/release when the push touches buildable source — mirrors the
-    # source predicate the git hooks use (cmd/server|internal/|web/|Dockerfile|
-    # go.mod/sum). A docs/tooling-only push skips the workflow entirely; the
-    # version is unchanged on those, so the tag step would no-op anyway.
+    # Only build/release when the push touches SHIPPING source — mirrors the
+    # DEPLOY_RE allowlist the git hooks use (cmd/server|internal/|web/static/|
+    # web/sw.js|web/index.html|web/manifest.json|Dockerfile|go.mod/sum). A test-,
+    # docs-, or tooling-only push (web/e2e, web/test, playwright config) skips
+    # the workflow; the version is unchanged on those, so the tag step would
+    # no-op anyway. Keep in sync with scripts/hooks/pre-commit + post-commit.
     paths:
       - 'cmd/server/**'
       - 'internal/**'
-      - 'web/**'
+      - 'web/static/**'
+      - 'web/sw.js'
+      - 'web/index.html'
+      - 'web/manifest.json'
       - 'Dockerfile'
       - 'go.mod'
       - 'go.sum'
