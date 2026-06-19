@@ -1354,16 +1354,23 @@ const CLIMB_AFTER_HEALTHY = 2;        // need this many consecutive healthy inte
 // whose per-sender slice is already small — also renders at a coarser scale, which
 // is fine since tiles are tiny. 1× = native capture; 2× halves each dimension
 // (¼ pixels); 4× quarters them.
-const VIDEO_SCALE_FULL_BPS = 500000;  // ≥ this → native resolution
-const VIDEO_SCALE_HALF_BPS = 300000;  // ≥ this → ½-scale; below → ¼-scale
+const VIDEO_SCALE_FULL_BPS = 500000;  // ≥ this → native resolution (camera)
+const VIDEO_SCALE_HALF_BPS = 300000;  // ≥ this → ½-scale; below → ¼-scale (camera)
+// Screen sources scale on their OWN, more aggressive thresholds: a shared screen is
+// high-resolution (often 1080p+), so native res needs near the full uplink budget.
+// Holding native res on a constrained link just emits frames too big to drain — the
+// classic ~0.5s-smooth / ~0.5s-stall pacing oscillation observed in the wild — so a
+// screen prefers resolution only with real headroom, then steps DOWN willingly:
+// ½ across the broad middle, ¼ at the floor (a 1080p screen still reads at ¼).
+const VIDEO_SCALE_SCREEN_FULL_BPS = 700000;     // ≥ this → native res (needs near-ceiling headroom)
+const VIDEO_SCALE_SCREEN_QUARTER_BPS = 350000;  // < this → ¼-scale; in between → ½-scale
 const CONGESTION_INTERVAL_MS = 2500;  // monitor cadence
 // Screen-share motion detection. The encoder's outbound fps is a clean proxy for what
 // the shared screen is doing: a static document/code editor encodes ~0–2 fps (the
 // encoder skips duplicate frames), a playing video/game ~24 fps. When fps stays high we
-// latch into a "motion" profile (favor framerate, let resolution step down — see the
-// isScreen+motion branch of videoScaleForTarget) and flip the track's contentHint to
-// "motion"; when it falls we revert to the detail default. Hysteretic so a scroll or a
-// brief lull doesn't flap the encoder shape.
+// latch into a "motion" profile (the `motion` arg to videoScaleForTarget keeps framerate
+// up at the floor) and flip the track's contentHint to "motion"; when it falls we revert
+// to the detail default. Hysteretic so a scroll or a brief lull doesn't flap the encoder shape.
 const SCREEN_MOTION_ENTER_FPS = 14;   // sustained encode fps at/above this ⇒ video is playing
 const SCREEN_MOTION_EXIT_FPS = 6;     // sustained encode fps at/below this ⇒ back to static/text
 const SCREEN_MOTION_ENTER_TICKS = 2;  // consecutive high-fps intervals to latch ON  (~5s)
@@ -1435,40 +1442,32 @@ export function detectScreenMotion(state, fps) {
 // can carry native capture; as the target falls we shed resolution (2×, then 4×)
 // and trim framerate, which is what actually unloads a CPU-pinned phone encoder.
 //
-// isScreen PREFERS resolution over framerate (the inverse of the camera trade).
-// Shedding resolution turns shared text/UI to mush — unreadable is worse than choppy —
-// so a screen source holds native resolution while the link can afford it and eases
-// framerate first (30→24, pairing with the "detail" contentHint the track carries).
-// But it won't ride framerate into a stall: at the congested floor it takes ONE
-// graceful ½-resolution step and holds ~24fps (softer-but-fluid beats crisp-but-laggy).
-// The AIMD target — which already folds in a CPU-bound encoder — is what drops us to
-// that floor, so resolution only gives once the controller has determined the link
-// can't sustain it. Never below ½ for a screen. Pure; exported for unit testing.
+// isScreen scales on its OWN thresholds (SCREEN_FULL/SCREEN_QUARTER), tuned for a
+// high-resolution source. It prefers native res only with real headroom; below that it
+// steps resolution down WILLINGLY — ½ across the broad middle, ¼ at the floor — because
+// a 1080p+ frame that's too big for the link stalls in bursts (crisp-but-laggy is worse
+// than soft-but-fluid; the inverse used to hold native res to the floor and starved the
+// pipe). The AIMD target — which folds in loss/RTT and a CPU-bound encoder — is what
+// drops us, so resolution only gives once the controller has judged the link can't carry
+// it. Pure; exported for unit testing.
 //
-// motion (screen only) tilts the same ladder toward smoothness: when the shared screen
-// is playing video or a game (detected by sustained high fps, see detectScreenMotion),
-// it HOLDS 30fps at native res while the link is decent (where the detail ladder eases
-// to 24) and only steps to ½-scale under real congestion — a screen source is large
-// (1080p+), so ½ still reads crisply, unlike a camera's ¼ step.
+// motion (screen only) just nudges the FLOOR framerate: when the shared screen is playing
+// video or a game (sustained high fps, see detectScreenMotion) it keeps 30fps even at ¼
+// scale (smoothness is the whole point); a static document eases to 24 there (it wants the
+// bitrate for sharpness). The contentHint flip ("motion" vs "detail") it pairs with also
+// retunes the encoder's own spatial/temporal trade.
 export function videoScaleForTarget(target, isScreen = false, motion = false) {
-  if (isScreen && motion) {
-    // Smoothness wins for video/a game: hold 30fps at native res while the link is
-    // decent, and take a single ½-resolution step (never ¼ — a screen still reads
-    // crisply halved) only under real congestion rather than stalling framerate.
-    if (typeof target !== "number" || target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 30 };
-    return { scaleResolutionDownBy: 2, maxFramerate: 24 };
-  }
   if (isScreen) {
-    // Resolution is preferred for text/UI, so hold native res while the link can
-    // afford it and ease framerate first (30→24). But don't ride framerate into a
-    // stall: at the congested floor, take ONE graceful ½-resolution step and hold a
-    // usable ~24fps — a softer-but-fluid picture beats crisp-but-laggy. The AIMD
-    // target (which already folds in a CPU-bound encoder) is what drops us here, so
-    // we only shed resolution when the controller has determined the link/encoder
-    // can't sustain it.
-    if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 30 };
-    if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 24 };
-    return { scaleResolutionDownBy: 2, maxFramerate: 24 };
+    // Prefer native res only with real headroom (≥ SCREEN_FULL). Below that, step
+    // resolution DOWN willingly rather than stalling framerate — small frames pace
+    // smoothly where a big one stalls: ½ across the broad middle, ¼ at the floor.
+    // The AIMD target (which folds in loss/RTT and a CPU-bound encoder) is what drops
+    // us, so resolution only gives once the controller has judged the link can't carry
+    // it. motion only nudges the floor framerate: a video/game share keeps 30 (smooth-
+    // ness is the point), text eases to 24 (it needs the bitrate for sharpness).
+    if (typeof target !== "number" || target >= VIDEO_SCALE_SCREEN_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 30 };
+    if (target >= VIDEO_SCALE_SCREEN_QUARTER_BPS) return { scaleResolutionDownBy: 2, maxFramerate: 30 };
+    return { scaleResolutionDownBy: 4, maxFramerate: motion ? 30 : 24 };
   }
   if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) {
     return { scaleResolutionDownBy: 1, maxFramerate: 24 };

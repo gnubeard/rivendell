@@ -798,38 +798,33 @@ test("videoScaleForTarget: sheds resolution/framerate as the target falls", () =
   assert.deepEqual(voice.videoScaleForTarget(undefined), { scaleResolutionDownBy: 1, maxFramerate: 24 });
 });
 
-test("videoScaleForTarget: a screen source prefers resolution, easing framerate then a single res step", () => {
-  // Resolution is preferred for text/UI: hold native res while the link can afford it
-  // and ease framerate first (30→24). Top tier reaches 30fps (up from 24).
+test("videoScaleForTarget: a screen steps resolution DOWN willingly on its own thresholds", () => {
+  // Native res only with real headroom (≥ SCREEN_FULL = 700k): a 1080p+ screen needs
+  // near the full uplink budget, so holding native res below that starves the pipe.
   assert.deepEqual(voice.videoScaleForTarget(800000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(500000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(400000, true), { scaleResolutionDownBy: 1, maxFramerate: 24 });
-  assert.deepEqual(voice.videoScaleForTarget(300000, true), { scaleResolutionDownBy: 1, maxFramerate: 24 });
-  // At the congested floor, take ONE graceful ½-res step and hold ~24fps rather than
-  // riding framerate into a stall — softer-but-fluid beats crisp-but-laggy.
-  assert.deepEqual(voice.videoScaleForTarget(150000, true), { scaleResolutionDownBy: 2, maxFramerate: 24 });
-  // A fresh sender with no congestion data yet starts at the top tier (native res, 30fps).
+  assert.deepEqual(voice.videoScaleForTarget(700000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
+  // The broad middle (350k–700k) drops to ½ — this is the band the AIMD target actually
+  // lives in under congestion, where the old ladder wrongly pinned native res.
+  assert.deepEqual(voice.videoScaleForTarget(675000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(500000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(350000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  // Floor (< 350k): the extra step — ¼ res. Detail eases fps to 24.
+  assert.deepEqual(voice.videoScaleForTarget(300000, true), { scaleResolutionDownBy: 4, maxFramerate: 24 });
+  assert.deepEqual(voice.videoScaleForTarget(150000, true), { scaleResolutionDownBy: 4, maxFramerate: 24 });
+  // A fresh sender with no congestion data yet starts at native res, 30fps.
   assert.deepEqual(voice.videoScaleForTarget(undefined, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  // Resolution is shed by at most one notch (½, never ¼) for a screen, even at the floor.
-  for (const t of [800000, 400000, 150000, undefined]) {
-    assert.ok(voice.videoScaleForTarget(t, true).scaleResolutionDownBy <= 2);
-  }
 });
 
-test("videoScaleForTarget: a screen playing video (motion) favors framerate over detail", () => {
-  // Smoothness wins: hold native res and 30fps while the link is decent — note the mid
-  // tier keeps 30 where the detail ladder eases to 24.
+test("videoScaleForTarget: a screen playing video (motion) holds framerate at the floor", () => {
+  // Same resolution ladder as detail; motion only keeps framerate up at the ¼ floor
+  // (smoothness is the point of a video/game share), where detail eases to 24.
   assert.deepEqual(voice.videoScaleForTarget(800000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(500000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(400000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(300000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  // Only under real congestion (below the half-band) does resolution give — to ½, not ¼,
-  // since a 1080p+ screen still reads crisply halved, unlike a camera's quarter step.
-  assert.deepEqual(voice.videoScaleForTarget(150000, true, true), { scaleResolutionDownBy: 2, maxFramerate: 24 });
-  // motion only applies to a screen source: a camera ignores the flag.
+  assert.deepEqual(voice.videoScaleForTarget(500000, true, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(150000, true, true), { scaleResolutionDownBy: 4, maxFramerate: 30 });
+  // motion only applies to a screen source: a camera ignores the flag and uses its ladder.
   assert.deepEqual(voice.videoScaleForTarget(400000, false, true), { scaleResolutionDownBy: 2, maxFramerate: 20 });
-  // And a screen with motion off is the detail ladder (mid tier eases to 24, not 30).
-  assert.deepEqual(voice.videoScaleForTarget(400000, true, false), { scaleResolutionDownBy: 1, maxFramerate: 24 });
+  // A screen with motion off is the detail ladder (¼ floor eases to 24, not 30).
+  assert.deepEqual(voice.videoScaleForTarget(150000, true, false), { scaleResolutionDownBy: 4, maxFramerate: 24 });
 });
 
 test("detectScreenMotion: latches on/off with hysteresis", () => {
