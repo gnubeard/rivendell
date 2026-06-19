@@ -4,10 +4,6 @@ A self-hosted chat server for a small group of friends — a minimal, private
 alternative to Discord and Slack. It ships as a single Go binary backed by
 PostgreSQL, with a vanilla-JavaScript web client and no frontend build step.
 
-- **Backend** — Go 1.26, standard library plus a single dependency (`github.com/lib/pq`, zero transitive)
-- **Frontend** — Vanilla JS: no framework, no bundler, no npm runtime packages
-- **Database** — PostgreSQL with embedded SQL migrations applied at startup (no migration tool)
-
 ![rivendell chat UI](docs/screenshot.png)
 
 ## Contents
@@ -17,7 +13,6 @@ PostgreSQL, with a vanilla-JavaScript web client and no frontend build step.
 - [Configuration](#configuration)
 - [Deployment](#deployment)
 - [Development](#development)
-- [Architecture](#architecture)
 - [Project tooling](#project-tooling)
 - [License](#license)
 
@@ -198,23 +193,6 @@ cross-browser and manual checks, see **[docs/testing/](docs/testing/README.md)**
 
 ---
 
-## Architecture
-
-rivendell is a Go binary serving a JSON+WebSocket API and a vanilla-JS client.
-State lives in PostgreSQL; uploaded files live in a content-addressed blob directory
-on the filesystem. The backend (`internal/`, Go 1.26) is layered into `store` (SQL
-over `lib/pq`, embedded migrations), `ws` (a hand-rolled RFC 6455 WebSocket + hub),
-`httpapi` (stdlib `net/http`, middleware, handlers split by domain), and stdlib-only
-`auth` and `push`. The frontend (`web/`) is one HTML shell plus ES modules served raw
-with path-based cache-busting. Voice and video calls are implemented as a peer-to-peer
-WebRTC mesh.
-
-See **[docs/architecture.md](docs/architecture.md)**.
-Per-feature design notes and invariants: [docs/design/](docs/design/README.md).
-Conventions and their rationale: [docs/conventions.md](docs/conventions.md).
-Condensed file-by-file editing checklist in [CLAUDE.md](CLAUDE.md).
-
----
 
 ## Project tooling
 
@@ -232,11 +210,6 @@ scripts.
 | `pre-commit` | Runs the fast test tier whenever source is staged, on any branch (`gofmt` + `go vet` + `go test` when Go changed; the web unit tests when `web/` changed) — the gate that keeps the `develop` auto-deploy from shipping red code. Then, on `develop`, auto-bumps the patch digit of `Version` in `internal/config/config.go` when a *shipping* source file is staged (server code, the runtime web assets `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`). A test- or tooling-only commit (`web/e2e`, `web/test`, the playwright config) runs the test gate but does **not** bump or deploy; doc-only commits skip both. Escape hatches: `RUN_TESTS=0 git commit …` (skip the test gate), `RUN_BUMP=0 git commit …` (skip the version bump). |
 | `pre-push` | Runs the Playwright e2e suite (`make test-e2e`) when the push range touches runtime source (`cmd/server`, `internal/`, `web/`) — the gate for shipping to `main`. Skips docs/tooling-only pushes. Escape hatch: `RUN_E2E=0 git push …`. |
 | `post-commit` | On `develop`, builds a fresh container image and replaces the running container when a *shipping* source file changed — the same `DEPLOY_RE` allowlist the `pre-commit` bump uses (server code, the runtime `web/static` + `web/sw.js` + `web/index.html` + `web/manifest.json`, Dockerfile, `go.mod`), so a test-/tooling-only commit doesn't redeploy. Also restarts `claude-bridge.service` when `scripts/claude-bridge` changes. Escape hatch: `RUN_DEPLOY=0 git commit …` skips the rebuild + redeploy (the bridge restart still runs). |
-
-Prefer the targeted `RUN_TESTS=0` / `RUN_BUMP=0` / `RUN_DEPLOY=0` / `RUN_E2E=0`
-escape hatches over `--no-verify`, which disables everything at once (tests *and* the
-version bump). `RUN_BUMP=0` + `RUN_DEPLOY=0` together suit a shipping-file change that
-shouldn't ship a new version — e.g. a comment-only edit.
 
 The `post-commit` hook is environment-specific. Edit the `USER-CONFIGURABLE` block
 near the top of `scripts/hooks/post-commit` to set your container name, network,
