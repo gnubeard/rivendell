@@ -27,23 +27,24 @@ Two tiers of in-file signage, plus this doc:
 
 The banners are the source of truth for *where* things are (they travel with the
 code). This doc is the source of truth for *why* the shape is what it is and *where*
-it might want to go. Line numbers below drift as the file changes — trust the banner
-text over the numbers, and re-run the grep in "Maintaining the atlas" to refresh.
+it might want to go. **This doc carries no line numbers on purpose** — they were the
+drift-prone artifact the banners replaced, so navigate by banner text and grep for it
+(see "Maintaining the atlas"), never by a number quoted here.
 
 ## The eight regions
 
-| # | Region | Lines | Contains (`// ---` sections) |
-|---|--------|-------|------------------------------|
-| 1 | **Foundations** | 65–223 | module state |
-| 2 | **Boot & Auth** | 224–585 | mobile viewport · notification chime · bootstrapping |
-| 3 | **Realtime** | 586–936 | realtime |
-| 4 | **Sidebar & Channels** | 937–1745 | rendering (incl. the render-batching substrate) · channel reordering · channel & DM actions · channel selection + read state · channel header |
-| 5 | **Message Pane** | 1746–2627 | message loading/history/scrolling · message rendering · incremental message updates · replies |
-| 6 | **Composer & Message Actions** | 2628–3180 | inline autocomplete · composer wiring · emoji picker · inline message editing · link previews · reactions |
-| 7 | **Control Wiring** | 3181–3650 | control wiring |
-| 8 | **Shell Chrome & Subsystems** | 3651–4120 | drawers/swipe/idle · **feature-module plugs** · modals + user card · admin panel · notifications & ring alerts · presence · avatars & image preloading · loading screen · voice calling · secret session UI |
+| # | Region | Contains (`// ---` sections) |
+|---|--------|------------------------------|
+| 1 | **Foundations** | module state |
+| 2 | **Boot & Auth** | mobile viewport · notification chime · bootstrapping |
+| 3 | **Realtime** | realtime |
+| 4 | **Sidebar & Channels** | rendering (incl. the render-batching substrate) · channel reordering · channel & DM actions · channel selection + read state · channel header |
+| 5 | **Message Pane** | message loading/history/scrolling · message rendering · incremental message updates · replies |
+| 6 | **Composer & Message Actions** | inline autocomplete · composer wiring · emoji picker · inline message editing · link previews · reactions |
+| 7 | **Control Wiring** | control wiring |
+| 8 | **Shell Chrome & Subsystems** | drawers/swipe/idle · **feature-module plugs** · modals + user card · admin panel · notifications & ring alerts · presence · avatars & image preloading · loading screen · voice calling · secret session UI |
 
-### R1 · Foundations (65–223)
+### R1 · Foundations
 The module's vocabulary. All mutable module-level state — `state` (the immutable
 world model from `state.js`, reassigned every update — read it fresh, never capture
 it) plus the ephemeral session cursors (`editingMessageId`, `replyingToId`,
@@ -51,7 +52,7 @@ it) plus the ephemeral session cursors (`editingMessageId`, `replyingToId`,
 `guard`, `safeLocalGet/Set`. Three plugs (`prefs`, `unread`, `drafts`) are seeded
 here because later regions depend on them at eval time.
 
-### R2 · Boot & Auth (224–585)
+### R2 · Boot & Auth
 Page-load → live app. Viewport/audio priming, the `/set-password` and `/invite`
 routes (`bootSetPassword`/`bootSignup`), `wireLogin`, and `enterApp()` — the single
 big async that fetches users+channels, seeds unread/voice/emoji, restores the last
@@ -59,7 +60,7 @@ channel (or a permalink jump), renders the first frame, inits voice + secret, an
 wires every control *before* `startRealtime()` (so a transport failure can never
 leave handlers unattached — a load-bearing ordering, see CLAUDE.md).
 
-### R3 · Realtime (586–936)
+### R3 · Realtime
 The inbound WebSocket pump. `handleRealtimeEvent` folds each frame into `state` via
 the pure `S.applyEvent`/`classifyIncomingMessage` reducers, then dispatches the
 *targeted* DOM re-renders by event type and hands `voice.*`/`secret.*` frames to
@@ -72,7 +73,7 @@ Return contracts to honor: `reconcileOptimistic` and `patchMessageRow` return a
 **bool** (false ⇒ fall back to a full `renderMessages`); `appendMessageRow` returns
 **undefined** and always appends — never branch on its result.
 
-### R4 · Sidebar & Channels (937–1745)
+### R4 · Sidebar & Channels
 Everything left of the message pane, and the channel as an object you act on:
 me/theme rendering, the channel/DM/member list builders + badges, `channelDrag`
 reorder wiring, the channel-&-DM action verbs (`deleteChannel`, `toggleMute`,
@@ -84,7 +85,7 @@ surface dirty and coalesce into one paint per task (`setTimeout(0)`, deliberatel
 *not* rAF — see the message-pane invariant in CLAUDE.md). The synchronous load/
 jump/scroll paths still call the render fns directly.
 
-### R5 · Message Pane (1746–2627)
+### R5 · Message Pane
 The message list itself and the densest DOM+state knot in the file. Paging/history
 (`loadChannel`, `jumpToMessage`, driving `historyPaging`), `renderMessages` + the
 row builders + edit-state capture/restore (so an inbound event mid-edit can't blow
@@ -103,13 +104,13 @@ append and the reconcile route through `insertionPointFor` to drop a real row at
 array-sorted DOM slot (above the pending tail), keeping DOM order == array order — a
 cross-user message can't land below your pending row and group avatarless under it.
 
-### R6 · Composer & Message Actions (2628–3180)
+### R6 · Composer & Message Actions
 Authoring, and everything you do *to* a message once it (or its draft) exists: the
 contenteditable composer (`wireComposer`, ~270 lines) + autocomplete + emoji picker,
 inline message editing (`editorFor`/`startEdit`/`commitEdit`), link previews, and
 reactions.
 
-### R7 · Control Wiring (3181–3650)
+### R7 · Control Wiring
 The one-time `wire*` control-binding functions that attach static-DOM event
 listeners (`wireDelegatedClicks`, `wireProfileControls`, …, aggregated by
 `wireControls`, run once from `enterApp`), plus the shared `openLightbox`/
@@ -122,7 +123,7 @@ block left in the file — but a *traced non-candidate* for extraction: its ~35-
 injection surface is ~2× the codebase's widest bag (Finding 2). The feature-module
 plugs that used to live here moved to R8's switchboard.
 
-### R8 · Shell Chrome & Subsystems (3651–4120)
+### R8 · Shell Chrome & Subsystems
 The remaining shell behaviors and **the consolidated plug switchboard**:
 drawers/swipe/idle, then the `feature-module plugs` section (`forward`, `mobileCtx`,
 `pins`, `search`, `notifUI` — folded here from R7) followed by modals + user card,
@@ -270,13 +271,15 @@ listeners + three keydown listeners.
 
 ## Maintaining the atlas
 
-The banners move with the code; this doc's line numbers don't. To refresh the table
-after edits:
+The banners move with the code; this doc intentionally quotes **no line numbers**, so
+it can't drift out of sync with them (the metadrift this doc used to have). To find a
+region or section, grep for its banner text:
 
 ```sh
 grep -nE '▌ REGION|^// --- ' web/static/app.js
 ```
 
 When you add or relocate a region, update **both** the in-file banner and the table
-here. When a reorg candidate above gets done, move it from "candidates" to a note in
-the relevant region and record the outcome.
+here (which lists regions/sections by name only). When a reorg candidate above gets
+done, move it from "candidates" to a note in the relevant region and record the
+outcome.
