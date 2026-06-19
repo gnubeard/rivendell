@@ -61,13 +61,19 @@ Voice/WebRTC (this is the design summary; trust CLAUDE.md for the exact rules):
 
 Two screen-share corners worth keeping straight:
 
-- **Encoding is inverted for screen content — until video plays.** A share runs
-  `contentHint="detail"` + `videoScaleForTarget(t, isScreen=true)`, which HOLD
-  resolution and shed framerate under congestion (sheared text is worse than choppy —
-  the opposite of the camera's motion trade). But that's wrong for streaming a video
-  or game, so `detectScreenMotion` (hysteretic, watching the encoder's outbound
-  `framesPerSecond`: ~0–2 fps static, ~24 playing) auto-flips the live track to
-  `contentHint="motion"` and a balanced ladder, reverting when motion stops. Fully
+- **Encoding prefers resolution for screen content — until video plays.** A share runs
+  `contentHint="detail"` + `videoScaleForTarget(t, isScreen=true)`, and is captured at
+  `frameRate: { ideal: 30 }`. The detail ladder PREFERS resolution: it holds native res
+  while the link can afford it and eases framerate first (**30 → 24 fps**, the opposite
+  of the camera's res-first trade — sheared text is worse than choppy). But it won't ride
+  framerate into a stall: at the congested floor it takes **one graceful ½-resolution
+  step** and holds ~24 fps (softer-but-fluid beats crisp-but-laggy). That floor step
+  applies to text too, and only fires when the AIMD target drops there — i.e. when the
+  controller (which folds in a CPU-bound encoder) has determined the link can't sustain
+  full res. Streaming a video or game wants smoothness, so `detectScreenMotion`
+  (hysteretic, watching the encoder's outbound `framesPerSecond`: ~0–2 fps static, ~24+
+  playing) auto-flips the live track to `contentHint="motion"` and a framerate-first
+  ladder (holds 30 fps to 300k, ½-res only below), reverting when motion stops. Fully
   automatic, no UI. `track.onended` catches the browser's native "Stop sharing" bar.
 - **Audio teardown differs from video.** Shared tab/system audio (Chrome) is
   `addTrack`ed into the mic's stream so the remote plays both through its one

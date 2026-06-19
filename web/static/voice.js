@@ -552,7 +552,10 @@ export async function setScreenShareEnabled(on) {
       // audio:true opts into screen audio — Chrome can capture tab/system audio (only
       // when the user picks a tab or ticks "share system audio"); Firefox/Safari just
       // return no audio track, so the share is silently video-only there.
-      display = await md.getDisplayMedia({ video: true, audio: true });
+      // frameRate ideal 30: maxFramerate in the encoding only *limits*, so the captured
+      // track must actually run at 30 for the top of the screen ladder to reach it (some
+      // browsers default the display capture lower).
+      display = await md.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: true });
     } catch (err) {
       // Dismissing the OS picker rejects with NotAllowedError/AbortError — that's a
       // cancel, not a failure to surface. Anything else is a real error.
@@ -1432,32 +1435,40 @@ export function detectScreenMotion(state, fps) {
 // can carry native capture; as the target falls we shed resolution (2×, then 4×)
 // and trim framerate, which is what actually unloads a CPU-pinned phone encoder.
 //
-// isScreen INVERTS the resolution/framerate trade-off. Shedding resolution turns
-// shared text/UI to mush — unreadable is worse than choppy — so a screen source
-// HOLDS native resolution (scaleResolutionDownBy:1) at every target and gives back
-// frame rate instead (a near-static screen barely needs frames). This pairs with
-// the "detail" contentHint the screen track carries. Pure; exported for unit testing.
+// isScreen PREFERS resolution over framerate (the inverse of the camera trade).
+// Shedding resolution turns shared text/UI to mush — unreadable is worse than choppy —
+// so a screen source holds native resolution while the link can afford it and eases
+// framerate first (30→24, pairing with the "detail" contentHint the track carries).
+// But it won't ride framerate into a stall: at the congested floor it takes ONE
+// graceful ½-resolution step and holds ~24fps (softer-but-fluid beats crisp-but-laggy).
+// The AIMD target — which already folds in a CPU-bound encoder — is what drops us to
+// that floor, so resolution only gives once the controller has determined the link
+// can't sustain it. Never below ½ for a screen. Pure; exported for unit testing.
 //
-// motion (screen only) RE-INVERTS that back: when the shared screen is playing video or
-// a game (detected by sustained high fps, see detectScreenMotion), smoothness wins over
-// a perfectly sharp frame. This "balanced" ladder HOLDS resolution while the link is
-// decent and keeps framerate high (24 even at the mid tier, where the detail ladder
-// drops to 15), and only steps to ½-scale under real congestion — a screen source is
-// large (1080p+), so ½ still reads crisply, unlike a camera's ¼ step.
+// motion (screen only) tilts the same ladder toward smoothness: when the shared screen
+// is playing video or a game (detected by sustained high fps, see detectScreenMotion),
+// it HOLDS 30fps at native res while the link is decent (where the detail ladder eases
+// to 24) and only steps to ½-scale under real congestion — a screen source is large
+// (1080p+), so ½ still reads crisply, unlike a camera's ¼ step.
 export function videoScaleForTarget(target, isScreen = false, motion = false) {
   if (isScreen && motion) {
-    if (typeof target !== "number" || target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 24 };
-    return { scaleResolutionDownBy: 2, maxFramerate: 20 };
+    // Smoothness wins for video/a game: hold 30fps at native res while the link is
+    // decent, and take a single ½-resolution step (never ¼ — a screen still reads
+    // crisply halved) only under real congestion rather than stalling framerate.
+    if (typeof target !== "number" || target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 30 };
+    return { scaleResolutionDownBy: 2, maxFramerate: 24 };
   }
   if (isScreen) {
-    // Hold full resolution at every target (sheared text is worse than choppy),
-    // but give framerate back generously: the original 15/8/5 ladder was tuned
-    // far enough toward sharpness that motion (scrolling, video, a demo) stuttered
-    // noticeably even on a healthy link. These let the encoder use the frames the
-    // bitrate affords; the AIMD target still steps them down on a stressed link.
-    if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 24 };
-    if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 15 };
-    return { scaleResolutionDownBy: 1, maxFramerate: 10 };
+    // Resolution is preferred for text/UI, so hold native res while the link can
+    // afford it and ease framerate first (30→24). But don't ride framerate into a
+    // stall: at the congested floor, take ONE graceful ½-resolution step and hold a
+    // usable ~24fps — a softer-but-fluid picture beats crisp-but-laggy. The AIMD
+    // target (which already folds in a CPU-bound encoder) is what drops us here, so
+    // we only shed resolution when the controller has determined the link/encoder
+    // can't sustain it.
+    if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 30 };
+    if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 1, maxFramerate: 24 };
+    return { scaleResolutionDownBy: 2, maxFramerate: 24 };
   }
   if (typeof target !== "number" || target >= VIDEO_SCALE_FULL_BPS) {
     return { scaleResolutionDownBy: 1, maxFramerate: 24 };
