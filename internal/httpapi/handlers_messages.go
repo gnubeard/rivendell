@@ -132,13 +132,7 @@ func (s *Server) sendPushNotifications(ch store.Channel, msg store.Message, reci
 	if !ch.IsDM {
 		title = who + " in #" + ch.Name
 	}
-	payload, err := json.Marshal(map[string]any{
-		"title":     title,
-		"body":      truncateForPush(msg.Content, 180),
-		"channelId": ch.ID,
-		"url":       fmt.Sprintf("/#c%d/m%d", ch.ID, msg.ID),
-		"tag":       fmt.Sprintf("rivendell-ch-%d", ch.ID),
-	})
+	payload, err := pushPayload(ch, msg, title)
 	if err != nil {
 		log.Printf("push: marshal payload: %v", err)
 		return
@@ -168,6 +162,21 @@ func (s *Server) sendPushNotifications(ch store.Channel, msg store.Message, reci
 			}
 		}
 	}
+}
+
+// pushPayload builds the JSON body of a Web Push for a new message. It carries
+// both channelId and messageId so the service worker can re-check the durable
+// read cursor and suppress a push for a message already read on another device
+// (a push queued while the browser was closed is flushed all at once on launch).
+func pushPayload(ch store.Channel, msg store.Message, title string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"title":     title,
+		"body":      truncateForPush(msg.Content, 180),
+		"channelId": ch.ID,
+		"messageId": msg.ID,
+		"url":       fmt.Sprintf("/#c%d/m%d", ch.ID, msg.ID),
+		"tag":       fmt.Sprintf("rivendell-ch-%d", ch.ID),
+	})
 }
 
 // truncateForPush bounds a notification body to n runes, appending an ellipsis if

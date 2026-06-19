@@ -7,8 +7,10 @@
 // Dependency-free, like the rest of the client.
 //
 // The push payload is the JSON the server sends in sendPushNotifications:
-//   { title, body, channelId, url, tag }
+//   { title, body, channelId, messageId, url, tag }
 // where `url` is a permalink hash path ("/#c<channelId>/m<messageId>").
+// channelId+messageId let the push handler re-check the durable read cursor and
+// suppress a notification for a message already read on another device.
 
 self.addEventListener("install", () => {
   // Activate immediately rather than waiting for old tabs to close.
@@ -99,8 +101,34 @@ self.addEventListener("push", (event) => {
     badge: "/static/icon-192.png",
     data: { url: data.url || "/" },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  // A push queued while the browser was closed is flushed all at once on the
+  // next launch — including messages already read on another device. Before
+  // showing, re-check the server's durable read cursor and drop anything the
+  // user has already read. Any failure (offline, server error) falls through to
+  // showing it, so we never silently swallow a real notification.
+  event.waitUntil(maybeShow(title, options, data));
 });
+
+async function maybeShow(title, options, data) {
+  const chId = data.channelId;
+  const msgId = data.messageId;
+  if (chId && msgId) {
+    try {
+      const resp = await fetch("/api/unread", { credentials: "include" });
+      if (resp.ok) {
+        const body = await resp.json();
+        const chans = (body && body.channels) || [];
+        const cu = chans.find((c) => c.channel_id === chId);
+        // Channel absent from /api/unread => nothing unread there => already read.
+        // Present but cursor has advanced past this message => already read.
+        if (!cu || msgId <= (cu.last_read_message_id || 0)) return;
+      }
+    } catch (e) {
+      /* fall through and show — never swallow a real notification */
+    }
+  }
+  await self.registration.showNotification(title, options);
+}
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();

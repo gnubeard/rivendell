@@ -5,7 +5,34 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"rivendell/internal/store"
 )
+
+// TestPushPayloadCarriesMessageID guards that the push body includes channelId
+// AND messageId — the service worker needs both to re-check the durable read
+// cursor and suppress a notification for a message already read on another
+// device.
+func TestPushPayloadCarriesMessageID(t *testing.T) {
+	ch := store.Channel{ID: 7, Name: "general"}
+	msg := store.Message{ID: 42, Content: "hi there"}
+
+	b, err := pushPayload(ch, msg, "Alice in #general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	// JSON numbers decode to float64.
+	if got["channelId"] != float64(7) {
+		t.Errorf("channelId = %v, want 7", got["channelId"])
+	}
+	if got["messageId"] != float64(42) {
+		t.Errorf("messageId = %v, want 42", got["messageId"])
+	}
+}
 
 // TestPushKey confirms the server generates a VAPID key on boot and serves it as
 // a base64url uncompressed P-256 point (88 chars).
