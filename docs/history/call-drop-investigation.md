@@ -28,6 +28,46 @@ dead-call window.
 
 ---
 
+## Follow-up: network-switch call drop (June 2026)
+
+Symptom: switching network connections mid-call (e.g. wifi↔cellular on a phone) —
+the call **recovers** after a few seconds, then drops ~10–60 s later.
+Status: **RESOLVED — DM-call reconnection grace period.**
+
+Traced from a production capture (a DM call, `ch=4`): at the switch both peers go
+`ice/conn=disconnected`; +5 s the offerer's ICE restart heals the **media** (frames
+flow again, `sig=stable`); +17 s `endDMVoiceCall … leaverStillConnected=false` tears
+the call down for both. No `ws: read-deadline timeout` fired — so this is **not** the
+v1.3.108 heartbeat bug.
+
+Root cause: the DM call's lifetime was bound to the WebSocket. WebRTC media migrates
+across a network change (ICE restart), but the WS is a plain TCP connection that
+cannot migrate; the stranded socket dies, and on the server a dead WS is
+indistinguishable from "user left" (`onPresenceChange(false)` →
+`cleanupVoiceForUser` → `endDMVoiceCall`, immediately and irreversibly). The "~a
+minute" is the lag before the server notices the dead WS (30 s ping cadence; the
+client only reconnects passively via `onclose`/`online`), which is why media heals
+first and the call dies after.
+
+Fix (two parts):
+
+- **Server grace period (`voiceReconnectGrace`, 20 s).** A WS drop during an active
+  DM call no longer ends it on the spot — `cleanupVoiceForUser` leaves the user in
+  the roster and arms `scheduleDMTeardown`. If they reconnect and re-announce
+  (`voice.join` → `cancelDMTeardown`) within the window, the call continues; only on
+  expiry does `endDMVoiceCall` run. Group channels still drop a participant
+  immediately. New read-only hub methods `VoiceChannelsForUser` / `VoiceHasUser`.
+
+- **Client re-announce on reconnect.** `resync()` in `app.js`, when still in the call
+  per the roster check, re-sends `voice.join` over the fresh socket to cancel the
+  server's pending teardown. Gated behind the roster check so an already-expired
+  window isn't resurrected into a solo call.
+
+Guarded by `TestDMCallEndsForBothParties` (hold-through-grace, cancel-on-reconnect,
+teardown-on-expiry).
+
+---
+
 ## TL;DR (original analysis)
 
 There are two layered bugs. Together they guarantee that a call lasting ~90 seconds

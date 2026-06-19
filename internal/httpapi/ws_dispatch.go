@@ -25,24 +25,76 @@ func (s *Server) broadcastVoiceState(channelID int64, participants any, seq uint
 	}, aud)
 }
 
-// cleanupVoiceForUser removes the user from any voice channel they were in and
-// broadcasts updated voice.state for each affected channel. DM calls are
-// phone-call style: if the dropped user leaves the other party alone in a DM
-// call, that call ends for them too (see endDMVoiceCall).
+// voiceReconnectGrace is how long a DM call is held open after a participant's WS
+// drops before it's torn down. A network change (e.g. wifi↔cellular) kills the
+// signaling WebSocket — which can't migrate across the path change — while the
+// WebRTC media survives via ICE restart; without a grace window the WS death
+// alone would drop an otherwise-healthy call (see
+// docs/history/call-drop-investigation.md). A var, not a const, so tests can
+// shorten it.
+var voiceReconnectGrace = 20 * time.Second
+
+// cleanupVoiceForUser handles a user's voice membership when their last WS
+// connection drops. A DM call with the other party still present is NOT ended on
+// the spot: the user is left in the roster and given a reconnection grace window
+// (scheduleDMTeardown), because a dropped WS is usually a transient network
+// change the peer-to-peer media rides out via ICE restart. A group channel — or a
+// solo DM (a ringer who never connected) — drops the user immediately, since
+// losing one participant doesn't strand anyone in a one-person call.
 func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
-	affected, seq := s.hub.VoiceLeaveAll(userID)
-	for chID, participants := range affected {
+	// Snapshot WITHOUT removing: the grace path needs the user kept in the roster.
+	for chID, participants := range s.hub.VoiceChannelsForUser(userID) {
 		ch, err := s.st.GetChannel(ctx, chID)
 		if err != nil {
 			continue
 		}
-		if ch.IsDM && len(participants) > 0 {
-			// At least one other participant remains, so the call was active.
-			s.endDMVoiceCall(ch, userID, true)
+		if ch.IsDM && len(participants) > 1 {
+			// The other party is still here — defer the teardown.
+			s.scheduleDMTeardown(ch, userID)
 			continue
 		}
-		s.broadcastVoiceState(chID, participants, seq, s.audienceForChannel(ctx, ch))
+		remaining, seq := s.hub.VoiceLeave(chID, userID)
+		s.broadcastVoiceState(chID, remaining, seq, s.audienceForChannel(ctx, ch))
 	}
+}
+
+// scheduleDMTeardown arms (or re-arms) the reconnection grace timer for a user
+// whose WS dropped mid-DM-call. The user stays in the voice roster so the call
+// keeps running for the other party meanwhile; if the user reconnects and
+// re-announces voice membership within voiceReconnectGrace, cancelDMTeardown
+// stops the timer and the call continues seamlessly. Otherwise the timer ends
+// the call for both parties (and removes the absent user via VoiceClear).
+func (s *Server) scheduleDMTeardown(ch store.Channel, userID int64) {
+	key := voiceGraceKey{ch.ID, userID}
+	s.voiceGraceMu.Lock()
+	defer s.voiceGraceMu.Unlock()
+	if t, ok := s.voiceGraceTimers[key]; ok {
+		t.Stop() // a fresh drop restarts the clock
+	}
+	s.voiceGraceTimers[key] = time.AfterFunc(voiceReconnectGrace, func() {
+		s.voiceGraceMu.Lock()
+		delete(s.voiceGraceTimers, key)
+		s.voiceGraceMu.Unlock()
+		// The window expired without a re-announce. End the call only if the user
+		// is still listed — the other party may have hung up in the meantime, which
+		// already cleared the channel (avoids a duplicate "Call ended").
+		if s.hub.VoiceHasUser(ch.ID, userID) {
+			s.endDMVoiceCall(ch, userID, true)
+		}
+	})
+}
+
+// cancelDMTeardown stops a pending reconnection grace timer for (channelID,
+// userID), if any. Called when the user re-announces voice membership after a
+// reconnect: the call is alive and must not be torn down.
+func (s *Server) cancelDMTeardown(channelID, userID int64) {
+	key := voiceGraceKey{channelID, userID}
+	s.voiceGraceMu.Lock()
+	if t, ok := s.voiceGraceTimers[key]; ok {
+		t.Stop()
+		delete(s.voiceGraceTimers, key)
+	}
+	s.voiceGraceMu.Unlock()
 }
 
 // endDMVoiceCall evicts everyone from a DM voice channel and tells every former
@@ -59,11 +111,13 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 // surviving client a second chance to detect the call ended — onVoiceState
 // treats an empty roster as a server-side teardown and calls endCallLocally.
 func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool) {
-	// Diagnostic: a DM call shouldn't end when a participant merely stops screen
-	// sharing — but it's been seen to (the other party drops while the sharer stays).
-	// Not reproducible on a healthy link, so log who triggered the teardown and via
-	// which path (the caller passes "leave" or "disconnect" as the reason via the log
-	// site) to pin the real trigger from a production capture next time it happens.
+	// A DM call ending here is now one of: an explicit hangup (voice.leave), or a
+	// reconnection grace window that expired without the dropped party coming back
+	// (scheduleDMTeardown). A transient WS drop on a network change no longer ends
+	// the call on the spot — that earlier behavior killed otherwise-healthy calls
+	// when a phone switched networks (media survived via ICE restart but the WS
+	// couldn't migrate; the WS death alone tore the call down). leaverStillConnected
+	// distinguishes a clean hangup (true) from a drop that outlived its grace (false).
 	log.Printf("endDMVoiceCall: ch=%d leaver=%d wasActive=%v leaverStillConnected=%v", ch.ID, leaverID, wasActive, s.hub.IsConnected(leaverID))
 	ids, seq := s.hub.VoiceClear(ch.ID)
 	endMsg, err := json.Marshal(event{Type: "voice.end", Payload: map[string]int64{"channel_id": ch.ID}})
@@ -230,6 +284,9 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		if err != nil || !canAccess(ch, userID) {
 			return
 		}
+		// A re-announce after a reconnect cancels any pending teardown the user's
+		// earlier WS drop armed (see scheduleDMTeardown) — the call is alive.
+		s.cancelDMTeardown(channelID, userID)
 		// Group cap: a non-DM voice channel holds at most MaxVoiceAudio users.
 		// DMs are exempt (strictly two parties, gated by the ring flow). Exclude
 		// the joiner so an idempotent re-join of a channel they're already in

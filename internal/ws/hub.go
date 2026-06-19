@@ -406,6 +406,33 @@ func (h *Hub) VoiceLeaveAll(userID int64) (map[int64][]VoiceParticipant, uint64)
 	return affected, h.voiceSeq
 }
 
+// VoiceChannelsForUser returns a snapshot of every voice channel userID is
+// currently in, mapped to that channel's full participant list (userID included).
+// Read-only: unlike VoiceLeaveAll it does NOT remove the user, so the caller can
+// decide per channel whether to drop them now or defer the removal — the DM call
+// reconnection grace period leaves a dropped user in the roster while it waits to
+// see whether they come back (see Server.scheduleDMTeardown).
+func (h *Hub) VoiceChannelsForUser(userID int64) map[int64][]VoiceParticipant {
+	h.voiceMu.RLock()
+	defer h.voiceMu.RUnlock()
+	out := make(map[int64][]VoiceParticipant)
+	for chID, m := range h.voiceChannels {
+		if _, ok := m[userID]; ok {
+			out[chID] = voiceList(m)
+		}
+	}
+	return out
+}
+
+// VoiceHasUser reports whether userID is currently a participant in the given
+// voice channel.
+func (h *Hub) VoiceHasUser(channelID, userID int64) bool {
+	h.voiceMu.RLock()
+	defer h.voiceMu.RUnlock()
+	_, ok := h.voiceChannels[channelID][userID]
+	return ok
+}
+
 // VoiceAllChannels returns a snapshot of every channel that currently has at
 // least one voice participant. Callers must filter by access before exposing.
 func (h *Hub) VoiceAllChannels() map[int64][]VoiceParticipant {

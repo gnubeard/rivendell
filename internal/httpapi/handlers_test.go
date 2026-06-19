@@ -1071,12 +1071,35 @@ func TestDMCallEndsForBothParties(t *testing.T) {
 		t.Fatalf("DM call not ended when one party hung up: %v", p)
 	}
 
-	// Disconnect path: rejoin both, then B drops — same outcome.
+	// Disconnect path: unlike a hangup, a WS drop is given a reconnection grace
+	// window — a network change kills the WS while the WebRTC media survives via
+	// ICE restart, so the call must NOT end the instant the socket dies.
+	old := voiceReconnectGrace
+	voiceReconnectGrace = 50 * time.Millisecond
+	defer func() { voiceReconnectGrace = old }()
+
 	srv.Hub().VoiceJoin(dm.ID, a.ID)
 	srv.Hub().VoiceJoin(dm.ID, b.ID)
 	srv.cleanupVoiceForUser(ctx, b.ID)
+	if p := srv.Hub().VoiceParticipants(dm.ID); len(p) != 2 {
+		t.Fatalf("DM call ended immediately on a WS drop; grace window should hold both: %v", p)
+	}
+
+	// B reconnects and re-announces within the window → the teardown is cancelled.
+	srv.cancelDMTeardown(dm.ID, b.ID)
+	time.Sleep(120 * time.Millisecond)
+	if p := srv.Hub().VoiceParticipants(dm.ID); len(p) != 2 {
+		t.Fatalf("DM call torn down despite a reconnect within the grace window: %v", p)
+	}
+
+	// B drops again and stays gone past the window → now the call ends for both.
+	srv.cleanupVoiceForUser(ctx, b.ID)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(srv.Hub().VoiceParticipants(dm.ID)) != 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if p := srv.Hub().VoiceParticipants(dm.ID); len(p) != 0 {
-		t.Fatalf("DM call not ended when a party dropped: %v", p)
+		t.Fatalf("DM call not ended after the grace window expired: %v", p)
 	}
 }
 

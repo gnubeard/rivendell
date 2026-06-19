@@ -936,8 +936,17 @@ async function resync() {
       try {
         const pts = await api.voiceParticipants(voiceChannelId());
         if (!pts.some((p) => p.user_id === state.me.id)) {
+          // We're no longer in the call: the other party hung up, or our server-
+          // side reconnection grace window expired before this reconnect landed.
           endCallLocally();
         } else {
+          // Still in the call. Re-announce voice membership over the fresh socket:
+          // when our WS dropped the server armed a grace timer that ends the call
+          // if we don't come back (a network change kills the WS while the WebRTC
+          // media rides it out via ICE restart). This voice.join cancels that timer
+          // so the call continues. Gated on the roster check above so a grace
+          // window that already expired isn't resurrected into a solo call.
+          sendWS({ type: "voice.join", channel_id: voiceChannelId() });
           // Close any peer connection whose user left while our WS was down.
           reconcilePeers(pts.map((p) => p.user_id));
         }

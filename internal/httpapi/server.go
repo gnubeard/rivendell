@@ -31,27 +31,34 @@ const sessionCookie = "rivendell_session"
 
 type typingKey struct{ channelID, userID int64 }
 
+// voiceGraceKey identifies a pending DM-call reconnection grace timer: the DM
+// channel plus the user whose WS dropped mid-call (see scheduleDMTeardown).
+type voiceGraceKey struct{ channelID, userID int64 }
+
 type Server struct {
-	cfg           config.Config
-	st            *store.Store
-	hub           *ws.Hub
-	blobStore     *blobs.FSStore
-	pusher        *push.Sender // nil if Web Push couldn't be initialised (push disabled)
-	telemetryLog  *slog.Logger // dedicated logfmt logger for WebRTC debug telemetry
-	typingMu      sync.Mutex
-	typingTimers  map[typingKey]*time.Timer
-	ringMu        sync.Mutex
-	rings         map[int64]*activeRing // DM channelID → pending ring
-	inFlight      sync.Map              // URL → struct{} for in-flight link-preview fetches
-	previewClient *http.Client          // SSRF-guarded outbound client for link-preview fetches
+	cfg              config.Config
+	st               *store.Store
+	hub              *ws.Hub
+	blobStore        *blobs.FSStore
+	pusher           *push.Sender // nil if Web Push couldn't be initialised (push disabled)
+	telemetryLog     *slog.Logger // dedicated logfmt logger for WebRTC debug telemetry
+	typingMu         sync.Mutex
+	typingTimers     map[typingKey]*time.Timer
+	ringMu           sync.Mutex
+	rings            map[int64]*activeRing // DM channelID → pending ring
+	voiceGraceMu     sync.Mutex
+	voiceGraceTimers map[voiceGraceKey]*time.Timer // pending DM-call reconnection grace timers
+	inFlight         sync.Map                      // URL → struct{} for in-flight link-preview fetches
+	previewClient    *http.Client                  // SSRF-guarded outbound client for link-preview fetches
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
 	s := &Server{
-		cfg:          cfg,
-		st:           st,
-		typingTimers: make(map[typingKey]*time.Timer),
-		rings:        make(map[int64]*activeRing),
+		cfg:              cfg,
+		st:               st,
+		typingTimers:     make(map[typingKey]*time.Timer),
+		rings:            make(map[int64]*activeRing),
+		voiceGraceTimers: make(map[voiceGraceKey]*time.Timer),
 		// Telemetry goes to stdout as logfmt — greppable by eye and machine-parseable.
 		// A test can swap this for a buffer-backed logger to capture emitted records.
 		telemetryLog: slog.New(slog.NewTextHandler(os.Stdout, nil)),
