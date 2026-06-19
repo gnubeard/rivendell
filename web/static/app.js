@@ -1008,11 +1008,19 @@ function renderMe() {
   applyTheme(me.theme);
 }
 
+// scrollActiveChannelIntoView keeps the keyboard-selected sidebar row visible:
+// after a Ctrl+Up/Down move, scroll the newly-active row into the nearest edge of
+// its scroll container so the selection never disappears above/below the fold.
+function scrollActiveChannelIntoView() {
+  const row = $(".channel.active");
+  if (row) row.scrollIntoView({ block: "nearest" });
+}
+
 // navigateChannels moves the selection one row up (delta -1) or down (delta +1)
 // through the sidebar order. Clamps at the ends (no wrap).
 function navigateChannels(delta) {
   const next = S.nextChannelId(sidebarChannelOrder(state), state.activeChannelId, delta);
-  if (next != null) selectChannel(next);
+  if (next != null) { selectChannel(next); scrollActiveChannelIntoView(); }
 }
 
 // navigateUnread jumps to the nearest unread conversation above (delta -1) or
@@ -1020,7 +1028,7 @@ function navigateChannels(delta) {
 // that direction.
 function navigateUnread(delta) {
   const next = S.nextUnreadChannelId(sidebarChannelOrder(state), state.activeChannelId, state.unread, delta);
-  if (next != null) selectChannel(next);
+  if (next != null) { selectChannel(next); scrollActiveChannelIntoView(); }
 }
 
 // muteToggle builds the per-row mute control. It lives in the hover controls and
@@ -3474,7 +3482,12 @@ function wireMobileContextMenu() {
       lpTimer = null;
       const msgId = parseInt(row.dataset.msgId, 10);
       const m = findMessage(msgId);
-      if (m) openMobileCtx(m);
+      if (m) {
+        // Drop the keyboard before the sheet opens: an on-screen keyboard would
+        // otherwise shove the context menu up above it.
+        $("#composer-input").blur();
+        openMobileCtx(m);
+      }
     }, 450);
   }, { passive: true });
 
