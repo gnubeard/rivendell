@@ -764,6 +764,8 @@ body.dm-active #members-toggle { display: none; }
 #forward-filter { width: 100%; box-sizing: border-box; margin: 0.6rem 0 0; }
 .invite-item { cursor: pointer; padding: 0.4rem 0.5rem; border-radius: var(--radius); }
 .invite-item:hover { background: var(--surface-2, rgba(127,127,127,0.08)); }
+/* Keyboard-highlighted forward target (arrow keys); mirrors the emoji picker cue. */
+#forward-list .invite-item[aria-selected="true"] { background: var(--bg-hover); outline: 2px solid var(--accent); outline-offset: -2px; }
 .invite-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border); }
 .invite-row .member-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .invite-in { color: var(--text-faint); font-size: 0.78rem; }

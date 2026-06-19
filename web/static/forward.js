@@ -83,21 +83,57 @@ export function createForward({ el, $, getState, api, jumpToMessage, origin = lo
 
     const list = $("#forward-list");
     const filter = $("#forward-filter");
+
+    // Keyboard state: `items` is the flat list of rendered <li> rows in order
+    // (rebuilt every render); `activeIndex` is the highlight the arrow keys move
+    // and Enter picks. The list is a single column, so a flat index step is all
+    // the navigation needs (unlike the emoji grid's geometric moveVertical).
+    let items = [];
+    let activeIndex = -1;
+
+    const setActive = (i) => {
+      if (activeIndex >= 0 && items[activeIndex]) items[activeIndex].removeAttribute("aria-selected");
+      activeIndex = items.length ? Math.max(0, Math.min(i, items.length - 1)) : -1;
+      if (activeIndex < 0) return;
+      const row = items[activeIndex];
+      row.setAttribute("aria-selected", "true");
+      row.scrollIntoView({ block: "nearest" });
+    };
+
+    const choose = async (id) => {
+      $("#forward-modal").hidden = true;
+      try {
+        // Follow the message to where it landed rather than leaving the user
+        // where they were.
+        const sent = await api.sendMessage(id, forwardBody(m, fromDM, srcChannelId, origin), null);
+        if (sent && sent.id) await jumpToMessage(id, sent.id);
+      } catch (ex) {
+        alert("Failed to forward: " + ex.message);
+      }
+    };
+
     const render = () => {
       list.innerHTML = "";
+      items = [];
+      activeIndex = -1;
       for (const { id, label } of forwardTargets(getState(), canSee, filter.value)) {
-        list.append(el("li", { class: "invite-item", onclick: async () => {
-          $("#forward-modal").hidden = true;
-          try {
-            // Follow the message to where it landed rather than leaving the user
-            // where they were.
-            const sent = await api.sendMessage(id, forwardBody(m, fromDM, srcChannelId, origin), null);
-            if (sent && sent.id) await jumpToMessage(id, sent.id);
-          } catch (ex) {
-            alert("Failed to forward: " + ex.message);
-          }
-        } }, label));
+        const row = el("li", { class: "invite-item", role: "option", onclick: () => choose(id) }, label);
+        row.choose = () => choose(id);
+        items.push(row);
+        list.append(row);
       }
+      setActive(0); // highlight the first match so Enter forwards without arrowing
+    };
+
+    // Arrow keys move the highlight, Enter forwards to it. Escape stays unhandled
+    // so the modal's existing close path runs.
+    filter.onkeydown = (e) => {
+      if (e.key === "ArrowDown") setActive(activeIndex + 1);
+      else if (e.key === "ArrowUp") setActive(activeIndex - 1);
+      else if (e.key === "Enter") {
+        if (activeIndex >= 0 && items[activeIndex]) items[activeIndex].choose();
+      } else return;
+      e.preventDefault();
     };
 
     filter.value = "";

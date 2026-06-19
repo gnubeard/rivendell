@@ -9,6 +9,9 @@
 //   2. forwarding a DM message sends a quoted "*Forwarded:*" copy instead — a DM
 //      permalink only resolves for that DM's two members, so it must NOT embed
 //   3. the filter box narrows the target list by channel/person name
+//   4. the target list is keyboard-navigable — the first match is highlighted, the
+//      arrow keys move that highlight, and Enter forwards to it (parity with the
+//      emoji picker's combobox)
 //
 // forwardBody (permalink-vs-quoted) and the canSee audience predicate are the pure
 // core slated for node:test once extracted; this e2e nets the DOM-bound modal,
@@ -172,4 +175,58 @@ test("the forward filter narrows the target list by name", async () => {
   await page.click("#forward-close");
   await expect(page.locator("#forward-modal")).toBeHidden();
   void hide;
+});
+
+test("Enter forwards to the highlighted (first) match without arrowing", async () => {
+  const src = await makeChannel(page, `fwdkbdsrc${TS}`);
+  const dst = await makeChannel(page, `fwdkbdent${TS}`);
+  const srcMsgId = await postMessage(page, src, `kbd enter ${TS}`);
+
+  await openChannel(page, src);
+  await openForward(page, srcMsgId);
+
+  // Filtering to a single match leaves it highlighted; Enter forwards to it with
+  // no mouse and no arrow press.
+  await page.fill("#forward-filter", `fwdkbdent${TS}`);
+  const only = page.locator(`#forward-list li:has-text("#fwdkbdent${TS}")`);
+  await expect(only).toHaveAttribute("aria-selected", "true");
+  await page.press("#forward-filter", "Enter");
+
+  // Forward "follows the message" into the destination.
+  await expect(page.locator(`#channel-list li[data-ch-id="${dst}"]`)).toHaveClass(/active/);
+  await expect(page.locator("#forward-modal")).toBeHidden();
+});
+
+test("the arrow keys move the highlight and Enter forwards to it", async () => {
+  // Two channels sharing a prefix so the filter keeps both; arrowing past the
+  // first then Enter must forward to the SECOND.
+  const src = await makeChannel(page, `fwdarrsrc${TS}`);
+  // The distinguishing letter trails the timestamp so the shared `fwdarr${TS}`
+  // prefix is a real substring of both labels (and not of the src name).
+  const a = await makeChannel(page, `fwdarr${TS}a`);
+  const b = await makeChannel(page, `fwdarr${TS}b`);
+  const srcMsgId = await postMessage(page, src, `kbd arrow ${TS}`);
+
+  await openChannel(page, src);
+  await openForward(page, srcMsgId);
+
+  await page.fill("#forward-filter", `fwdarr${TS}`);
+  // Exactly the two prefix matches, the first highlighted.
+  const matches = page.locator(`#forward-list li:has-text("#fwdarr${TS}")`);
+  await expect(matches).toHaveCount(2);
+  const firstLabel = await page.locator("#forward-list li[aria-selected='true']").innerText();
+
+  // ArrowDown moves the highlight to a DIFFERENT row (order is sidebar order, so
+  // read which channel it names rather than assuming which is first).
+  await page.press("#forward-filter", "ArrowDown");
+  const second = page.locator("#forward-list li[aria-selected='true']");
+  await expect(second).toHaveCount(1);
+  const secondLabel = await second.innerText();
+  expect(secondLabel).not.toBe(firstLabel);
+
+  // Enter forwards to the highlighted (second) row; map its label to the channel id.
+  const expectedId = secondLabel === `#fwdarr${TS}a` ? a : b;
+  await page.press("#forward-filter", "Enter");
+  await expect(page.locator(`#channel-list li[data-ch-id="${expectedId}"]`)).toHaveClass(/active/);
+  await expect(page.locator("#forward-modal")).toBeHidden();
 });
