@@ -47,7 +47,10 @@ web/static/                   app.js (orchestrator; decomposed as far as is
                               composer-field.js, composer-richtext.js (live
                               markdown decoration in the composer: createComposerRichText
                               owns highlight()+Ctrl-B/I, free export decorate),
-                              attachments.js, autocomplete.js,
+                              attachments.js (calls exif.js before upload),
+                              exif.js (surgical client-side EXIF/GPS stripping:
+                              pure stripMetadata(bytes)->bytes + stripImageFile
+                              File adapter), autocomplete.js,
                               prefs.js, previews.js, util.js, search.js, emoji.js,
                               channeldrag.js, presence.js, imagewarm.js,
                               linkpreview.js, admin.js, secretui.js, forward.js,
@@ -204,6 +207,7 @@ version, e.g. a comment-only edit. See docs/testing/README.md.
 - Content type sniffed with `http.DetectContentType`, never trusts header.
 - Hash is 64-char lowercase hex; validated before use (path-traversal immunity).
 - Writes are atomic (tmp + rename). Same bytes → same hash → one file (idempotent).
+- **EXIF/GPS stripped client-side BEFORE upload** (`exif.js`, called from `attachments.js`), because the store hashes raw bytes — strip-then-hash, never hash-then-strip. Surgical/lossless (walk JPEG segments + PNG/WebP chunks, drop only metadata, copy pixels verbatim — NOT a canvas re-encode); JPEG Orientation is read out of the deleted Exif and re-emitted minimally so photos don't display sideways; timestamps deleted, not fuzzed. Pure `stripMetadata` unit-tested; `web/e2e/exif-strip.spec.js` pins that GPS never crosses the wire.
 
 **Invitations vs magic links**
 - `invitations` table is distinct from `magic_links`. Don't merge them.

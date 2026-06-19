@@ -95,8 +95,43 @@ thumbnailing.
 
 ---
 
+## Metadata stripping (EXIF/GPS) — client side, before upload
+
+**Status: shipped (2.1.0).** Phone photos carry GPS; screenshots carry capture
+timestamps. The store is content-addressed (the server hashes the raw bytes), so a
+strip that *changes the bytes* has to happen **before** the hash — strip-then-hash,
+never hash-then-strip. The only place that holds is the browser, before the POST.
+
+`web/static/exif.js` does it, called from `attachments.js`'s one upload choke point
+(`uploadAndInsert`), so every channel — paste, drop, file-picker, native-img — is
+covered without `app.js` learning about it. The pure core, `stripMetadata(bytes) ->
+Uint8Array`, sniffs the format by magic bytes (never the declared type, mirroring the
+server's `http.DetectContentType`) and dispatches.
+
+The strip is **surgical and lossless** — we walk the container structure and drop only
+the metadata blocks; pixel data is copied byte-for-byte, so there's no re-compression,
+bloat, or colour shift (the reason we did *not* take the easy canvas re-encode route):
+
+- **JPEG** — walk marker segments; drop `APP1` (Exif/XMP), `APP13` (IPTC), `COM`, and
+  every other `APPn` maker-note; keep `APP0`/JFIF and `APP2`/ICC; copy the scan data
+  (`SOS`→EOF) verbatim. **Orientation** lives inside the deleted Exif, so it's read out
+  and re-emitted as a minimal Exif segment carrying only that one tag — otherwise phone
+  photos display sideways. GPS, capture time, thumbnail, XMP all vanish.
+- **PNG** — drop `tEXt`/`zTXt`/`iTXt`/`eXIf`/`tIME`; keep everything else (IHDR, IDAT,
+  colour chunks…) with its CRC untouched.
+- **WebP** — drop `EXIF`/`XMP ` chunks, clear the matching `VP8X` feature flags, fix the
+  RIFF size.
+- **GIF / anything else** — returned untouched (no GPS to worry about; canvas re-encode
+  would destroy animation).
+
+Timestamps are **deleted, not fuzzed** — there's nothing left to correlate, and the
+message already carries a server send-time. Unconditional, no UI toggle. Unit-tested in
+`web/test/exif.test.js` (pure byte fixtures); the end-to-end privacy guarantee — GPS
+never crosses the wire — is pinned by `web/e2e/exif-strip.spec.js`.
+
+---
+
 ## Deliberately skipped
 
 - **Thumbnails.** CSS `max-width` handles display; stdlib image resizing is crude enough that adding it now is effort against a problem we don't have. Easy to bolt on later.
-- **EXIF stripping.** Phone photos carry GPS, and stripping means decode + re-encode, which *changes the bytes* — so it would have to happen **before** hashing or it breaks content-addressing. Skipped for v1; if it is ever added, strip-then-hash, never hash-then-strip.
 - **Object storage.** The `BlobStore` interface is the seam for the day an OCI bucket is worth it. Until then a local volume is free on hardware we already run.

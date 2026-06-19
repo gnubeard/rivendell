@@ -12,6 +12,12 @@
 //
 // DOM-bound; its test net is web/e2e/composer-paste.spec.js. The one piece of
 // pure logic, composeMessageBody, is unit-tested in web/test/attachments.test.js.
+//
+// Every image, whatever channel it arrived by, is run through stripImageFile (see
+// exif.js) before upload, so GPS/timestamps never leave the browser. This is the one
+// upload choke point, so the strip lives here rather than at each paste/drop handler.
+
+import { stripImageFile } from "./exif.js";
 
 // composeMessageBody joins the typed text and each *done* attachment's image
 // markdown (spoiler-wrapped in ||..|| when marked), one per line. Either part
@@ -104,7 +110,7 @@ export function createAttachmentTray({ tray, el, uploadBlob, rejectOversized, dr
     pending.push(item);
     render();
     try {
-      const result = await uploadBlob(file);
+      const result = await uploadBlob(await stripImageFile(file));
       item.status = "done";
       item.markdown = `![image](${result.url})`;
     } catch (ex) {
