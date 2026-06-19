@@ -449,7 +449,10 @@ html[data-theme="light"] .msg-body pre.code-block .hl-hunk { color: #0891b2; }
 .msg-embed-head { display: flex; gap: 0.45rem; align-items: baseline; margin-bottom: 0.18rem; }
 .msg-embed-author { font-weight: 600; font-size: 0.875rem; color: var(--text); }
 .msg-embed-time { font-size: 0.75rem; color: var(--text-dim); }
-.msg-embed-body { font-size: 0.875rem; color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* Normal block flow (no line-clamp) so a forwarded/uploaded blob image renders
+   inline at its natural size; messages are short enough that the full quote is fine.
+   overflow-wrap keeps a long unbroken token from spilling past the card edge. */
+.msg-embed-body { font-size: 0.875rem; color: var(--text); overflow-wrap: anywhere; }
 
 /* External link preview card (og: meta-tags from allowlisted domains). */
 .link-preview { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-left: 3px solid var(--accent-dim); border-radius: var(--radius); padding: 8px 10px; margin: 0.35rem 0 0.1rem; max-width: min(460px, 100%); overflow: hidden; text-decoration: none; color: inherit; background: var(--bg-2); }

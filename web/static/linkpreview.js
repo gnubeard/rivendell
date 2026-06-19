@@ -105,7 +105,10 @@ export function createLinkPreviews({ el, getState, api, jumpToMessage, rerender 
     if (msg.deleted_at) {
       body.append(el("span", { class: "deleted" }, "message deleted"));
     } else {
-      body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: false, channels: state.channels, users: state.users });
+      // embedImages: true so an uploaded blob in the linked message renders as an
+      // actual <img> in the card (not a bare "image" link). The card body is normal
+      // block flow now (no line-clamp), so the image sits inline at its natural size.
+      body.innerHTML = formatMessage(msg.content, null, state.emojis, { embedImages: true, channels: state.channels, users: state.users });
     }
     card.append(body);
     card.addEventListener("click", (e) => { e.preventDefault(); jumpToMessage(channelId, messageId); });

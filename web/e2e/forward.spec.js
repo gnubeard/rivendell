@@ -132,6 +132,30 @@ test("forwarding a channel message lands a permalink embed in the target and jum
   await expect(page.locator(`#message-list :text("forward me ${TS}")`).first()).toBeVisible();
 });
 
+test("forwarding a channel image renders the image inline in the embed card", async () => {
+  const src = await makeChannel(page, `fwdimgsrc${TS}`);
+  const dst = await makeChannel(page, `fwdimgdst${TS}`);
+  // A message whose body is an uploaded-blob image (the markdown the composer
+  // writes for an upload). The blob itself need not exist — we assert the <img>
+  // element renders in the embed card, which is what the embedImages flip buys.
+  const blob = "a".repeat(64);
+  const srcMsgId = await postMessage(page, src, `![pic](/api/blobs/${blob})`);
+
+  await openChannel(page, src);
+  await openForward(page, srcMsgId);
+
+  await page.fill("#forward-filter", `fwdimgdst${TS}`);
+  await page.click(`#forward-list li:has-text("#fwdimgdst${TS}")`);
+
+  await expect(page.locator(`#channel-list li[data-ch-id="${dst}"]`)).toHaveClass(/active/);
+
+  // The permalink embed card renders the blob as an <img> (embedImages: true) —
+  // before the flip it was a bare "image" link, so this asserts the new behavior.
+  const embed = page.locator("#message-list .msg-embed");
+  await expect(embed).toBeVisible();
+  await expect(embed.locator(`img.msg-image[src="/api/blobs/${blob}"]`)).toHaveCount(1);
+});
+
 test("forwarding a DM message sends a quoted copy, not a (dead) permalink embed", async () => {
   const dm = await makeDM(page, USER2);
   const dst = await makeChannel(page, `fwddmdst${TS}`);
