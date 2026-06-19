@@ -98,8 +98,10 @@ const unread = createUnreadTracker(); // divider cursor, mark-unread suppression
 const drafts = createDraftStore();    // per-channel composer scratch (draft text + pending uploads)
 let composerTray = null;              // attachments.js upload tray; null until wireComposer builds it (guard with ?.)
 let composerRich = null;              // composer-richtext.js live decoration; null until wireComposer builds it (guard with ?.)
-// Per-user avatar cache-bust token: bumped on user.update(avatar) to force a
-// re-fetch of the otherwise-stable, cached avatar URL.
+// Per-user avatar cache-bust token: bumped only on a genuine avatar change
+// (avatar_updated_at moved) to force a re-fetch of the otherwise-stable, cached
+// avatar URL. NOT bumped on unrelated profile edits (name/bio/status) — that
+// would change the URL and re-fetch an unchanged image, flickering the avatar.
 const avatarVersion = {};
 // Message ids deleted *during this session* (seen live via message.delete); only
 // these earn a tombstone, so a fresh history load isn't littered with them.
@@ -645,11 +647,16 @@ function handleRealtimeEvent(evt) {
   // still present *before* applyEvent folds the removal in — so a removal we
   // already did locally (leaveActiveChannel) doesn't trigger a redundant reload.
   const hadChannel = evt.type === "member.remove" && !!state.channels[evt.payload.channel_id];
+  // Capture the avatar timestamp BEFORE the fold so onPresenceOrUserUpdate can tell
+  // an actual avatar change from an unrelated profile edit (applyEvent overwrites it).
+  const prevAvatarAt = evt.type === "user.update" && evt.payload
+    ? ((state.users[evt.payload.id] && state.users[evt.payload.id].avatar_updated_at) || null)
+    : null;
   state = S.applyEvent(state, evt);
   // Targeted DOM re-renders by event type. Each FAT domain lives in its own
   // on<Domain>(evt) handler below (defined right after this dispatcher); the small
   // ones stay inline. See the MAP above for the full event→effect table.
-  if (evt.type.startsWith("presence") || evt.type === "user.update") onPresenceOrUserUpdate(evt);
+  if (evt.type.startsWith("presence") || evt.type === "user.update") onPresenceOrUserUpdate(evt, prevAvatarAt);
   if (evt.type.startsWith("channel")) onChannelEvent(evt);
   if (evt.type === "member.remove") onMemberRemove(evt, hadChannel);
   if (evt.type === "hello") {
@@ -708,10 +715,13 @@ function handleRealtimeEvent(evt) {
 
 // onPresenceOrUserUpdate repaints the surfaces that show a user's identity/presence
 // (the member list, my own chip, DM rows) and — on a profile change — the open
-// message authors. A user.update carrying a new avatar busts the avatar cache first.
-function onPresenceOrUserUpdate(evt) {
-  if (evt.type === "user.update" && evt.payload && evt.payload.has_avatar) {
-    // Their avatar may have changed — force a re-fetch on next render.
+// message authors. A user.update whose avatar_updated_at actually moved busts the
+// avatar cache first; an unrelated edit (name/bio/status) leaves the URL stable so
+// the cached image isn't re-fetched and the avatar doesn't flicker.
+function onPresenceOrUserUpdate(evt, prevAvatarAt) {
+  if (evt.type === "user.update" && evt.payload &&
+      (evt.payload.avatar_updated_at || null) !== (prevAvatarAt || null)) {
+    // The avatar itself changed — force a re-fetch on next render.
     avatarVersion[evt.payload.id] = Date.now();
     imageWarm.preloadAvatars(); // warm the new versioned URL ahead of the repaint
   }
