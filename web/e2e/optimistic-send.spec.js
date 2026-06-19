@@ -1,15 +1,18 @@
 // e2e/optimistic-send.spec.js — optimistic local echo for sending a message.
 //
 // On Enter, app.js paints the message at the live tail immediately as a dimmed
-// `.msg.pending` row (showOptimisticSend), BEFORE the server round-trips. Its own
-// message.new echo then reconciles the dimmed row into the real one in place
-// (reconcileOptimistic) — exactly one copy, no jump. A failed POST rolls the
-// optimistic row back and restores the composer text for a retry. This spec pins:
+// `.msg.pending` row (showOptimisticSend), BEFORE the server round-trips. The send
+// handler reconciles the dimmed row into the real one from the POST RESPONSE
+// (reconcileOptimistic) — exactly one copy, no jump — so the broadcast message.new
+// echo is only an idempotent backstop. A failed POST rolls the optimistic row back and
+// restores the composer text for a retry. This spec pins:
 //   1. a sent message ends up as a single, non-pending row (reconciled, not doubled)
 //   2. a failed send shows the pending row, then rolls it back + restores the composer
 //   3. another user's message arriving DURING a pending send isn't mis-attributed to
 //      you — it slots ABOVE your pending row, grouped under its own author, not below
 //      yours (the optimistic-row-desyncs-grouping bug)
+//   4. a send still reconciles even when its own message.new echo is dropped — proving
+//      reconcile is driven by the POST response, not the echo (the echo-lost fix)
 import { test, expect } from "@playwright/test";
 import { ADMIN, USER2, PASSWORD } from "./global-setup.js";
 
@@ -124,6 +127,46 @@ test("a send with trailing whitespace still reconciles to a single row", async (
 
   await expect(msg(page, txt)).toHaveCount(1);
   await expect(page.locator("#message-list .msg.pending", { hasText: txt })).toHaveCount(0);
+});
+
+test("a send reconciles from its POST response even when the message.new echo is dropped", async () => {
+  // Reconcile is driven by the POST response, not the broadcast echo (see
+  // showOptimisticSend's header). Prove it by routing a sender's socket to DROP its own
+  // message.new echo entirely, then asserting the dimmed row still reconciles to one
+  // real row. The earlier echo-dependent design would strand the pending row forever.
+  // Own context so the routeWebSocket proxy doesn't touch the shared `page` tests; same
+  // user is fine (the app allows multiple connections per user).
+  const marker = `echo-lost ${TS}`;
+  let dropMyEcho = true;
+  const ctxC = await ctx.browser().newContext();
+  const pageC = await ctxC.newPage();
+  await pageC.routeWebSocket("**/api/ws", (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((m) => server.send(m)); // page → server, verbatim
+    server.onMessage((m) => {            // server → page, optionally drop my own echo
+      if (dropMyEcho && typeof m === "string") {
+        try {
+          const e = JSON.parse(m);
+          if (e.type === "message.new" && e.payload && e.payload.content === marker) return;
+        } catch { /* not a frame we filter */ }
+      }
+      ws.send(m);
+    });
+  });
+  await uiLogin(pageC, ADMIN);
+  await openChannel(pageC, channelId);
+
+  await typeAndSend(pageC, marker);
+
+  // No message.new echo will reach pageC for this send; reconcile-from-POST must still
+  // clear the dimmed state and leave exactly one real row (not a stuck pending dupe).
+  await expect(pageC.locator("#message-list .msg", { hasText: marker })).toHaveCount(1);
+  await expect(pageC.locator("#message-list .msg.pending", { hasText: marker })).toHaveCount(0);
+  // And it really was sent: the other admin session (normal echo) shows it once.
+  await expect(msg(page, marker)).toHaveCount(1);
+
+  dropMyEcho = false;
+  await ctxC.close();
 });
 
 test("another user's message during a pending send is not mis-attributed to you", async () => {

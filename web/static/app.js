@@ -60,6 +60,8 @@ import { createVideoGrid } from "./videogrid.js";
 import { createVoiceUI } from "./voiceui.js";
 import { createNotifyUI } from "./notifyui.js";
 import { isNearBottom, scrollToBottom, PAGE, createHistoryPaging } from "./history.js";
+import { trimMessageContent } from "./trim.js";
+import { groupingAnchor as computeGroupingAnchor, liveDeletedStillLoaded } from "./grouping.js";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ▌ REGION 1 · FOUNDATIONS
@@ -114,12 +116,7 @@ const liveDeleted = new Set();
 // the natural GC point.
 function pruneLiveDeleted() {
   if (liveDeleted.size === 0) return;
-  const stillLoaded = new Set();
-  for (const cid in state.messages) {
-    for (const m of state.messages[cid] || []) {
-      if (m.deleted_at && liveDeleted.has(m.id)) stillLoaded.add(m.id);
-    }
-  }
+  const stillLoaded = liveDeletedStillLoaded(state.messages, liveDeleted);
   for (const id of [...liveDeleted]) {
     if (!stillLoaded.has(id)) liveDeleted.delete(id);
   }
@@ -347,6 +344,19 @@ function wireLogin() {
   };
 }
 
+// Shared credential rules for the set-password and signup forms (the server is the
+// real authority; these are just immediate client-side feedback). Keep MIN_PASSWORD_LEN
+// in step with the server's policy.
+const MIN_PASSWORD_LEN = 10;
+const USERNAME_RE = /^[a-z0-9_]{2,32}$/;
+
+// passwordError returns a user-facing message when a password pair is invalid, else null.
+function passwordError(pw, pw2) {
+  if (pw !== pw2) return "Passwords don't match.";
+  if (pw.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters.`;
+  return null;
+}
+
 async function bootSetPassword() {
   show("set-password");
   const token = location.hash.replace(/^#/, "");
@@ -369,12 +379,9 @@ async function bootSetPassword() {
     err.textContent = "";
     const pw = $("#sp-password").value;
     const pw2 = $("#sp-password2").value;
-    if (pw !== pw2) {
-      err.textContent = "Passwords don't match.";
-      return;
-    }
-    if (pw.length < 10) {
-      err.textContent = "Password must be at least 10 characters.";
+    const pwErr = passwordError(pw, pw2);
+    if (pwErr) {
+      err.textContent = pwErr;
       return;
     }
     try {
@@ -413,16 +420,13 @@ async function bootSignup() {
     const username = $("#su-username").value.trim().toLowerCase();
     const pw = $("#su-password").value;
     const pw2 = $("#su-password2").value;
-    if (!/^[a-z0-9_]{2,32}$/.test(username)) {
+    if (!USERNAME_RE.test(username)) {
       err.textContent = "Username must be 2-32 characters: lowercase letters, digits, or underscore.";
       return;
     }
-    if (pw !== pw2) {
-      err.textContent = "Passwords don't match.";
-      return;
-    }
-    if (pw.length < 10) {
-      err.textContent = "Password must be at least 10 characters.";
+    const pwErr = passwordError(pw, pw2);
+    if (pwErr) {
+      err.textContent = pwErr;
       return;
     }
     try {
@@ -572,6 +576,11 @@ async function enterApp() {
       }
     }
   });
+  // Wire-before-realtime (step 9) is safe BY CONSTRUCTION, not by luck: enterApp is
+  // synchronous from the wiring (step 8) through this call, and a WebSocket cannot
+  // dispatch a message synchronously — the earliest onmessage is a future task, by
+  // which point every handler is installed. So no runtime `controlsWired` guard is
+  // needed; the line-order is sufficient. (Considered and declined by the 2026 roundtable.)
   try {
     startRealtime();
   } catch (e) {
@@ -813,6 +822,10 @@ function onMessageEvent(evt) {
       // (replace the dimmed row in place) instead of appending a second copy.
       if (m && reconcileOptimistic(m)) {
         // handled: the optimistic row became the real one
+      } else if (m && $("#message-list")?.querySelector(`[data-msg-id="${m.id}"]`)) {
+        // Already drawn — my own send reconciled directly from its POST response (the
+        // real row is already placed and scrolled), so this echo is just the backstop.
+        // Don't append a second copy or re-scroll over a reader who scrolled up.
       } else {
         const ml = $("#message-list");
         const nearBottom = !ml || isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight);
@@ -1393,6 +1406,9 @@ async function selectChannel(id) {
   // show the "New messages" marker when the user actually had unread messages.
   // Setting the cursor to 0 suppresses the marker entirely for channels the
   // user was already caught up on (prevents it from popping on new arrivals).
+  // Snapshot hadUnreads BEFORE S.clearUnread/clearMention wipe the counters —
+  // openChannel below needs the pre-clear value to decide whether to show the
+  // divider. Reading it after the clears always yields false (no marker, ever).
   const hadUnreads = !!(state.unread[id] || state.mentions[id] || unread.isManualUnread(id));
   state = S.clearUnread(state, id);
   state = S.clearMention(state, id);
@@ -1993,10 +2009,7 @@ function renderMessages(forceBottom = false, holdPosition = false) {
     return;
   }
   const msgs = state.messages[state.activeChannelId] || [];
-  const isMod = S.canModerate(state.me);
-  // In a DM, either participant may pin (mirrors the server rule); elsewhere
-  // pinning is moderator+.
-  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const { isMod, canPin } = rowContextFor(state.activeChannelId);
   // Marker: the cursor position captured when this channel was opened. Any
   // message with id > markerAt is "new since you last visited."
   const markerAt = unread.markerFor(state.activeChannelId);
@@ -2066,6 +2079,12 @@ function renderMessages(forceBottom = false, holdPosition = false) {
 // nothing — so a reopened channel isn't littered with old tombstones. Returns the
 // index past the run and whether a tombstone was drawn (the caller resets grouping
 // only when one was — an invisible run must not break a group).
+//
+// Reciprocal contract with pruneLiveDeleted: this function only ever draws a tombstone
+// for an id still present (as a deleted row) in a loaded window, so it is SAFE for
+// pruneLiveDeleted to drop any liveDeleted id that is in no loaded window. pruneLiveDeleted
+// is called from exactly one site (loadChannel, at the window-replace GC point). Don't
+// widen the prune without revisiting this guarantee.
 function renderDeletedRun(wrap, msgs, start) {
   let j = start;
   let live = 0;
@@ -2357,22 +2376,12 @@ function inSecretView(channelId) {
   return !!(sess && (sess.phase === "active" || sess.phase === "ended"));
 }
 
-// groupingAnchor returns the {user, time} the message at msgs[idx] would group
-// under, mirroring renderMessages' run-breaking rules: a system line or a DRAWN
-// tombstone (a live-deleted message) resets grouping; an invisible deleted run is
-// transparent. null when nothing groupable precedes it. appendMessageRow uses it so
-// a single appended row gets the same grouped/full shape the full rebuild would.
+// groupingAnchor returns the {user, time} the message at msgs[idx] would group under.
+// The pure run-breaking logic lives in grouping.js (unit-tested + parity-checked against
+// the renderMessages forward loop); this wrapper just supplies the session's liveDeleted
+// membership test (which ids earned a visible tombstone).
 function groupingAnchor(msgs, idx) {
-  for (let k = idx - 1; k >= 0; k--) {
-    const p = msgs[k];
-    if (p.is_system) return null;
-    if (p.deleted_at) {
-      if (liveDeleted.has(p.id)) return null; // a drawn tombstone breaks the run
-      continue;                               // an invisible deleted run is transparent
-    }
-    return { user: p.user_id, time: new Date(p.created_at).getTime() };
-  }
-  return null;
+  return computeGroupingAnchor(msgs, idx, (id) => liveDeleted.has(id));
 }
 
 // insertionPointFor returns the DOM node a real row for msgs[idx] should be inserted
@@ -2393,6 +2402,17 @@ function insertionPointFor(wrap, msgs, idx) {
   return wrap.querySelector(".msg.pending") || wrap.querySelector('[data-sentinel="bottom"]');
 }
 
+// rowContextFor returns the per-row capability flags messageRow needs for a channel:
+// whether the viewer can moderate, and whether they can pin here — mods anywhere, or
+// either participant in a DM (mirrors the server rule). Deduped from the five
+// render/append/optimistic paths that each build a message row.
+function rowContextFor(channelId) {
+  const isMod = S.canModerate(state.me);
+  const ch = state.channels[channelId];
+  const canPin = isMod || !!(ch && ch.is_dm);
+  return { isMod, canPin };
+}
+
 // appendMessageRow adds ONE freshly-arrived message to the open pane without
 // rebuilding it — the incremental path for message.new at the live tail. It mirrors
 // renderMessages' per-row decisions (grouping, isMod/canPin) and follow-scroll
@@ -2406,9 +2426,7 @@ function appendMessageRow(m, forceBottom) {
   const atBottom = forceBottom || isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
   const msgs = state.messages[state.activeChannelId] || [];
   const idx = msgs.findIndex((x) => x.id === m.id);
-  const isMod = S.canModerate(state.me);
-  const activeCh = state.channels[state.activeChannelId];
-  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const { isMod, canPin } = rowContextFor(state.activeChannelId);
   const anchor = groupingAnchor(msgs, idx);
   const t = new Date(m.created_at).getTime();
   const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, t) : false;
@@ -2433,9 +2451,7 @@ function patchMessageRow(messageId) {
   const msgs = state.messages[state.activeChannelId] || [];
   const m = msgs.find((x) => x.id === messageId);
   if (!m || m.is_system || m.deleted_at) return false;
-  const isMod = S.canModerate(state.me);
-  const activeCh = state.channels[state.activeChannelId];
-  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const { isMod, canPin } = rowContextFor(state.activeChannelId);
   const grouped = existing.classList.contains("grouped");
   // A reaction pill row makes the replacement taller; re-pin to the bottom if the
   // viewer was there (mirrors appendMessageRow), so the content above scrolls up to
@@ -2467,15 +2483,21 @@ function refreshReadMarks() {
 // Optimistic send. On Enter we paint the message at the live tail immediately —
 // before the server round-trips — as a dimmed "pending" row, so sending feels
 // instant on a slow link. The row carries a NEGATIVE temp id (can't collide with a
-// server id) and is tracked in pendingSends until its own message.new echo arrives:
-// reconcileOptimistic then REPLACES the dimmed row with the real one in place (no
-// duplicate, no jump). A failed POST rolls the row back (removePending) and restores
-// the composer. A channel switch wipes the pane, so clearPendingSends drops the
-// now-detached entries. Only used at the live tail (not a history window or secret
-// view — those keep the existing reload/secret paths). Guarded by
-// web/e2e/optimistic-send.spec.js.
+// server id) and is tracked in pendingSends until it reconciles.
+//
+// Reconcile happens from the POST RESPONSE (the send handler awaits api.sendMessage,
+// which resolves to the created message with its real id), NOT from the message.new
+// broadcast echo: on success we fold the message into state and call reconcileOptimistic
+// to REPLACE the dimmed row with the real one in place (no duplicate, no jump). The
+// broadcast echo is then just an idempotent backstop — addMessage dedupes by id and the
+// live-append path skips an already-drawn row. This is deliberate: an earlier design
+// waited on the echo, so a dropped/late broadcast stranded the dimmed row forever.
+// A failed POST rolls the row back (removePending) and restores the composer. A channel
+// switch wipes the pane, so clearPendingSends drops the now-detached entries. Only used
+// at the live tail (not a history window or secret view — those keep the existing
+// reload/secret paths). Guarded by web/e2e/optimistic-send.spec.js.
 let optimisticSeq = -1;
-const pendingSends = []; // { tempId, channelId, content, el } awaiting the message.new echo
+const pendingSends = []; // { tempId, channelId, content, el } awaiting reconcile (POST response; echo is a backstop)
 
 function showOptimisticSend(channelId, content, replyId) {
   const tempId = optimisticSeq--;
@@ -2494,9 +2516,7 @@ function showOptimisticSend(channelId, content, replyId) {
   const msgs = state.messages[channelId] || [];
   const anchor = groupingAnchor(msgs, msgs.length); // group under the current live tail
   const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, new Date(m.created_at).getTime()) : false;
-  const isMod = S.canModerate(state.me);
-  const activeCh = state.channels[channelId];
-  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const { isMod, canPin } = rowContextFor(channelId);
   const row = messageRow(m, { grouped, isMod, canPin, pending: true });
   const bottomSentinel = wrap.querySelector('[data-sentinel="bottom"]');
   if (bottomSentinel) wrap.insertBefore(row, bottomSentinel);
@@ -2527,9 +2547,7 @@ function reconcileOptimistic(m) {
   const idx = msgs.findIndex((x) => x.id === m.id);
   const anchor = groupingAnchor(msgs, idx);
   const grouped = anchor ? shouldGroupMessage(anchor.user, anchor.time, m, new Date(m.created_at).getTime()) : false;
-  const isMod = S.canModerate(state.me);
-  const activeCh = state.channels[m.channel_id];
-  const canPin = isMod || !!(activeCh && activeCh.is_dm);
+  const { isMod, canPin } = rowContextFor(m.channel_id);
   const atBottom = isNearBottom(wrap.scrollHeight, wrap.scrollTop, wrap.clientHeight);
   // Drop the reconciled row into its array-sorted DOM slot, NOT necessarily where the
   // pending row sat: another user's message may have arrived (and been appended) in the
@@ -2881,12 +2899,11 @@ function wireComposer() {
       // Message body = the typed text followed by each done attachment's image
       // markdown (spoiler-marked ones wrapped in ||..||), one per line; either
       // part alone is enough to send.
-      // Mirror the server's TrimRight(" \t\r\n") (handlers_messages.go) here so the
-      // bytes we send, the optimistic row, and the echoed message.new are identical.
-      // Otherwise reconcileOptimistic's exact-content match misses on a trailing space
-      // or newline — the echo can't find its pending row, so the real message gets
-      // appended while the dimmed optimistic row is left stuck (a duplicate on send).
-      const content = composeMessageBody(text, composerTray.doneUploads()).replace(/[ \t\r\n]+$/, "");
+      // trimMessageContent mirrors the server's TrimRight(" \t\r\n")
+      // (handlers_messages.go) so the bytes we send, the optimistic row, and the
+      // echoed message.new are byte-identical — see trim.js for why a drift here
+      // orphans the dimmed optimistic row (reconcileOptimistic's exact-content match).
+      const content = trimMessageContent(composeMessageBody(text, composerTray.doneUploads()));
       if (!content.trim()) return;
       input.value = ""; // the div collapses back to a single line on its own
       composerRich?.resetHistory(); // sent → fresh undo baseline (empty)
@@ -2904,7 +2921,19 @@ function wireComposer() {
         ? showOptimisticSend(cid, content, replyId)
         : null;
       try {
-        await api.sendMessage(cid, content, replyId);
+        // The POST response IS the created message (real id and all), so reconcile
+        // the dimmed optimistic row from it RIGHT NOW instead of waiting on the
+        // message.new echo — the broadcast echo is then just an idempotent backstop
+        // (addMessage dedupes by id; the live-append path skips an already-drawn row).
+        // This closes the echo-lost gap: a dropped/late broadcast can no longer strand
+        // a pending row forever, because reconcile no longer depends on it.
+        const saved = await api.sendMessage(cid, content, replyId);
+        if (saved && saved.id != null) {
+          // Fold it in exactly as the echo would (addMessage + last_message_at bump),
+          // so the broadcast message.new is a pure no-op when it lands.
+          state = S.applyEvent(state, { type: "message.new", payload: saved });
+          if (optimistic != null) reconcileOptimistic(saved);
+        }
         sent.forEach((u) => u.objectUrl && URL.revokeObjectURL(u.objectUrl));
       } catch (ex) {
         if (optimistic != null) removePending(optimistic); // roll the dimmed row back (no-op if a channel switch already dropped it)
@@ -3364,7 +3393,7 @@ function wireProfileControls() {
 // editor.
 function wireChannelControls() {
   $("#new-channel-btn").onclick = openChannelModal;
-  $("#channel-close").onclick = () => ($("#channel-modal").hidden = true);
+  $("#channel-close").onclick = () => closeModal($("#channel-modal"));
   $("#channel-create-form").onsubmit = async (e) => {
     e.preventDefault();
     const err = $("#channel-create-error");
@@ -3382,7 +3411,7 @@ function wireChannelControls() {
   };
 
   $("#invite-btn").onclick = openInviteModal;
-  $("#invite-close").onclick = () => ($("#invite-modal").hidden = true);
+  $("#invite-close").onclick = () => closeModal($("#invite-modal"));
 
   $("#leave-btn").onclick = leaveActiveChannel;
 
@@ -3406,7 +3435,7 @@ function wireEmojiControls() {
   // Custom-emoji manager (moderator+): one shared modal reached from the picker's
   // ➕ and the admin panel's "Manage custom emojis" button.
   $("#admin-emoji-manage").onclick = openEmojiManager;
-  $("#emoji-manager-close").onclick = () => ($("#emoji-manager-modal").hidden = true);
+  $("#emoji-manager-close").onclick = () => closeModal($("#emoji-manager-modal"));
   $("#emoji-manager-form").onsubmit = async (e) => {
     e.preventDefault();
     const out = $("#emoji-manager-out");
@@ -3436,7 +3465,7 @@ function wireEmojiControls() {
 // submit-to-search-now, and the "load more" pager.
 function wireSearchControls() {
   $("#search-btn").onclick = () => search.open();
-  $("#search-close").onclick = () => ($("#search-modal").hidden = true);
+  $("#search-close").onclick = () => closeModal($("#search-modal"));
   // Debounce typing so each keystroke doesn't fire a query; Enter searches now.
   $("#search-input").addEventListener("input", () => search.onInput());
   $("#search-form").addEventListener("submit", (e) => {
@@ -3481,6 +3510,10 @@ function wireMobileContextMenu() {
       lpFired = true;
       lpTimer = null;
       const msgId = parseInt(row.dataset.msgId, 10);
+      // findMessage looks msgId up in state.messages; a pending optimistic row
+      // (negative temp id, in the DOM but NOT in the array) returns undefined, so
+      // the sheet simply doesn't open. That's intended — there are no actions to
+      // offer on a not-yet-sent row — not a bug to "fix" by tracking pending rows.
       const m = findMessage(msgId);
       if (m) {
         // Drop the keyboard before the sheet opens: an on-screen keyboard would
@@ -3630,7 +3663,7 @@ function wireGlobalButtons() {
   $("#update-reload").onclick = () => location.reload();
   $("#update-dismiss").onclick = () => ($("#update-banner").hidden = true);
 
-  $("#forward-close").onclick = () => ($("#forward-modal").hidden = true);
+  $("#forward-close").onclick = () => closeModal($("#forward-modal"));
 }
 
 // wireControls installs all the one-time control/event bindings, grouped by concern
@@ -3936,6 +3969,12 @@ const refreshEmojiManagerIfOpen = adminPanel.refreshEmojiManagerIfOpen;
 const PRESENCE_DEBOUNCE_MS = 1500;
 const pendingPresence = new Map(); // userId -> timeout handle
 
+// applyPresence is a cross-subsystem FAN-OUT, not a pure state apply: beyond folding
+// the event into `state`, it repaints four surfaces (members/me/DMs/DM-header) and,
+// on an offline flip, tears down any secret session with that peer and repaints the
+// typing indicator (applyEvent already swept their typing). Renaming it to read as a
+// fan-out is a proposed-only cleanup; for now, know that calling it does more than
+// "apply the event".
 function applyPresence(evt) {
   state = S.applyEvent(state, evt);
   renderMembers();

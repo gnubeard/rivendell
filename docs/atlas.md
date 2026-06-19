@@ -66,6 +66,12 @@ the pure `S.applyEvent`/`classifyIncomingMessage` reducers, then dispatches the
 their subsystems. `resync` re-pulls server state after a reconnect to close the gap
 a dead socket left. This is DOM-dispatch territory, not a further pure carve.
 
+The message-pane **fast-path vs. full-render** decision is **two-site**: reactions
+decide in `handleRealtimeEvent`, messages decide in `onMessageEvent`.
+Return contracts to honor: `reconcileOptimistic` and `patchMessageRow` return a
+**bool** (false ⇒ fall back to a full `renderMessages`); `appendMessageRow` returns
+**undefined** and always appends — never branch on its result.
+
 ### R4 · Sidebar & Channels (937–1745)
 Everything left of the message pane, and the channel as an object you act on:
 me/theme rendering, the channel/DM/member list builders + badges, `channelDrag`
@@ -159,6 +165,15 @@ lead because eval-time code below reads them. Folding those into the switchboard
 would trade cohesion for symmetry and lose. The 5-plug fold was the right and
 sufficient consolidation; this finding is resolved.
 
+**The generative rule** (so the three edges aren't memorized as magic): a plug must be
+declared *before* any later plug whose dependency bag names its `const` export — that's
+an eval-time read of an as-yet-uninitialized `const`, so getting it wrong throws a loud
+TDZ `ReferenceError` at boot (not a silent failure). A dependency reached through a
+**hoisted `function` declaration** or a **lazy arrow** is order-free (the binding exists
+or is only read at call time), which is why almost every other plug is movable. The three
+current edges (`mobileCtx`←`forward`, `mobileCtx`←`emojiPicker`, `voiceUI`←`videoGrid`)
+are exactly the cases where a bag names another plug's `const` at eval time.
+
 ### 2. The `wire*` block *looks* extractable but isn't — traced and declined.
 The ten one-time control-binding functions share one shape (query static DOM, attach
 listeners, call app/feature methods), which made a `wiring.js` carve look like the
@@ -224,6 +239,34 @@ record of what was decided and why.
   server round-trips) — also shipped (2.0.16): `showOptimisticSend`/`reconcileOptimistic`/
   `removePending` in the `incremental message updates` section, guarded by
   `web/e2e/optimistic-send.spec.js`.
+
+## Validated by the 2026 roundtable
+
+On 2026-06-19 nine sub-agents cold-read `app.js` one region each (no atlas access),
+then met to compare notes (full record: `docs/history/atlas-roundtable.md`). The
+exercise **independently corroborated** Findings 1 (plug consolidation is closed) and 2
+(`wire*` is not extractable) — the conclusions survived adversarial review by readers who
+hadn't seen them. The cold reads also went deeper than this map on topology it omits:
+the **two-site** fast-path decision (now in the R3 blurb), the const-vs-hoisted
+**generative** plug-ordering rule (now in Finding 1), R5's `rowContext` triple duplicated
+across five functions and grouping logic encoded twice, and R7's two document-level click
+listeners + three keydown listeners.
+
+**Declined / deferred refactors** (recorded so they aren't re-proposed cold):
+- **Relocating `scheduleRender`/`flushRenders` out of R4 — declined.** The owner withdrew
+  it; 5 of 7 render surfaces are R4-local, so cohesion beats symmetry. The surface-name
+  contract is documented in CLAUDE.md instead.
+- **A `controlsWired` runtime assert in `startRealtime` — declined.** The wire-before-
+  realtime ordering is safe by construction (`startRealtime` is synchronous and called
+  last; a WebSocket can't dispatch synchronously). Documented, not guarded.
+- **`rowContextFor(channelId)` helper (dedup ×5) — proposed-only.** Collapse the
+  `isMod`/`canPin`/`activeCh` triple in the `renderMessages` loop, `appendMessageRow`,
+  `patchMessageRow`, `showOptimisticSend`, `reconcileOptimistic`. Optional polish.
+- **Route every modal dismissal through `closeModal` — proposed-only** (invariant adopted;
+  see CLAUDE.md). Several close-buttons hide their modal inline today.
+- **Rename `applyPresence` to read as a cross-subsystem fan-out — proposed-only.**
+- **Consolidate the 3 password-form validators + lift `≥10`/username-regex to named
+  constants — proposed-only, low priority.**
 
 ## Maintaining the atlas
 
