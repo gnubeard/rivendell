@@ -913,17 +913,54 @@ test("congestionTarget: backs off on loss, RTT, or CPU stress, floored", () => {
   assert.equal(voice.congestionTarget(160000, ceiling, { lossFrac: 0.2, rttMs: 100, limited: false }), 150000);
 });
 
-test("congestionTarget: climbs only after a healthy streak; holds when bandwidth-limited", () => {
+test("congestionTarget: climbs only after a long healthy streak; holds when bandwidth-limited", () => {
   const ceiling = 800000;
   const healthy = { lossFrac: 0.01, rttMs: 120, limited: false };
-  // One clean sample is NOT enough — the streak gate holds (oscillation fix).
+  // A short clean run is NOT enough — recovery is deliberately slow (the relapse fix:
+  // loss clears because we backed off, not because the link healed). Need CLIMB_AFTER_HEALTHY=4.
   assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, healthyStreak: 1 }), 400000);
-  // Two consecutive healthy intervals → +75k step.
-  assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, healthyStreak: 2 }), 475000);
+  assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, healthyStreak: 3 }), 400000);
+  // The fourth consecutive healthy interval → a small +40k creep.
+  assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, healthyStreak: 4 }), 440000);
   // Climb is clamped at the ceiling.
-  assert.equal(voice.congestionTarget(780000, ceiling, { lossFrac: 0, rttMs: 100, limited: false, healthyStreak: 3 }), 800000);
+  assert.equal(voice.congestionTarget(780000, ceiling, { lossFrac: 0, rttMs: 100, limited: false, healthyStreak: 4 }), 800000);
   // Encoder already bandwidth-limited → hold (don't push past what it can use).
   assert.equal(voice.congestionTarget(400000, ceiling, { ...healthy, limited: true, healthyStreak: 5 }), 400000);
-  // Missing signals (null) are treated as non-stress: a settled sender climbs.
-  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: null, rttMs: null, limited: false, healthyStreak: 2 }), 475000);
+  // Missing signals (null) are treated as non-stress: a settled sender creeps up.
+  assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: null, rttMs: null, limited: false, healthyStreak: 4 }), 440000);
+});
+
+test("softCeilingFor: ratchets down on stress to under the level that broke; re-probes slowly", () => {
+  const hard = 800000;
+  // No prior ceiling, healthy → stays at the hard ceiling (ideal conditions, no regression).
+  assert.equal(voice.softCeilingFor(undefined, hard, 800000, { lossFrac: 0, rttMs: 100, healthyStreak: 4 }), 800000);
+  // Stress at 800k → cap drops to 85% of the level that broke (the prevTarget).
+  assert.equal(voice.softCeilingFor(800000, hard, 800000, { lossFrac: 0.2, rttMs: 100 }), 680000);
+  // Further stress ratchets it down again, never up — relative to the (lower) prevTarget.
+  assert.equal(voice.softCeilingFor(680000, hard, 600000, { lossFrac: 0.2, rttMs: 100 }), 510000);
+  // A transient stress only nudges down modestly; the cap never goes below MIN.
+  assert.equal(voice.softCeilingFor(160000, hard, 160000, { lossFrac: 0.5, rttMs: 100 }), 150000);
+  // Settled + healthy → slow upward re-probe (+5k), so a recovered link eventually climbs.
+  assert.equal(voice.softCeilingFor(500000, hard, 480000, { lossFrac: 0, rttMs: 100, healthyStreak: 4 }), 505000);
+  // Healthy but NOT yet settled (short streak) → hold the learned cap, don't re-probe.
+  assert.equal(voice.softCeilingFor(500000, hard, 480000, { lossFrac: 0, rttMs: 100, healthyStreak: 2 }), 500000);
+  // Re-probe is clamped at the hard ceiling.
+  assert.equal(voice.softCeilingFor(799000, hard, 780000, { lossFrac: 0, rttMs: 100, healthyStreak: 9 }), 800000);
+});
+
+test("resolutionWithHysteresis: coarsens immediately, refines one tier at a time with margin", () => {
+  // No prior scale: defer to the raw mapping (a fresh sender starts where the target says).
+  assert.equal(voice.resolutionWithHysteresis(undefined, 800000, true).scaleResolutionDownBy, 1);
+  // COARSENING is immediate — target cratered from native to the ¼ floor in one step.
+  assert.equal(voice.resolutionWithHysteresis(1, 300000, true).scaleResolutionDownBy, 4);
+  // REFINING needs headroom: at ½ (prev=2), a target that only just clears the native
+  // threshold (700k) does NOT upshift — 700k×0.8 = 560k still maps to ½.
+  assert.equal(voice.resolutionWithHysteresis(2, 700000, true).scaleResolutionDownBy, 2);
+  // ...but it keeps the higher framerate the bigger target affords at the held resolution.
+  assert.equal(voice.resolutionWithHysteresis(2, 700000, true).maxFramerate, 30);
+  // With real headroom (≥ 700k/0.8 = 875k, clamped here by a high target) it refines — but
+  // only ONE tier per call: ¼ → ½, never ¼ → native in a single jump.
+  assert.equal(voice.resolutionWithHysteresis(4, 1000000, true).scaleResolutionDownBy, 2);
+  // From ½ with ample headroom, one more tier to native.
+  assert.equal(voice.resolutionWithHysteresis(2, 1000000, true).scaleResolutionDownBy, 1);
 });

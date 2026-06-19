@@ -203,6 +203,18 @@ test("classify: any DM message pings", () => {
   assert.equal(d.ping, true);
 });
 
+test("classify: an authorless system line in a DM never pings (no 'Someone' alert)", () => {
+  // "Call ended" et al.: is_system, user_id null. It slips past isNewFromMe and reads as
+  // from-other, but it's not a person pinging you — it must not chime or notify. Still
+  // counts as unread like any new line.
+  const d = classifyIncomingMessage(
+    S0(), evNew({ channel_id: 9, user_id: null, is_system: true, content: "Call ended" }), view({ active: false }));
+  assert.equal(d.isNewFromOther, true);
+  assert.equal(d.pingsMe, false);
+  assert.equal(d.ping, false);
+  assert.equal(d.countUnread, true);
+});
+
 test("classify: muting silences everything — no badge, no ping", () => {
   const d = classifyIncomingMessage(
     S0({ muted: { 9: true } }), evNew({ channel_id: 9, content: "@alice" }), view({ active: false }));

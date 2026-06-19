@@ -59,6 +59,12 @@ func (s *Server) cleanupVoiceForUser(ctx context.Context, userID int64) {
 // surviving client a second chance to detect the call ended — onVoiceState
 // treats an empty roster as a server-side teardown and calls endCallLocally.
 func (s *Server) endDMVoiceCall(ch store.Channel, leaverID int64, wasActive bool) {
+	// Diagnostic: a DM call shouldn't end when a participant merely stops screen
+	// sharing — but it's been seen to (the other party drops while the sharer stays).
+	// Not reproducible on a healthy link, so log who triggered the teardown and via
+	// which path (the caller passes "leave" or "disconnect" as the reason via the log
+	// site) to pin the real trigger from a production capture next time it happens.
+	log.Printf("endDMVoiceCall: ch=%d leaver=%d wasActive=%v leaverStillConnected=%v", ch.ID, leaverID, wasActive, s.hub.IsConnected(leaverID))
 	ids, seq := s.hub.VoiceClear(ch.ID)
 	endMsg, err := json.Marshal(event{Type: "voice.end", Payload: map[string]int64{"channel_id": ch.ID}})
 	if err != nil {

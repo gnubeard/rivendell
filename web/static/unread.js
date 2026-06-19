@@ -44,8 +44,12 @@ export function classifyIncomingMessage(state, evt, view) {
     (evt.payload.reply_to_user_id === me.id ||
      (state.messages[cid] || []).some((m) => m.id === evt.payload.reply_to_id && m.user_id === me.id));
   const mentioned = isNewFromOther && (mentionsUser(evt.payload.content, me.username) || isReplyToMe);
-  // A "ping" is a message directed at you: any DM, an @-mention, or a reply.
-  const pingsMe = isNewFromOther && ((!!ch && ch.is_dm) || mentioned);
+  // A "ping" is a message directed at you: any DM, an @-mention, or a reply. A system
+  // line (e.g. a DM's "Call ended") is authorless — user_id is null, so it slips past
+  // the isNewFromMe check and reads as "from other" — but it's not a person pinging you,
+  // so it must never chime or raise an OS notification (that's the "Someone / Call ended"
+  // alert). Excluded from the ping here; it still counts as unread like any new line.
+  const pingsMe = isNewFromOther && !evt.payload.is_system && ((!!ch && ch.is_dm) || mentioned);
   const muted = isMuted(state, cid);
 
   // "Unseen" = I'm not actively reading it right now: either it's not the open

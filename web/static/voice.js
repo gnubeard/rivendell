@@ -600,6 +600,7 @@ export async function setScreenShareEnabled(on) {
     // Start every share in detail (contentHint set above); the congestion monitor
     // promotes it to motion within a few ticks if the screen turns out to be playing.
     screenMotionState = { active: false, ticks: 0 };
+    resetVideoScaleHysteresis(); // video source changed — drop stale per-peer scale memory
     // A screen share must NOT teach the per-DM "camera was on" memory — the next
     // call should start voice-only, not auto-share the screen.
     saveCameraPref(activeChannelId, false);
@@ -617,6 +618,7 @@ export async function setScreenShareEnabled(on) {
     videoIsScreen = false;
     cameraEnabled = false;
     screenMotionState = { active: false, ticks: 0 };
+    resetVideoScaleHysteresis(); // video source changed — drop stale per-peer scale memory
     teardownLocalVideo();
     saveCameraPref(activeChannelId, false);
   }
@@ -684,6 +686,7 @@ export async function setCameraEnabled(on) {
     localStream.addTrack(camTrack);
     videoIsScreen = false;
     screenMotionState = { active: false, ticks: 0 };
+    resetVideoScaleHysteresis(); // video source changed — drop stale per-peer scale memory
     cameraEnabled = true;
     saveCameraPref(activeChannelId, true);
     setupLocalVideo();
@@ -1347,8 +1350,33 @@ const RTT_STRESS_MS = 600;            // RTT at/above this = stressed
 const LOSS_STRESS = 0.08;             // ≥8% uplink loss over an interval = stressed
 const LOSS_OK = 0.02;                 // ≤2% loss = healthy enough to climb
 const CONGESTION_DECREASE = 0.75;     // multiplicative back-off factor
-const CONGESTION_INCREASE_BPS = 75000; // additive recovery step
-const CLIMB_AFTER_HEALTHY = 2;        // need this many consecutive healthy intervals before climbing
+const CONGESTION_INCREASE_BPS = 40000; // additive recovery step — small, so recovery CREEPS
+const CLIMB_AFTER_HEALTHY = 4;        // consecutive healthy intervals before climbing (~10s @ 2.5s)
+// Recovery is deliberately far slower than back-off (the AIMD asymmetry). The trap on a
+// marginal link: backing off (or dropping resolution) makes loss vanish — but the loss
+// vanished BECAUSE we backed off, not because the link gained capacity. A fast climb
+// reads that clean sample as "healed", probes straight back to the ceiling, and instantly
+// re-chokes (observed: target leapt 600→800k in ~10s, full res restored, fps→1, call
+// dropped). A long streak gate + small step makes the controller PARK near the
+// sustainable rate instead of sawtoothing through the cliff.
+const RES_UPSHIFT_MARGIN = 0.2;       // headroom (frac of target) required to step resolution UP
+// Soft ceiling: a LEARNED cap below the hard roster ceiling. A slow climb still has no
+// memory — it creeps back to the ceiling and re-chokes every time (observed: ~40s of good
+// video, then target crawls 337k→800k, native res restored, fps→1, ICE failed). So on each
+// stress we ratchet this cap to just under the level that broke; the target climbs only
+// INTO it and parks. It re-probes upward by a slow creep when the link is settled, so a
+// genuinely-improved connection recovers over ~a minute, while a persistently-bad one
+// converges to its sustainable rate (a small wiggle near it, not the full cliff dive).
+const SOFT_CEILING_BACKOFF = 0.85;    // on stress, cap to 85% of the bitrate that just broke
+const SOFT_CEILING_RECOVER_BPS = 5000; // slow upward re-probe per settled interval (~2 kbps/s)
+// Motion-on-a-constrained-link resolution bias. A screen playing video/a game emits
+// expensive frames (a tab switch is a near-full keyframe); on a link that has shown stress
+// (soft ceiling ratcheted below MOTION_CONSTRAINED_FRAC of the hard ceiling) we bias the
+// RESOLUTION decision down a tier (treat it as MOTION_RES_BIAS of the bitrate) so those
+// bursts stay drainable, while leaving the actual bitrate cap and a healthy/wired link's
+// full-resolution motion untouched.
+const MOTION_CONSTRAINED_FRAC = 0.9;  // soft ceiling below this frac of hard ceiling ⇒ constrained
+const MOTION_RES_BIAS = 0.5;          // bias factor on the resolution target for constrained motion
 // Resolution/framerate stepping by adaptive target. Keyed on ABSOLUTE bps (encoder
 // CPU cost tracks pixels/sec, not the ratio to a roster ceiling), so a big roster —
 // whose per-sender slice is already small — also renders at a coarser scale, which
@@ -1419,6 +1447,26 @@ export function congestionTarget(prev, ceiling, sig) {
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, target));
 }
 
+// softCeilingFor tracks a LEARNED cap below the hard roster ceiling — "this is where the
+// link breaks". The plain climb has no memory: every time loss clears (because we backed
+// off, not because the link healed) the target creeps back to the ceiling and re-chokes,
+// a sawtooth that eventually drops the call. On stress we ratchet the cap down to just
+// under the bitrate that broke (SOFT_CEILING_BACKOFF of prevTarget), so the target climbs
+// only INTO this cap and PARKS. When the link is settled it re-probes upward by a slow
+// creep (SOFT_CEILING_RECOVER_BPS), so a genuinely-improved connection recovers over ~a
+// minute while a persistently-bad one converges to its sustainable rate. Clamped to
+// [MIN, hardCeiling]. Pure; exported for testing.
+export function softCeilingFor(prev, hardCeiling, prevTarget, sig) {
+  let sc = typeof prev === "number" && prev > 0 ? prev : hardCeiling;
+  if (uplinkStressed(sig)) {
+    const brokeAt = typeof prevTarget === "number" && prevTarget > 0 ? prevTarget : sc;
+    sc = Math.min(sc, Math.floor(brokeAt * SOFT_CEILING_BACKOFF));
+  } else if ((sig.healthyStreak || 0) >= CLIMB_AFTER_HEALTHY) {
+    sc += SOFT_CEILING_RECOVER_BPS;
+  }
+  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(hardCeiling, sc));
+}
+
 // detectScreenMotion advances the screen-share motion latch from one fps sample.
 // state = { active, ticks }. Hysteretic: needs SCREEN_MOTION_ENTER_TICKS consecutive
 // high-fps samples to engage and SCREEN_MOTION_EXIT_TICKS low-fps to disengage, so a
@@ -1474,6 +1522,31 @@ export function videoScaleForTarget(target, isScreen = false, motion = false) {
   }
   if (target >= VIDEO_SCALE_HALF_BPS) return { scaleResolutionDownBy: 2, maxFramerate: 20 };
   return { scaleResolutionDownBy: 4, maxFramerate: 15 };
+}
+
+// resolutionWithHysteresis damps UPWARD resolution changes so a wiggling bitrate target
+// can't flap the encoder's resolution. Each resolution change forces a keyframe — a big,
+// expensive frame — so bouncing native↔½ every couple of seconds actively hurts a starved
+// link (and looks awful). COARSENING (the target dropped) applies immediately: relief
+// should be prompt. REFINING toward native res happens at most ONE tier per call (4→2→1)
+// and only when the target clears the finer tier by RES_UPSHIFT_MARGIN of headroom — so
+// the target must sit comfortably above a threshold, not just graze it, before resolution
+// climbs. The bitrate (maxBitrate) still tracks the raw target; only the scale is damped.
+// `prevScale` is the last applied scaleResolutionDownBy (per peer). Pure; exported for testing.
+export function resolutionWithHysteresis(prevScale, target, isScreen = false, motion = false) {
+  const want = videoScaleForTarget(target, isScreen, motion);
+  const prev = prevScale === 2 || prevScale === 4 ? prevScale : want.scaleResolutionDownBy;
+  if (want.scaleResolutionDownBy >= prev) return want; // coarser or unchanged: apply now
+  // Wants finer res. Require headroom: re-evaluate at a margin-reduced target.
+  const damped = videoScaleForTarget(Math.floor(target * (1 - RES_UPSHIFT_MARGIN)), isScreen, motion);
+  if (damped.scaleResolutionDownBy >= prev) {
+    // Not enough margin to refine — hold the current resolution, but take the higher
+    // framerate the (now larger) target affords; a coarser frame can run fast cheaply.
+    return { scaleResolutionDownBy: prev, maxFramerate: want.maxFramerate };
+  }
+  // Margin cleared: step a single tier finer (4→2→1), never past what the target maps to.
+  const stepped = Math.max(prev === 4 ? 2 : 1, want.scaleResolutionDownBy);
+  return { scaleResolutionDownBy: stepped, maxFramerate: want.maxFramerate };
 }
 
 // readUplinkSignals extracts the congestion signals for our outbound video from
@@ -1538,12 +1611,16 @@ async function monitorCongestion() {
     meta.healthyStreak = uplinkStressed(sig) ? 0 : (meta.healthyStreak || 0) + 1;
     sig.healthyStreak = meta.healthyStreak;
     const prevTarget = typeof meta.videoTarget === "number" ? meta.videoTarget : ceiling;
-    const next = congestionTarget(prevTarget, ceiling, sig);
+    // Learn where this link breaks and climb only into that soft ceiling, so the target
+    // parks near the sustainable rate instead of re-probing the hard ceiling every cycle.
+    meta.softCeiling = softCeilingFor(meta.softCeiling, ceiling, prevTarget, sig);
+    const effCeiling = Math.min(ceiling, meta.softCeiling);
+    const next = congestionTarget(prevTarget, effCeiling, sig);
     if (next !== meta.videoTarget) {
       meta.videoTarget = next;
       applyVideoBitrateCaps(uid, pc);
       dbgEvent(uid, "bitrate-adapt", {
-        target: next, lossFrac: sig.lossFrac, rttMs: sig.rttMs,
+        target: next, ceiling: effCeiling, lossFrac: sig.lossFrac, rttMs: sig.rttMs,
         scale: videoScaleForTarget(next, videoIsScreen, videoIsScreen && screenMotionState.active).scaleResolutionDownBy, cpu: sig.cpuLimited,
       });
     }
@@ -1581,16 +1658,47 @@ function stopCongestionMonitor() {
 // connection reaching "connected", on a roster-size change (onVoiceState), and
 // from the congestion monitor when a peer's target moves. A setParameters
 // failure never touches the call.
+// resetVideoScaleHysteresis clears the per-peer applied-scale memory on a video-source
+// change (camera↔screen), so a stale scale from the old source can't pin the new one's
+// resolution while the hysteresis slowly refines it.
+function resetVideoScaleHysteresis() {
+  for (const meta of peerMeta.values()) meta.videoScale = undefined;
+}
+
 function applyVideoBitrateCaps(remoteUserId, pc) {
   const cap = effectiveVideoCap(remoteUserId);
-  const shape = { maxBitrate: cap, ...videoScaleForTarget(cap, videoIsScreen, videoIsScreen && screenMotionState.active) };
+  const meta = peerMeta.get(remoteUserId);
+  const hardCeiling = bitrateCapFor(participants.length, "video");
+  const motion = videoIsScreen && screenMotionState.active;
+  // A link that has shown real stress ratchets its soft ceiling below the hard ceiling.
+  const constrained = !!meta && typeof meta.softCeiling === "number" && meta.softCeiling < hardCeiling * MOTION_CONSTRAINED_FRAC;
+  // #2: For a screen playing MOTION on a constrained link, bias the RESOLUTION decision
+  // (not the bitrate) toward smaller frames. A tab-switch/animation keyframe at full res
+  // is what stalls a marginal uplink; the encoder can spend the same bitrate on a sharper
+  // small frame instead. On a healthy link (wired) `constrained` is false, so motion keeps
+  // full resolution. Bitrate cap stays the real target — only the scale is biased.
+  const resTarget = (motion && constrained) ? Math.floor(cap * MOTION_RES_BIAS) : cap;
+  // Damp resolution flapping (see resolutionWithHysteresis): refine toward native res
+  // slowly, coarsen at once. Track the applied scale per peer so the next tick knows where.
+  const prevScale = meta ? meta.videoScale : undefined;
+  const scale = resolutionWithHysteresis(prevScale, resTarget, videoIsScreen, motion);
+  if (meta) meta.videoScale = scale.scaleResolutionDownBy;
+  const shape = { maxBitrate: cap, ...scale };
+  // #1: Let the encoder make the per-frame trade too — it reacts to a scene change the
+  // instant it happens, far faster than our 2.5s monitor. A screen playing motion sheds
+  // RESOLUTION to hold framerate; static text holds resolution (keep it crisp); a camera
+  // stays balanced. This is the standards knob for "too much motion → drop pixels not fps".
+  const degradationPreference = videoIsScreen ? (motion ? "maintain-framerate" : "maintain-resolution") : "balanced";
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== "video") continue;
     let params;
     try { params = sender.getParameters(); } catch { continue; }
     const capped = withVideoEncodingCaps(params, shape);
-    if (!capped) continue;
-    try { Promise.resolve(sender.setParameters(capped)).catch(() => {}); } catch { /* best-effort */ }
+    const target = capped || params;
+    const prefChanged = target.degradationPreference !== degradationPreference;
+    if (!capped && !prefChanged) continue; // nothing to apply
+    target.degradationPreference = degradationPreference;
+    try { Promise.resolve(sender.setParameters(target)).catch(() => {}); } catch { /* best-effort */ }
   }
 }
 
@@ -1812,7 +1920,7 @@ function createPC(remoteUserId) {
   // are expected to fail; renegotiatePending records that we owe the peer an
   // offer once we're back in "stable" — set when our own offer was rolled back
   // to accept a colliding one, or when negotiationneeded fired mid-negotiation).
-  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false, videoTarget: undefined, lossPrev: null, healthyStreak: 0 });
+  peerMeta.set(remoteUserId, { restarts: 0, timer: null, makingOffer: false, ignoreOffer: false, renegotiatePending: false, videoTarget: undefined, lossPrev: null, healthyStreak: 0, videoScale: undefined, softCeiling: undefined });
   if (dbg) { try { dbg.attachPeer(remoteUserId, pc); } catch { /* no-op */ } }
 
   if (localStream) {

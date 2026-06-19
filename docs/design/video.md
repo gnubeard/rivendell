@@ -46,10 +46,25 @@ Voice/WebRTC (this is the design summary; trust CLAUDE.md for the exact rules):
 - **Per-sender bitrate cap + AIMD congestion control.** The 800 kbps per-sender cap
   is a ceiling, not a freeze fix; `bitrateCapFor` shrinks it as the roster grows, and
   per-peer congestion control (`monitorCongestion`, every 2.5 s) lowers the live
-  target on remote loss/RTT or a CPU-pinned local encoder, climbing back only after
-  `CLIMB_AFTER_HEALTHY` healthy intervals (the anti-oscillation gate). The full
-  encoding shape (`maxBitrate` + `scaleResolutionDownBy`/`maxFramerate`) is applied
-  together — bitrate-only back-off does not relieve a CPU-bound phone encoder.
+  target on remote loss/RTT or a CPU-pinned local encoder. **Recovery is deliberately
+  slow** (the AIMD asymmetry): climb only after `CLIMB_AFTER_HEALTHY`=4 healthy
+  intervals, by a small +40k step — a fast climb misreads "loss cleared because we
+  backed off" as "the link healed", re-probes the ceiling, and re-chokes. **The climb
+  has memory.** `softCeilingFor` learns a per-peer cap (`meta.softCeiling`): on each
+  stress it ratchets to 85% of the bitrate that just broke; it re-probes up only by a
+  slow +5k per settled interval. So the target PARKS near the sustainable rate instead
+  of sawtoothing through the cliff — the fix for a marginal wifi link where the
+  unbounded climb repeatedly restored full bitrate/native res and dropped the call
+  (telemetry: target crawling 337k→800k, fps→1, ICE failed). The full encoding shape
+  (`maxBitrate` + `scaleResolutionDownBy`/`maxFramerate`) is applied together, filtered
+  through `resolutionWithHysteresis` (coarsen immediately, refine toward native res one
+  tier at a time and only with 20% headroom, so a wiggling target can't flap resolution
+  — each change forces an expensive keyframe). `applyVideoBitrateCaps` also sets the
+  sender's `degradationPreference` (screen+motion ⇒ `maintain-framerate`, so the encoder
+  itself sheds resolution per-frame on a tab-switch/animation keyframe; screen+detail ⇒
+  `maintain-resolution`; camera ⇒ `balanced`) and biases a constrained screen's motion
+  resolution down a tier (`MOTION_RES_BIAS`). Bitrate-only back-off does not relieve a
+  CPU-bound phone encoder.
 - **Screen share** is a *second video source* on the single video slot, mutually
   exclusive with the camera (`setScreenShareEnabled`). Camera↔screen swaps the source
   on the existing m-line via `replaceTrack` (instant, no reneg); first-enable
