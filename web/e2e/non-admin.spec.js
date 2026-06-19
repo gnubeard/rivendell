@@ -134,6 +134,11 @@ test.describe("a plain member", () => {
 
     await page2.reload();
     await expect(page2.locator("#me-name")).toBeVisible();
+    // This test depends on the live member.remove broadcast (unlike the other reload
+    // sites, which drive off local REST state). After a reload the WS reconnects last,
+    // so wait for it to be online or the broadcast can outrun the socket and be missed
+    // (same race as uiLogin's #conn-status wait).
+    await expect(page2.locator("#conn-status")).toHaveClass(/\bonline\b/, { timeout: 15_000 });
     const row = page2.locator(`#channel-list li[data-ch-id="${priv}"]`);
     await expect(row).toBeVisible();
 
