@@ -4,8 +4,12 @@
 #
 # The e2e suite takes minutes, so it does NOT belong in pre-commit (that would
 # just train --no-verify). Pushes are rare, so the latency lands where it's
-# affordable. We only run it when the push range touches runtime source
-# (cmd/server, internal/, web/) — a docs/tooling-only push skips it.
+# affordable. We run it only when BOTH hold:
+#   1. the ref being pushed is main — main is the release gate. develop redeploys
+#      to the test env frequently, and the common flow pushes develop AND main
+#      together; gating on main means the multi-minute suite runs once, not twice.
+#   2. the push range touches runtime source (cmd/server, internal/, web/) — a
+#      docs/tooling-only push skips it.
 #
 # Uses the e2e plumbing already wired in Makefile + the git-ignored
 # Makefile.local (chat_e2e DB, browsers installed). Chromium only; the WebKit
@@ -28,6 +32,8 @@ run_e2e=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   # Branch deletion (local side all-zero) — nothing to test.
   [ "$local_sha" = "$ZERO" ] && continue
+  # Gate on main only — see the header. Other branches (develop, features) skip.
+  [ "$remote_ref" = "refs/heads/main" ] || continue
 
   if [ "$remote_sha" = "$ZERO" ]; then
     # New branch on the remote: no cheap range to diff. Be safe and run e2e.

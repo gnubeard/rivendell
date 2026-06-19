@@ -108,7 +108,9 @@ The git hooks (`make install-hooks`) now **enforce** this — they are the gate,
 the deploy fires from `post-commit`. `pre-commit` runs the fast tier whenever source
 is staged (gofmt + `make vet` + `make test-go` when Go changed; `make test-web` when
 `web/` changed) on any branch, then the develop-only version bump. `pre-push` runs the
-slow `make test-e2e` when the push range touches `cmd/server|internal/|web/`. Escape
+slow `make test-e2e` only when pushing `main` (the release gate) and the push range
+touches `cmd/server|internal/|web/` — a `develop`/feature push skips it, so pushing
+develop+main together runs the suite once. Escape
 hatches for deliberate WIP (prefer these over `--no-verify`, which disables
 everything at once): `RUN_TESTS=0 git commit …` (skip the test gate),
 `RUN_BUMP=0 git commit …` (skip the version bump), `RUN_DEPLOY=0 git commit …` (skip

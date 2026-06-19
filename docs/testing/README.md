@@ -59,8 +59,10 @@ only checkpoint upstream of the deploy.
   gofmt + `make vet` + `make test-go` when Go changed, `make test-web` when `web/`
   changed. Then, on `develop`, it auto-bumps the patch digit of `Version` when a
   *shipping* source file is staged.
-- **`pre-push`** runs the slow `make test-e2e` when the push range touches
-  `cmd/server`, `internal/`, or `web/` — the gate for shipping to `main`.
+- **`pre-push`** runs the slow `make test-e2e` only when pushing **`main`** and the
+  push range touches `cmd/server`, `internal/`, or `web/`. `main` is the release
+  gate; a `develop` (or feature) push skips it, so the common "push develop + main"
+  flow runs the multi-minute suite once, not twice.
 
 What counts as a *shipping* change (and so triggers the version bump and deploy) is
 the `DEPLOY_RE` allowlist — server code, the runtime web assets (`web/static`,
