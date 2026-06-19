@@ -37,11 +37,17 @@ export function isNearBottom(scrollHeight, scrollTop, clientHeight, threshold = 
 // assignment — text wrapping, and on mobile the visual viewport / URL bar — which
 // would otherwise leave the view a few pixels short of the bottom.
 export function scrollToBottom(wrap) {
-  wrap.scrollTop = wrap.scrollHeight;
-  requestAnimationFrame(() => {
+  // Pin across two frames, not one: a single assignment lands short because
+  // layout keeps settling after it — text wrapping, the mobile visual viewport,
+  // and crucially an <img> whose `load` just fired but whose decoded height the
+  // browser hasn't reflowed in yet (so scrollHeight is still stale). The extra
+  // rAF reads scrollHeight again once those have applied.
+  const pin = () => {
     wrap.scrollTop = wrap.scrollHeight;
     requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
-  });
+  };
+  pin();
+  requestAnimationFrame(pin);
   // Images load asynchronously and expand the container after the rAF pass.
   // Re-pin when each one finishes, but only if the reader hasn't manually
   // scrolled away since we pinned.
@@ -56,8 +62,12 @@ export function scrollToBottom(wrap) {
     if (media.complete) return;
     media.addEventListener("load", () => {
       if (!wrap.contains(media)) return; // image is from a prior channel render
+      // pin() (not a bare scrollTop set): `load` can fire before the browser
+      // reflows the image to its full height, so the synchronous read would pin
+      // short and the reflow would then strand the reader. The trailing rAF
+      // re-pins once the height is in.
       if (wrap.scrollTop >= targetTop - 5)
-        wrap.scrollTop = wrap.scrollHeight;
+        pin();
     }, { once: true });
   });
 }
