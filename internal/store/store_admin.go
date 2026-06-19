@@ -4,28 +4,6 @@ import (
 	"context"
 )
 
-// ListAdminUserIDs returns the ids of active admins. Admins hold a read/write
-// bypass on private (non-DM) channels even when they aren't members, so
-// realtime audiences for those channels include them — keeping the realtime
-// delivery model in step with canAccessChannel.
-func (s *Store) ListAdminUserIDs(ctx context.Context) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM users WHERE is_active AND role = 'admin'`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
 // CountAdmins is used to guard against demoting/deactivating the last admin.
 func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	var n int

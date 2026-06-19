@@ -3978,13 +3978,12 @@ const refreshEmojiManagerIfOpen = adminPanel.refreshEmojiManagerIfOpen;
 const PRESENCE_DEBOUNCE_MS = 1500;
 const pendingPresence = new Map(); // userId -> timeout handle
 
-// applyPresence is a cross-subsystem FAN-OUT, not a pure state apply: beyond folding
+// fanOutPresence is a cross-subsystem FAN-OUT, not a pure state apply: beyond folding
 // the event into `state`, it repaints four surfaces (members/me/DMs/DM-header) and,
 // on an offline flip, tears down any secret session with that peer and repaints the
-// typing indicator (applyEvent already swept their typing). Renaming it to read as a
-// fan-out is a proposed-only cleanup; for now, know that calling it does more than
-// "apply the event".
-function applyPresence(evt) {
+// typing indicator (applyEvent already swept their typing). The name reads as a
+// fan-out deliberately — calling it does more than "apply the event".
+function fanOutPresence(evt) {
   state = S.applyEvent(state, evt);
   renderMembers();
   renderMe();
@@ -4009,14 +4008,14 @@ function schedulePresenceUpdate(evt) {
     knownUser: !!cur,
     alreadyMatches: cur ? S.presenceMatches(cur, evt.payload) : false,
   });
-  if (decision === "now") { applyPresence(evt); return; } // self: deliberate, no debounce
+  if (decision === "now") { fanOutPresence(evt); return; } // self: deliberate, no debounce
   // Any non-self update supersedes a pending one for the same user.
   const pending = pendingPresence.get(uid);
   if (pending) { clearTimeout(pending); pendingPresence.delete(uid); }
   if (decision === "drop") return; // unknown user, or a flip that reverted in-window
   pendingPresence.set(uid, setTimeout(() => {
     pendingPresence.delete(uid);
-    applyPresence(evt);
+    fanOutPresence(evt);
   }, PRESENCE_DEBOUNCE_MS));
 }
 

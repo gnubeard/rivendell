@@ -5,8 +5,9 @@
 // global Notification object and is feature-detected + try/caught throughout.
 //
 // Scope: foreground notifications only — these fire while a tab is open or
-// backgrounded. True background delivery when the app is fully closed (Web Push)
-// is a separate, deferred piece of work.
+// backgrounded. True background delivery when the app is fully closed is handled
+// separately by Web Push (push.go + web/sw.js + the subscription lifecycle in
+// notifyui.js).
 
 // shouldNotify decides whether to raise an OS notification for a ping. Pure.
 //   permission — the current Notification.permission ("granted"/"denied"/"default")
