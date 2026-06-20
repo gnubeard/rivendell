@@ -65,7 +65,7 @@ web/static/                   app.js (orchestrator; decomposed as far as is
                               sub-system: createHistoryPaging factory owns the
                               older/newer paging, sentinels, history-window flags +
                               banner; free exports PAGE/NEAR_BOTTOM_PX/isNearBottom/
-                              scrollToBottom; loadChannel/jumpToMessage stay in app.js
+                              settleScroll/scrollToBottom; loadChannel/jumpToMessage stay in app.js
                               and drive it via accessors),
                               trim.js (pure trimMessageContent — mirrors the server's
                               TrimRight; see the trim-parity invariant), grouping.js

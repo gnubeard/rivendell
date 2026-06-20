@@ -142,7 +142,7 @@ let activeMemberIds = null;
 // Scrollback: messages load a page at a time as you scroll. The paging state
 // machine (load guards, history-window flags, sentinels) lives in history.js
 // behind `historyPaging` (created below); PAGE/NEAR_BOTTOM_PX/isNearBottom/
-// scrollToBottom are its scroll-geometry exports, imported above.
+// settleScroll/scrollToBottom are its scroll-geometry exports, imported above.
 let flashMessageId = null;         // id of a jumped-to message to highlight; survives re-renders
 
 // Voice / call UI state lives in voiceui.js (the call strip, ring banner, PTT,
