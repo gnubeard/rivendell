@@ -59,7 +59,7 @@ import { createMobileCtx } from "./mobilectx.js";
 import { createVideoGrid } from "./videogrid.js";
 import { createVoiceUI } from "./voiceui.js";
 import { createNotifyUI } from "./notifyui.js";
-import { isNearBottom, scrollToBottom, settleScroll, PAGE, createHistoryPaging } from "./history.js";
+import { isNearBottom, scrollToBottom, PAGE, createHistoryPaging } from "./history.js";
 import { trimMessageContent } from "./trim.js";
 import { groupingAnchor as computeGroupingAnchor, liveDeletedStillLoaded } from "./grouping.js";
 
@@ -142,7 +142,7 @@ let activeMemberIds = null;
 // Scrollback: messages load a page at a time as you scroll. The paging state
 // machine (load guards, history-window flags, sentinels) lives in history.js
 // behind `historyPaging` (created below); PAGE/NEAR_BOTTOM_PX/isNearBottom/
-// settleScroll/scrollToBottom are its scroll-geometry exports, imported above.
+// scrollToBottom are its scroll-geometry exports, imported above.
 let flashMessageId = null;         // id of a jumped-to message to highlight; survives re-renders
 
 // Voice / call UI state lives in voiceui.js (the call strip, ring banner, PTT,
@@ -1476,29 +1476,25 @@ async function markActiveChannelRead() {
   }
 }
 
-// scrollToUnreadMarker settles the message list so the "New messages" divider
-// sits at the top of the viewport — UNLESS the unread run is shorter than a
+// scrollToUnreadMarker scrolls the message list so the "New messages" divider is
+// at the top of the visible area — UNLESS the unread run is shorter than a
 // viewport (the marker is effectively at the bottom), in which case it sticks to
-// the bottom rather than dragging the marker up and over-scrolling. Both outcomes
-// re-settle across frames and late image loads via settleScroll, so neither lands
-// short while images near the tail decode. The top-vs-bottom decision is
-// re-evaluated on every pin because an image below the marker decoding can grow
-// the run past a viewport. Returns true if a marker was found (handled here),
-// false if none exists (caller should fall back to scrollToBottom).
+// the bottom via scrollToBottom rather than dragging the marker up and
+// over-scrolling. scrollToBottom carries the image-aware re-pinning the bottom
+// case needs (a bare scrollTop set lands short while tail images decode); the
+// marker-at-top case needs none — the browser's scroll anchoring keeps the marker
+// pinned as images above it expand. Returns true if a marker was found (handled
+// here), false if none exists (caller should fall back to scrollToBottom).
 function scrollToUnreadMarker() {
   const wrap = $("#message-list");
   const marker = wrap.querySelector(".unread-marker");
   if (!marker) return false;
-  settleScroll(wrap, () => {
-    if (!wrap.contains(marker)) return wrap.scrollTop; // channel switched mid-settle
-    const top = marker.offsetTop - wrap.offsetTop - 8;
-    // Less than ~a viewport of unread after the marker → it's at the bottom;
-    // stick to the bottom. Reuses the single near-bottom predicate so this agrees
-    // with every other scroll-geometry check.
-    return isNearBottom(wrap.scrollHeight, top, wrap.clientHeight)
-      ? wrap.scrollHeight - wrap.clientHeight
-      : top;
-  });
+  const top = marker.offsetTop - wrap.offsetTop - 8;
+  // Less than ~a viewport of unread after the marker → treat it as at the bottom.
+  // Reuses the single near-bottom predicate so this agrees with every other
+  // scroll-geometry check.
+  if (isNearBottom(wrap.scrollHeight, top, wrap.clientHeight)) scrollToBottom(wrap);
+  else wrap.scrollTop = top;
   return true;
 }
 
