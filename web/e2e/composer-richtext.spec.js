@@ -284,3 +284,43 @@ test("a fenced ``` code block styles in the composer and round-trips byte-identi
   expect(await valueOf()).toBe("```js\nconst x = 1;\n```");          // exact source preserved
   await page.evaluate(() => { document.querySelector("#composer-input").value = ""; });
 });
+
+test("undo does NOT bridge a channel switch (loadChannel must call resetHistory)", async () => {
+  // Invariant: any out-of-band .value set (channel switch, send-clear, error-restore)
+  // calls rich.resetHistory() so the undo stack can't reach across that boundary. Here:
+  // type in the DM, switch channels, then no amount of undo may resurrect the DM text.
+  await input().click();
+  await page.keyboard.type("alpha");
+  expect(await valueOf()).toBe("alpha");
+
+  // Switch to a fresh public channel (the seed has none, so create one).
+  const channelId = await page.evaluate(async () => {
+    const ch = await fetch("/api/channels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ name: "rt-undo-boundary", topic: "", is_private: false }),
+    }).then((r) => r.json());
+    return ch.id;
+  });
+  await page.click(`#channel-list li[data-ch-id="${channelId}"]`);
+  await expect(page.locator(`#channel-list li[data-ch-id="${channelId}"]`)).toHaveClass(/active/);
+
+  // Fresh channel → empty composer (this out-of-band set reset the history).
+  await input().click();
+  expect(await valueOf()).toBe("");
+  await page.keyboard.type("beta");
+  expect(await valueOf()).toBe("beta");
+
+  // Undo the beta burst, then keep undoing: the stack must bottom out at "", never
+  // bridge back into the DM's "alpha".
+  await page.keyboard.press("ControlOrMeta+z");
+  expect(await valueOf()).toBe("");
+  await page.keyboard.press("ControlOrMeta+z");
+  expect(await valueOf()).toBe(""); // not "alpha" — the boundary was reset
+
+  // Restore the DM as the active channel for hygiene.
+  await page.evaluate(() => { document.querySelector("#composer-input").value = ""; });
+  await page.locator("#dm-list li", { hasText: USER2 }).first().click();
+  await expect(page.locator("#composer-input")).toBeVisible();
+});

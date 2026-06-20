@@ -47,6 +47,7 @@ const FIDELITY_CASES = [
   "~~strike~~ and `code`",
   "||spoiler||",
   "nested **bold _and italic_ together**",
+  "nested **bold *and italic* together**", // * (not _) nested italic in bold
   "trailing marker **",
   "lone * star and _ underscore",
   "multi\nline\n**bold** on line 2",
@@ -73,6 +74,19 @@ for (const input of FIDELITY_CASES) {
 test("bold wraps the run and keeps both ** markers dimmed", () => {
   const out = decorate("a **b** c");
   assert.match(out, /<span class="md-strong"><span class="md-mk">\*\*<\/span>b<span class="md-mk">\*\*<\/span><\/span>/);
+});
+
+test("bold containing a nested *italic* decorates both (regression)", () => {
+  // The bold body holds a lone `*` (the nested italic markers). The old `[^*]+`
+  // body matched no bold at all, so only the inner italic lit up and the ** stayed
+  // plain — diverging from the rendered message. Both runs must now decorate.
+  const out = decorate("a **b *c* d**");
+  assert.match(out, /md-strong/, "the ** run is bold");
+  assert.match(out, /md-em/, "the inner *c* is italic");
+  assert.ok(
+    out.indexOf('class="md-strong"') < out.indexOf('class="md-em"'),
+    "the italic is nested inside the bold",
+  );
 });
 
 test("italic with * and with _ both produce md-em", () => {

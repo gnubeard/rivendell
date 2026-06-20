@@ -36,7 +36,9 @@ const mk = (s) => `<span class="md-mk">${s}</span>`;
 // wraps its match (markers included) rather than stripping the markers. Order
 // matches format.js: bold before italic so `**` isn't eaten by `*`.
 function emphasize(s) {
-  s = s.replace(/\*\*([^*]+)\*\*/g, (_, x) => `<span class="md-strong">${mk("**")}${x}${mk("**")}</span>`);
+  // Bold body may hold a lone `*` (a nested *italic* marker) but never `**`; the
+  // later italic pass decorates that nested run. Mirrors format.js's bold regex.
+  s = s.replace(/\*\*((?:\*(?!\*)|[^*])+?)\*\*/g, (_, x) => `<span class="md-strong">${mk("**")}${x}${mk("**")}</span>`);
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, (_, pre, x) => `${pre}<span class="md-em">${mk("*")}${x}${mk("*")}</span>`);
   s = s.replace(/(^|[^_])_([^_\n]+)_/g, (_, pre, x) => `${pre}<span class="md-em">${mk("_")}${x}${mk("_")}</span>`);
   s = s.replace(/~~([^~]+)~~/g, (_, x) => `<span class="md-del">${mk("~~")}${x}${mk("~~")}</span>`);

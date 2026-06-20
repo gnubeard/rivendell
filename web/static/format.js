@@ -95,8 +95,11 @@ function applyEmoticons(s) {
 // (that is what keeps underscores in a URL from being chewed into <em>).
 function inlineMarkup(escaped, meLower, channels, usernames) {
   let out = applyEmoticons(escaped);
-  // Bold then italic (order matters so ** isn't eaten by *).
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Bold then italic (order matters so ** isn't eaten by *). The bold body may
+  // contain a single `*` (a nested *italic* marker) but never `**` — `\*(?!\*)`
+  // admits a lone star, `[^*]` the rest; non-greedy so adjacent bold spans don't
+  // merge. The later italic pass then styles the nested run inside the <strong>.
+  out = out.replace(/\*\*((?:\*(?!\*)|[^*])+?)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");

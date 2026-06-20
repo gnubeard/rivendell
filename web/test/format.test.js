@@ -176,6 +176,19 @@ test("underscores in a URL never get italicized (no mangling)", () => {
   assert.ok(!out.includes("<em>"), "no stray italic from the underscores");
 });
 
+test("asterisks in a bare URL never bold; markup outside it still applies", () => {
+  // Pins "links are extracted BEFORE the inlineMarkup pass" for the bold rule too
+  // (the underscore/italic case is the test above). A refactor to a single sweep
+  // that linkified LAST would turn the **…** inside the URL into <strong> and split
+  // the href. The link scanner is one regex (makeLinkRe); inlineMarkup only runs on
+  // the gaps between links.
+  const out = formatMessage("**hi** https://example.com/a**b**c");
+  assert.ok(out.includes("<strong>hi</strong>"), "real bold outside the URL still renders");
+  assert.ok(out.includes('href="https://example.com/a**b**c"'), "full URL (asterisks and all) preserved in href");
+  assert.ok(out.includes(">https://example.com/a**b**c</a>"), "full URL preserved as link text");
+  assert.equal((out.match(/<strong>/g) || []).length, 1, "no stray bold from the URL's asterisks");
+});
+
 test("markdown link [text](url) renders as an anchor", () => {
   const out = formatMessage("see [the docs](https://example.com/docs)");
   assert.ok(out.includes('<a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">the docs</a>'));
@@ -421,6 +434,32 @@ test("list adjacent to text has no extra <br> separators", () => {
 test("*foo* italicizes but * foo lists (no collision)", () => {
   assert.equal(formatMessage("*foo*"), "<em>foo</em>");
   assert.equal(formatMessage("* foo"), "<ul><li>foo</li></ul>");
+});
+
+test("bold and italic render inside list items", () => {
+  // Each <li>'s content runs through the inline pipeline, so markdown styles work
+  // inside a bullet — including a bold/italic split across two items.
+  assert.equal(
+    formatMessage("* **bold** and *italic*"),
+    "<ul><li><strong>bold</strong> and <em>italic</em></li></ul>",
+  );
+  assert.equal(
+    formatMessage("- **a**\n- *b*"),
+    "<ul><li><strong>a</strong></li><li><em>b</em></li></ul>",
+  );
+});
+
+test("bold may contain a nested italic (regression: ** body with a lone *)", () => {
+  // The bold body holds a single `*` (the *why* markers). The old `[^*]+` body
+  // forbade any star, so the bold rule didn't match at all and the ** leaked as
+  // literal text while only the inner italic rendered. Pins both directions.
+  assert.equal(formatMessage("**a *b* c**"), "<strong>a <em>b</em> c</strong>");
+  assert.equal(
+    formatMessage("- **a point, with the *why*.**"),
+    "<ul><li><strong>a point, with the <em>why</em>.</strong></li></ul>",
+  );
+  // adjacent bold spans must not merge across the gap (non-greedy body)
+  assert.equal(formatMessage("**x** and **y**"), "<strong>x</strong> and <strong>y</strong>");
 });
 
 test("a link inside escaped text keeps entities intact", () => {

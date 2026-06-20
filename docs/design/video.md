@@ -35,8 +35,11 @@ scope.
 
 ### Camera, congestion control, and screen share
 
-These three are built and their load-bearing invariants are kept in CLAUDE.md under
-Voice/WebRTC (this is the design summary; trust CLAUDE.md for the exact rules):
+These three are built; **this section is the source of truth for their load-bearing
+invariants** (CLAUDE.md carries only a one-line pointer here, and the `voice.js`
+comments around `monitorCongestion`/`applyVideoBitrateCaps` are the implementation
+reference). The hard DON'Ts are called out inline — heed them before touching the
+congestion controller:
 
 - **Mid-call camera toggle** uses `onnegotiationneeded` to drive the same
   offer/answer flow that already exists; `setCameraEnabled` flips the track's
@@ -55,16 +58,22 @@ Voice/WebRTC (this is the design summary; trust CLAUDE.md for the exact rules):
   slow +5k per settled interval. So the target PARKS near the sustainable rate instead
   of sawtoothing through the cliff — the fix for a marginal wifi link where the
   unbounded climb repeatedly restored full bitrate/native res and dropped the call
-  (telemetry: target crawling 337k→800k, fps→1, ICE failed). The full encoding shape
-  (`maxBitrate` + `scaleResolutionDownBy`/`maxFramerate`) is applied together, filtered
-  through `resolutionWithHysteresis` (coarsen immediately, refine toward native res one
-  tier at a time and only with 20% headroom, so a wiggling target can't flap resolution
-  — each change forces an expensive keyframe). `applyVideoBitrateCaps` also sets the
-  sender's `degradationPreference` (screen+motion ⇒ `maintain-framerate`, so the encoder
-  itself sheds resolution per-frame on a tab-switch/animation keyframe; screen+detail ⇒
+  (telemetry: target crawling 337k→800k, fps→1, ICE failed). `applyVideoBitrateCaps`
+  applies the full encoding shape together via `withVideoEncodingCaps`: `effectiveVideoCap`
+  (`maxBitrate`) plus `videoScaleForTarget` (`scaleResolutionDownBy`/`maxFramerate`),
+  filtered through `resolutionWithHysteresis` (coarsen immediately, refine toward native
+  res one tier at a time and only with 20% headroom, so a wiggling target can't flap
+  resolution — each change forces an expensive keyframe; per-peer scale is tracked in
+  `meta.videoScale` and reset on a camera↔screen swap). It also sets the sender's
+  `degradationPreference` (screen+motion ⇒ `maintain-framerate`, so the encoder itself
+  sheds resolution per-frame on a tab-switch/animation keyframe; screen+detail ⇒
   `maintain-resolution`; camera ⇒ `balanced`) and biases a constrained screen's motion
   resolution down a tier (`MOTION_RES_BIAS`). Bitrate-only back-off does not relieve a
   CPU-bound phone encoder.
+  - **DON'T** remove the soft ceiling or speed the climb, and DON'T wire recovery to
+    anything faster than the `CLIMB_AFTER_HEALTHY` streak gate — both re-introduce the
+    marginal-wifi call-drop. The AIMD asymmetry (coarsen at once, recover slowly) is
+    deliberate, not an oversight.
 - **Screen share** is a *second video source* on the single video slot, mutually
   exclusive with the camera (`setScreenShareEnabled`). Camera↔screen swaps the source
   on the existing m-line via `replaceTrack` (instant, no reneg); first-enable
@@ -92,6 +101,8 @@ Two screen-share corners worth keeping straight:
   encoder's outbound `framesPerSecond`: ~0–2 fps static, ~24+ playing) flips
   `contentHint` to "motion" and keeps 30 fps even at the ¼ floor (a static doc eases to
   24 there). Fully automatic, no UI. `track.onended` catches the native "Stop sharing" bar.
+  **DON'T** revert a screen to the camera's "hold resolution, shed framerate" rule — it
+  was tried here and produced exactly the smooth/stall oscillation above.
 - **Audio teardown differs from video.** Shared tab/system audio (Chrome) is
   `addTrack`ed into the mic's stream so the remote plays both through its one
   `<audio>`, but rides its own m-line so muting the mic never silences it. On stop it
