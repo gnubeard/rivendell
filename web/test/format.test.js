@@ -462,6 +462,19 @@ test("bold may contain a nested italic (regression: ** body with a lone *)", () 
   assert.equal(formatMessage("**x** and **y**"), "<strong>x</strong> and <strong>y</strong>");
 });
 
+test("triple-star is bold+italic with correct nesting (regression: ***x***)", () => {
+  // ***x*** must render as properly-nested bold+italic. A prior fix that let the
+  // bold body hold a lone `*` regressed this: bold absorbed the third star, leaving
+  // a trailing `*` the italic pass paired with the `*` now INSIDE the <strong>,
+  // producing overlapping <strong><em>…</strong></em> (invalid HTML). Pin the
+  // triple-star rule (which runs before the bold rule) so the tags don't cross.
+  assert.equal(formatMessage("***bold-italic***"), "<strong><em>bold-italic</em></strong>");
+  assert.equal(formatMessage("a***b***c"), "a<strong><em>b</em></strong>c");
+  // the standalone bold and italic rules still work alongside it
+  assert.equal(formatMessage("***x*** and **y** and *z*"),
+    "<strong><em>x</em></strong> and <strong>y</strong> and <em>z</em>");
+});
+
 test("a link inside escaped text keeps entities intact", () => {
   const out = formatMessage("https://x.com/?a=1&b=2");
   // & was escaped to &amp; before linking; the href should contain it.
