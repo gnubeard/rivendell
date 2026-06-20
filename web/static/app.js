@@ -59,7 +59,7 @@ import { createMobileCtx } from "./mobilectx.js";
 import { createVideoGrid } from "./videogrid.js";
 import { createVoiceUI } from "./voiceui.js";
 import { createNotifyUI } from "./notifyui.js";
-import { isNearBottom, scrollToBottom, PAGE, createHistoryPaging } from "./history.js";
+import { isNearBottom, scrollToBottom, settleScroll, PAGE, createHistoryPaging } from "./history.js";
 import { trimMessageContent } from "./trim.js";
 import { groupingAnchor as computeGroupingAnchor, liveDeletedStillLoaded } from "./grouping.js";
 
@@ -1476,14 +1476,29 @@ async function markActiveChannelRead() {
   }
 }
 
-// scrollToUnreadMarker scrolls the message list so the "New messages" divider
-// is at the top of the visible area. Returns true if a marker was found and
-// scrolled to, false if no marker exists (caller should fall back to bottom).
+// scrollToUnreadMarker settles the message list so the "New messages" divider
+// sits at the top of the viewport — UNLESS the unread run is shorter than a
+// viewport (the marker is effectively at the bottom), in which case it sticks to
+// the bottom rather than dragging the marker up and over-scrolling. Both outcomes
+// re-settle across frames and late image loads via settleScroll, so neither lands
+// short while images near the tail decode. The top-vs-bottom decision is
+// re-evaluated on every pin because an image below the marker decoding can grow
+// the run past a viewport. Returns true if a marker was found (handled here),
+// false if none exists (caller should fall back to scrollToBottom).
 function scrollToUnreadMarker() {
   const wrap = $("#message-list");
   const marker = wrap.querySelector(".unread-marker");
   if (!marker) return false;
-  wrap.scrollTop = marker.offsetTop - wrap.offsetTop - 8;
+  settleScroll(wrap, () => {
+    if (!wrap.contains(marker)) return wrap.scrollTop; // channel switched mid-settle
+    const top = marker.offsetTop - wrap.offsetTop - 8;
+    // Less than ~a viewport of unread after the marker → it's at the bottom;
+    // stick to the bottom. Reuses the single near-bottom predicate so this agrees
+    // with every other scroll-geometry check.
+    return isNearBottom(wrap.scrollHeight, top, wrap.clientHeight)
+      ? wrap.scrollHeight - wrap.clientHeight
+      : top;
+  });
   return true;
 }
 

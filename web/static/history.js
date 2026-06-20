@@ -32,44 +32,57 @@ export function isNearBottom(scrollHeight, scrollTop, clientHeight, threshold = 
   return scrollHeight - scrollTop - clientHeight < threshold;
 }
 
-// scrollToBottom pins the message list to the newest message. It re-pins across
-// the next couple of frames because layout can keep settling after the first
-// assignment — text wrapping, and on mobile the visual viewport / URL bar — which
-// would otherwise leave the view a few pixels short of the bottom.
-export function scrollToBottom(wrap) {
-  // Pin across two frames, not one: a single assignment lands short because
-  // layout keeps settling after it — text wrapping, the mobile visual viewport,
-  // and crucially an <img> whose `load` just fired but whose decoded height the
-  // browser hasn't reflowed in yet (so scrollHeight is still stale). The extra
-  // rAF reads scrollHeight again once those have applied.
+// settleScroll drives `wrap` to the scroll position returned by computeTarget()
+// and keeps re-driving it as layout settles. A single synchronous scrollTop set
+// lands short, which is the bug this exists to prevent: layout keeps moving after
+// the first assignment — text wrapping, the mobile visual viewport / URL bar, and
+// crucially an <img> whose `load` just fired but whose decoded height the browser
+// hasn't reflowed in yet (so scrollHeight is still stale). So we re-pin across the
+// next two animation frames, and again as each late image decodes and grows the
+// container — but only while the reader is still parked where we last put them, so
+// we never fight a manual scroll. This is the shared geometry engine behind
+// scrollToBottom and the unread-marker scroll (app.js), parameterized by target.
+//
+// computeTarget MUST return the resulting scrollTop (e.g. scrollHeight −
+// clientHeight for "the bottom"), NOT scrollHeight — the "did the reader scroll
+// away" guard compares against the value we set, so it has to equal scrollTop. It
+// is re-evaluated on every pin, so a target that moves as the page reflows (the
+// unread marker shifting under decoding images) tracks correctly.
+export function settleScroll(wrap, computeTarget) {
+  let lastTarget;
   const pin = () => {
-    wrap.scrollTop = wrap.scrollHeight;
-    requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; });
+    lastTarget = computeTarget();
+    wrap.scrollTop = lastTarget;
+    // The trailing rAF re-reads the target once the just-applied reflow lands:
+    // `load` can fire before the browser reflows an <img> to full height, so the
+    // synchronous read above can still be short.
+    requestAnimationFrame(() => {
+      lastTarget = computeTarget();
+      wrap.scrollTop = lastTarget;
+    });
   };
   pin();
   requestAnimationFrame(pin);
-  // Images load asynchronously and expand the container after the rAF pass.
-  // Re-pin when each one finishes, but only if the reader hasn't manually
-  // scrolled away since we pinned.
-  // We capture the target scrollTop now (= scrollHeight − clientHeight, the max
-  // possible value). After the pin, wrap.scrollTop == targetTop. When the image
-  // loads, wrap.scrollHeight grows but scrollTop stays put — so checking
-  // "scrollTop is still near targetTop" reliably tells us whether the user
-  // scrolled away (vs. checking distance-from-new-bottom, which would be the
-  // image height and could easily exceed any fixed pixel threshold).
-  const targetTop = wrap.scrollHeight - wrap.clientHeight;
+  // Images load asynchronously and expand the container after the rAF pass. After
+  // a pin, wrap.scrollTop == lastTarget; when an image loads, scrollHeight grows
+  // but scrollTop stays put — so "scrollTop is still near lastTarget" reliably
+  // tells us the reader hasn't scrolled away (vs. distance-from-bottom, which
+  // would be the image height and could exceed any fixed threshold). The check is
+  // two-sided so a reader who scrolls *down* past the target (e.g. below the
+  // unread marker to read) also halts re-pinning.
   wrap.querySelectorAll("img").forEach(media => {
     if (media.complete) return;
     media.addEventListener("load", () => {
       if (!wrap.contains(media)) return; // image is from a prior channel render
-      // pin() (not a bare scrollTop set): `load` can fire before the browser
-      // reflows the image to its full height, so the synchronous read would pin
-      // short and the reflow would then strand the reader. The trailing rAF
-      // re-pins once the height is in.
-      if (wrap.scrollTop >= targetTop - 5)
-        pin();
+      if (Math.abs(wrap.scrollTop - lastTarget) <= 5) pin();
     }, { once: true });
   });
+}
+
+// scrollToBottom pins the message list to the newest message, re-settling across
+// frames and late image loads (see settleScroll) so it never lands short.
+export function scrollToBottom(wrap) {
+  settleScroll(wrap, () => wrap.scrollHeight - wrap.clientHeight);
 }
 
 // createHistoryPaging wires the paging state machine to the app. Deps:
