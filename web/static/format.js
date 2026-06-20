@@ -85,7 +85,7 @@ function applyEmoticons(s) {
   s = s.replace(/(?<![:\w]):\)(?!\w)/g, "🙂");
   s = s.replace(/(?<![:\w]);\)(?!\w)/g, "😉");
   s = s.replace(/(?<![:\w]):\((?!\w)/g, "🙁");
-  s = s.replace(/&lt;3(?!\d)/g, "❤️");
+  s = s.replace(/(?<![:\w])&lt;3(?!\d)/g, "❤️");
   return s;
 }
 

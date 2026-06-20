@@ -662,6 +662,14 @@ test("emoticons: :D :) :( ;) render as glyphs", () => {
 
 test("emoticons: <3 renders as heart", () => {
   assert.ok(formatMessage("I <3 this").includes("❤️"), "<3 → ❤️");
+  assert.ok(formatMessage("<3").includes("❤️"), "<3 at start of string → ❤️");
+});
+
+test("emoticons: <3 does not fire mid-word (1<3 is a comparison, not a heart)", () => {
+  assert.ok(!formatMessage("1<3").includes("❤️"), "1<3 not a heart");
+  assert.ok(!formatMessage("x<3").includes("❤️"), "x<3 not a heart");
+  assert.ok(!formatMessage("a<3").includes("❤️"), "a<3 not a heart");
+  assert.ok(!formatMessage("5<300").includes("❤️"), "5<300 not a heart (trailing digit)");
 });
 
 test("emoticons: do not fire mid-word or after colon", () => {
