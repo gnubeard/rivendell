@@ -71,7 +71,15 @@ web/static/                   app.js (orchestrator; decomposed as far as is
                               TrimRight; see the trim-parity invariant), grouping.js
                               (pure message-pane run helpers: groupingAnchor +
                               liveDeletedStillLoaded, parity-tested against the
-                              renderMessages forward loop)
+                              renderMessages forward loop),
+                              messagelist.js (createMessageList factory: the pure
+                              message-ROW builders carved out of app.js — messageRow +
+                              messageActions/reactionsRow/buildReplyQuote/embed× +
+                              renderDeletedRun/renderSystemMessage + the grouping/
+                              insertion/rowContext helpers. READ-ONLY on state via a
+                              ~small deps object; app.js keeps the orchestration —
+                              renderMessages/append/patch/optimistic — that calls these,
+                              and per-row actions route through its data-act dispatch)
 web/sw.js                     service worker (Web Push)
 web/test/                     node:test unit suites for the pure JS modules
                               (DOM-carrying modules are covered by e2e instead)

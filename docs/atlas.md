@@ -87,12 +87,17 @@ jump/scroll paths still call the render fns directly.
 
 ### R5 · Message Pane
 The message list itself and the densest DOM+state knot in the file. Paging/history
-(`loadChannel`, `jumpToMessage`, driving `historyPaging`), `renderMessages` + the
-row builders + edit-state capture/restore (so an inbound event mid-edit can't blow
-the editor away), the secret-view render, and the reply banner. **This is the
-gravity well every prior extraction attempt bounced off** — so instead of carving
-it, the `message rendering` section now opens with a **compose map** of the
-`renderMessages` call-tree and the state it reads. Legibility in place, not a split.
+(`loadChannel`, `jumpToMessage`, driving `historyPaging`), `renderMessages` +
+edit-state capture/restore (so an inbound event mid-edit can't blow the editor away),
+the secret-view render, and the reply banner. **This is the gravity well every prior
+extraction attempt bounced off.** The pure ROW builders that *renderMessages* drives —
+`messageRow` and its leaves, plus the `grouping`/`insertion`/`rowContext` helpers —
+were finally carved out to `messagelist.js` (`createMessageList`, READ-ONLY on state
+behind a ~small deps object) once the per-row action closures became a `data-act`
+dispatch (R7). What stays in R5 is the orchestration the well is actually made of:
+`renderMessages`, the edit-state lifecycle, the secret view, and optimistic send —
+they call the module's row builders. The `message rendering` section opens with a
+**compose map** of the `renderMessages` call-tree and the state it reads.
 The `incremental message updates` section (`appendMessageRow`/`patchMessageRow`/
 `refreshReadMarks`, plus the optimistic-send trio `showOptimisticSend`/
 `reconcileOptimistic`/`removePending`) is the event fast path: it patches the one row
@@ -108,7 +113,8 @@ cross-user message can't land below your pending row and group avatarless under 
 Authoring, and everything you do *to* a message once it (or its draft) exists: the
 contenteditable composer (`wireComposer`, ~270 lines) + autocomplete + emoji picker,
 inline message editing (`editorFor`/`startEdit`/`commitEdit`), link previews, and
-reactions.
+reaction toggling (`toggleReaction`; the `reactionsRow` pill builder itself now lives
+in `messagelist.js`).
 
 ### R7 · Control Wiring
 The one-time `wire*` control-binding functions that attach static-DOM event
