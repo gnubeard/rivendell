@@ -5,8 +5,9 @@ enforce them. The detailed engine- and device-specific notes live alongside this
 file: [cross-browser.md](cross-browser.md) (WebKit + Gecko smoke specs),
 [image-paste-qa.md](image-paste-qa.md) (the manual clipboard checklist),
 [flaky-e2e.md](flaky-e2e.md) (e2e timing races found + hardened — read before adding
-test retries), and [call-ui-video-staleness.md](call-ui-video-staleness.md) (an OPEN,
-handed-off call-UI bug behind the remaining `dm-call`/`group-call` camera flakes).
+test retries), and [call-ui-video-staleness.md](call-ui-video-staleness.md) (a now-fixed
+call-UI bug — two root causes behind the `dm-call`/`group-call` camera flakes, both
+resolved in v2.0.25/v2.0.26 — kept as a worked debugging example).
 
 ## The test tiers
 
