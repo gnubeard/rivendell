@@ -2225,14 +2225,16 @@ function renderSecretView(wrap, secretSess, atBottom, prevTop) {
 
 // embedRemoveButton builds the author-only "remove embed" control (a light ×) shown
 // on a preview card or a bare-URL inline image. Clicking edits the message to wrap
-// `url` in <> so the embed/image collapses to a plain link. preventDefault keeps the
-// surrounding anchor (the image link / og card) from activating the same click.
+// `url` in <> so the embed/image collapses to a plain link. The delegated handler
+// (data-act="remove-embed") preventDefaults so the surrounding anchor (the image
+// link / og card) doesn't navigate on the same click; it carries the URL on data-url.
 function embedRemoveButton(m, url) {
   return el("button", {
     class: "embed-remove",
     title: "Remove embed",
     "aria-label": "Remove embed",
-    onclick: (e) => { e.preventDefault(); e.stopPropagation(); removeEmbed(m, url); },
+    "data-act": "remove-embed",
+    "data-url": url,
   }, "×");
 }
 
@@ -2272,17 +2274,19 @@ function decorateImageEmbeds(body, m) {
 
 // messageActions builds the hover action row for one message. React and Reply are
 // always present; Forward hides on a tombstone; Edit/Pin/Delete are gated by the
-// ownership/role flags the caller computed (isOwn/canPin/canDelete).
+// ownership/role flags the caller computed (isOwn/canPin/canDelete). Each button
+// carries only a data-act tag — the document-level delegated handler
+// (wireDelegatedClicks) resolves the message off the enclosing data-msg-id row and
+// runs the action, so this renderer holds no closures over app state.
 function messageActions(m, { isOwn, canPin, canDelete, isRead }) {
   return el("div", { class: "msg-actions" },
-    el("button", { class: "msg-act", title: "Add reaction",
-      onclick: (e) => { e.stopPropagation(); emojiPicker.openForReaction(m.id, e.currentTarget); } }, "😄"),
-    el("button", { class: "msg-act", title: "Reply", onclick: () => startReply(m) }, "↩"),
-    !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", onclick: () => openForwardModal(m) }, "↗") : null,
-    el("button", { class: "msg-act msg-read-toggle", title: isRead ? "Mark unread" : "Mark read", onclick: () => toggleMessageRead(m) }, "👁"),
-    isOwn ? el("button", { class: "msg-act", title: "Edit", onclick: () => startEdit(m) }, "✏") : null,
-    canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", onclick: () => togglePin(m) }, "📌") : null,
-    canDelete ? el("button", { class: "msg-act danger", title: "Delete", onclick: () => deleteMessage(m) }, "🗑") : null);
+    el("button", { class: "msg-act", title: "Add reaction", "data-act": "react" }, "😄"),
+    el("button", { class: "msg-act", title: "Reply", "data-act": "reply" }, "↩"),
+    !m.deleted_at ? el("button", { class: "msg-act", title: "Forward to another channel", "data-act": "forward" }, "↗") : null,
+    el("button", { class: "msg-act msg-read-toggle", title: isRead ? "Mark unread" : "Mark read", "data-act": "read-toggle" }, "👁"),
+    isOwn ? el("button", { class: "msg-act", title: "Edit", "data-act": "edit" }, "✏") : null,
+    canPin ? el("button", { class: "msg-act", title: m.pinned_at ? "Unpin" : "Pin", "data-act": "pin" }, "📌") : null,
+    canDelete ? el("button", { class: "msg-act danger", title: "Delete", "data-act": "delete" }, "🗑") : null);
 }
 
 // messageRow builds one rendered message element — the grouped (continuation,
@@ -2339,21 +2343,26 @@ function messageRow(m, { grouped, isMod, canPin, pending = false }) {
 
   const timeEl = pending
     ? el("span", { class: "msg-time msg-time-pending", title: "Sending…" }, "sending…")
+    // No onclick: the href is a same-origin permalink hash (#c<ch>/m<id>), which the
+    // delegated handler's permalink branch already routes through jumpToMessage. A
+    // modified click still opens a new tab (the modifier bail there lets it through).
     : el("a", {
         class: "msg-time",
         href: permalinkHash(state.activeChannelId, m.id),
         title: "Permalink",
-        onclick: (e) => { e.preventDefault(); jumpToMessage(state.activeChannelId, m.id); },
       }, formatTime(m.created_at));
 
   if (grouped) {
     return el("div", { class: cls + " grouped", "data-msg-id": m.id }, el("div", { class: "msg-gutter" }, pinMark), el("div", { class: "msg-main" }, replyQuote, body, preview, reactions, rowActions));
   }
-  // Clicking the avatar or name opens the author's profile card.
+  // Clicking the avatar or name opens the author's profile card — data-act="profile"
+  // with the author's id; the delegated handler resolves it (no per-row closure).
   const author = state.users[m.user_id];
-  const openCard = author ? () => openUserCard(author.id) : null;
+  const profileAttrs = author
+    ? { "data-act": "profile", "data-user-id": author.id }
+    : {};
   const avatarAttrs = author
-    ? { class: "msg-avatar clickable", title: "View profile", onclick: openCard }
+    ? { class: "msg-avatar clickable", title: "View profile", ...profileAttrs }
     : { class: "msg-avatar" };
   const avatar = author && author.has_avatar
     ? el("div", { ...avatarAttrs, style: `background-image:url(${avatarSrc(author.id)})` })
@@ -2363,7 +2372,7 @@ function messageRow(m, { grouped, isMod, canPin, pending = false }) {
     el("div", { class: "msg-main" },
       el("div", { class: "msg-head" },
         el("span", author
-          ? { class: "msg-author clickable", title: "View profile", onclick: openCard }
+          ? { class: "msg-author clickable", title: "View profile", ...profileAttrs }
           : { class: "msg-author" }, author ? author.display_name : "unknown"),
         timeEl,
         pinMark
@@ -3206,9 +3215,15 @@ function reactionsRow(m) {
       class: "reaction" + (mine ? " mine" : "") + (isOrphan ? " orphan" : ""),
       title: titleText,
       disabled,
-      // Pass the rendered "mine" so the toggle is correct even when the message
-      // isn't in the active window (the pins modal renders pins it fetched itself).
-      onclick: disabled ? null : () => toggleReaction(m.id, g.emoji, mine),
+      // The pill carries its OWN data-msg-id (not just the enclosing row) plus the
+      // rendered "mine", so the delegated react-toggle stays correct even when the
+      // message isn't in the active window — the pins modal renders pills for pins
+      // it fetched itself, where findMessage(id) would be null. A disabled (orphan)
+      // pill gets no data-act, so the dispatch never fires for it.
+      "data-act": disabled ? null : "react-toggle",
+      "data-msg-id": m.id,
+      "data-emoji": g.emoji,
+      "data-mine": String(mine),
     }, glyph, el("span", { class: "r-count" }, String(ids.length))));
   }
   return row;
@@ -3291,6 +3306,48 @@ function closeModal(m) {
 // the browser unchanged.
 function wireDelegatedClicks() {
   document.addEventListener("click", (e) => {
+    // Per-row action buttons dispatch by data-act. This runs BEFORE the modifier
+    // bail below: action buttons aren't links, so a modified click on e.g. "delete"
+    // carries no new-tab intent to preserve and must still resolve. The renderers
+    // (messageActions/reactionsRow/embedRemoveButton/messageRow) emit only data —
+    // no per-row closures — so the cluster has no direct dependency on these action
+    // functions; the coupling lives here, where the state/modal refs already are.
+    const actBtn = e.target.closest?.("[data-act]");
+    if (actBtn) {
+      const act = actBtn.dataset.act;
+      const row = actBtn.closest("[data-msg-id]"); // a reaction pill carries its own
+      const mid = row ? Number(row.dataset.msgId) : null;
+      const m = mid != null ? findMessage(mid) : null;
+      switch (act) {
+        case "reply":       if (m) startReply(m); break;
+        case "forward":     if (m) openForwardModal(m); break;
+        case "read-toggle": if (m) toggleMessageRead(m); break;
+        case "edit":        if (m) startEdit(m); break;
+        case "pin":         if (m) togglePin(m); break;
+        case "delete":      if (m) deleteMessage(m); break;
+        // The popup anchors to the button (was e.currentTarget; same element).
+        case "react":       if (m) emojiPicker.openForReaction(m.id, actBtn); break;
+        // NOT findMessage: reaction pills also render in the pins modal for messages
+        // outside the active window, where findMessage(mid) is null. Read the id +
+        // the rendered "mine" straight off the pill (the known-mine rule), so the
+        // toggle stays correct cross-window. See reactionsRow / toggleReaction.
+        case "react-toggle":
+          toggleReaction(Number(actBtn.dataset.msgId), actBtn.dataset.emoji, actBtn.dataset.mine === "true");
+          break;
+        // The × sits inside the embed's host anchor (image / og card); preventDefault
+        // stops that anchor from navigating on the same click.
+        case "remove-embed":
+          e.preventDefault();
+          if (m) removeEmbed(m, actBtn.dataset.url);
+          break;
+        case "profile": {
+          const uid = Number(actBtn.dataset.userId);
+          if (uid) openUserCard(uid);
+          break;
+        }
+      }
+      return;
+    }
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     // closest is only on Elements; a text-node target (?.()) yields undefined.
     const closest = (sel) => e.target.closest?.(sel);
@@ -3446,8 +3503,11 @@ function wireChannelControls() {
 function wireEmojiControls() {
   $("#emoji-btn").onclick = (e) => { e.stopPropagation(); emojiPicker.toggle(); };
   // Dismiss the emoji picker on any click outside it (the button toggles itself).
+  // The reaction-trigger guard matters under delegated dispatch: the react button no
+  // longer stopPropagation()s its open-click, so that click now reaches document —
+  // without this it would re-close the picker it just opened.
   document.addEventListener("click", (e) => {
-    if (emojiPicker.isOpen() && !e.target.closest("#emoji-wrap") && !e.target.closest("#emoji-btn")) {
+    if (emojiPicker.isOpen() && !e.target.closest("#emoji-wrap") && !e.target.closest("#emoji-btn") && !e.target.closest('[data-act="react"]')) {
       $("#emoji-wrap").hidden = true;
     }
   });
