@@ -990,7 +990,14 @@ const RENDER_SURFACES = {
 const dirtySurfaces = new Set();
 let renderFlushPending = false;
 function scheduleRender(...surfaces) {
-  for (const s of surfaces) dirtySurfaces.add(s);
+  for (const s of surfaces) {
+    // Fail loud at the call site: the flush loop iterates the known surfaces and
+    // checks membership, so an unknown/typo'd name would otherwise be added, never
+    // dereferenced, and silently dropped — a surface that just stops repainting
+    // with no error to chase. Guard here so the stack points at the bad caller.
+    if (!(s in RENDER_SURFACES)) throw new Error(`scheduleRender: unknown surface "${s}"`);
+    dirtySurfaces.add(s);
+  }
   if (renderFlushPending) return;
   renderFlushPending = true;
   setTimeout(flushRenders, 0);
