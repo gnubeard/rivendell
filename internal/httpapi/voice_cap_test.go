@@ -1,12 +1,81 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"rivendell/internal/store"
 )
+
+// TestVoiceJoinPrivateChannelVisibility pins that the voice WS path gates access
+// through the SAME visibility predicate as everything else (channelVisibleTo):
+// admins get the private-channel override, moderators do NOT. The regression had
+// the voice canAccess closure use RoleModerator while the canonical predicate uses
+// RoleAdmin, letting a non-member moderator sit in a private channel's call they
+// couldn't otherwise see.
+func TestVoiceJoinPrivateChannelVisibility(t *testing.T) {
+	ts, st, _, srv := newTestServerSrv(t)
+	ctx := context.Background()
+
+	adminC, admin := seedAdmin(t, ts, st)                                     // RoleAdmin, NOT a member
+	modC, mod := seedMember(t, ts, st, "molly", "Molly", store.RoleModerator) // NOT a member
+	_, owner := seedMember(t, ts, st, "sam", "Sam", store.RoleMember)         // the channel's member
+
+	priv, err := st.CreateChannel(ctx, "secret-room", "", true, owner.ID)
+	if err != nil {
+		t.Fatalf("create private channel: %v", err)
+	}
+	if err := st.AddChannelMember(ctx, priv.ID, owner.ID); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	pub, err := st.CreateChannel(ctx, "lobby", "", false, owner.ID)
+	if err != nil {
+		t.Fatalf("create public channel: %v", err)
+	}
+
+	adminConn, _ := wsDial(t, ts, adminC)
+	defer adminConn.Close()
+	modConn, _ := wsDial(t, ts, modC)
+	defer modConn.Close()
+
+	// An admin who is NOT a member IS admitted to the private channel's voice.
+	wsSend(t, adminConn, map[string]any{"type": "voice.join", "channel_id": priv.ID})
+	waitVoiceRoster(t, srv, priv.ID, 1)
+
+	// A moderator who is NOT a member must be denied. A denied voice.join returns
+	// before the join commits (and before VoiceLeaveAll), so the moderator must
+	// never appear in the roster — under the regression it would, within ms.
+	wsSend(t, modConn, map[string]any{"type": "voice.join", "channel_id": priv.ID})
+	assertNotInVoice(t, srv, priv.ID, mod.ID, 300*time.Millisecond)
+
+	// Liveness: prove the moderator's frames are actually processed (so the
+	// negative assertion above can't be a false pass from a dropped frame) — a
+	// public-channel join IS allowed and shows up in the roster.
+	wsSend(t, modConn, map[string]any{"type": "voice.join", "channel_id": pub.ID})
+	waitVoiceRoster(t, srv, pub.ID, 1)
+
+	// The private roster still holds exactly the admin.
+	if parts := srv.hub.VoiceParticipants(priv.ID); len(parts) != 1 || parts[0].UserID != admin.ID {
+		t.Fatalf("private voice roster should be [admin %d], got %+v", admin.ID, parts)
+	}
+}
+
+// assertNotInVoice fails if userID appears in chID's voice roster within d.
+func assertNotInVoice(t *testing.T, srv *Server, chID, userID int64, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		for _, p := range srv.hub.VoiceParticipants(chID) {
+			if p.UserID == userID {
+				t.Fatalf("user %d must not be in voice for channel %d (join should be denied)", userID, chID)
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
 
 // TestVoiceJoinDeniedWhenFull guards the group-call audio cap: a non-DM voice
 // channel admits at most cfg.MaxVoiceAudio participants; the next joiner gets a

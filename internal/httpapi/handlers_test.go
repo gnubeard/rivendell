@@ -1408,6 +1408,40 @@ func TestMessageEditDeleteAuthorization(t *testing.T) {
 	}
 }
 
+// TestEditMessageTrimsTrailingWhitespace pins the trim-parity invariant for edits:
+// the server is the source of truth and must TrimRight before persisting, exactly
+// as create does, so an edit can't store trailing whitespace a fresh send would
+// have stripped. Guards the regression where handleEditMessage skipped the trim.
+func TestEditMessageTrimsTrailingWhitespace(t *testing.T) {
+	ts, st, _ := newTestServer(t)
+	adminC, _ := seedAdmin(t, ts, st)
+
+	_, body := doJSON(t, adminC, "POST", ts.URL+"/api/channels", map[string]any{"name": "general"})
+	var ch store.Channel
+	json.Unmarshal(body, &ch)
+
+	resp, body := doJSON(t, adminC, "POST",
+		ts.URL+"/api/channels/"+itoa(ch.ID)+"/messages", map[string]string{"content": "hello"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post: %d %s", resp.StatusCode, body)
+	}
+	var msg store.Message
+	json.Unmarshal(body, &msg)
+
+	// Edit with trailing spaces/tabs/newlines; the stored (and echoed) content must
+	// come back trimmed — matching what a freshly-created message would store.
+	resp, body = doJSON(t, adminC, "PATCH", ts.URL+"/api/messages/"+itoa(msg.ID),
+		map[string]string{"content": "edited   \t\n"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit: %d %s", resp.StatusCode, body)
+	}
+	var edited store.Message
+	json.Unmarshal(body, &edited)
+	if edited.Content != "edited" {
+		t.Fatalf("edited content not trimmed: %q (want %q)", edited.Content, "edited")
+	}
+}
+
 func TestSetStatusValidation(t *testing.T) {
 	ts, st, _ := newTestServer(t)
 	adminC, _ := seedAdmin(t, ts, st)

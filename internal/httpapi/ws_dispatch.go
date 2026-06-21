@@ -247,21 +247,21 @@ func (s *Server) handleVoiceWSMessage(c *ws.Client, raw []byte, msgType string, 
 		s.hub.SendToUser(targetID, out)
 	}
 
-	// canAccess checks whether a user may participate in the channel.
+	// canAccess checks whether a user may participate in the channel. It delegates
+	// to channelVisibleTo so voice uses the SAME visibility predicate as message
+	// read / audience / access — there's no second copy to drift (admins, not
+	// moderators, see private non-DM channels; DMs stay members-only). The public
+	// fast-path avoids a user lookup; a lookup error on a private channel fails
+	// CLOSED (an auth check must never fall open).
 	canAccess := func(ch store.Channel, uid int64) bool {
 		if !ch.IsPrivate {
 			return true
 		}
-		member, err := s.st.IsChannelMember(ctx, ch.ID, uid)
-		isMember := err == nil && member
-		if ch.IsDM {
-			return isMember
-		}
 		u, err := s.st.GetUserByID(ctx, uid)
 		if err != nil {
-			return isMember
+			return false
 		}
-		return isMember || roleRank(u.Role) >= roleRank(store.RoleModerator)
+		return s.channelVisibleTo(ctx, ch, u)
 	}
 
 	// denyJoin tells the joiner the channel (or its video slots) is full. The

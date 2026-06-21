@@ -28,6 +28,13 @@ func TestChannelVisibleTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create other: %v", err)
 	}
+	// A moderator is NOT an admin: the private-channel override is admins-only, so
+	// a non-member moderator must not see (or, via the same predicate, join the
+	// voice of) a private channel. Pins the role boundary the voice path regressed.
+	mod, err := st.CreateUser(ctx, "mod1", "Mod", store.RoleModerator)
+	if err != nil {
+		t.Fatalf("create moderator: %v", err)
+	}
 
 	// Public channel — visible to everyone, member or not.
 	pub, err := st.CreateChannel(ctx, "general", "", false, member.ID)
@@ -64,6 +71,7 @@ func TestChannelVisibleTo(t *testing.T) {
 		{"private visible to its member", priv, member, true},
 		{"private visible to admin (override)", priv, admin, true},
 		{"private hidden from non-member non-admin", priv, other, false},
+		{"private hidden from non-member moderator (override is admin-only)", priv, mod, false},
 
 		{"dm visible to participant", dm, member, true},
 		{"dm visible to other participant", dm, other, true},

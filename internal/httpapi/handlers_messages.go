@@ -386,6 +386,10 @@ func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
+	// Trim trailing whitespace before persisting, exactly as handleCreateMessage
+	// does — the server is the source of truth for the trim-parity invariant, and
+	// an edit must store the same canonical form a fresh send would.
+	req.Content = strings.TrimRight(req.Content, " \t\r\n")
 	if strings.TrimSpace(req.Content) == "" {
 		writeErr(w, http.StatusBadRequest, "message is empty")
 		return
