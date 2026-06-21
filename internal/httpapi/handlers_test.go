@@ -2447,6 +2447,18 @@ func TestCustomEmojis(t *testing.T) {
 	if !bytes.Equal(body, img) {
 		t.Fatalf("image bytes did not round-trip")
 	}
+	// A bare image request gets the short fallback cache; a ?v=<created_at>
+	// request is immutable (the emoji image is content-stable per shortcode).
+	if cc := resp.Header.Get("Cache-Control"); cc != "private, max-age=3600" {
+		t.Fatalf("bare emoji Cache-Control = %q", cc)
+	}
+	resp, _ = doJSON(t, memberC, "GET", ts.URL+"/api/emojis/party/image?v="+created.CreatedAt.Format(time.RFC3339Nano), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("versioned image get: %d", resp.StatusCode)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "private, max-age=31536000, immutable" {
+		t.Fatalf("versioned emoji Cache-Control = %q", cc)
+	}
 
 	// Members cannot delete.
 	resp, _ = doJSON(t, memberC, "DELETE", ts.URL+"/api/emojis/party", nil)

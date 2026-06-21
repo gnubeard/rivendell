@@ -24,7 +24,7 @@ import { groupingAnchor as computeGroupingAnchor } from "./grouping.js";
  * @property {(m:object)=>Element} editorFor  inline editor element (owned by app.js)
  * @property {(content:string)=>(Element|null)} buildLinkPreview  link/embed preview card
  * @property {(userId:number)=>string} avatarSrc  avatar URL (cache-busted)
- * @property {(code:string)=>string} emojiURL  custom-emoji image URL
+ * @property {(code:string)=>string} emojiURL  custom-emoji image URL (cache-busted)
  * @property {(channelId:number, messageId:number)=>void} jumpToMessage  reply-quote jump target
  * @property {(id:number)=>boolean} isLiveDeleted  did this id earn a visible tombstone this session
  */

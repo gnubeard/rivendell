@@ -2448,7 +2448,7 @@ const mkAutocomplete = (input, popup) =>
     input, popup, el,
     getState: () => state,
     getActiveMemberIds: () => activeMemberIds,
-    emojiURL: (code) => api.emojiURL(code),
+    emojiURL: emojiSrc,
   });
 
 // --- contenteditable composer wiring (facade in composer-field.js) -----------
@@ -2788,6 +2788,7 @@ const emojiPicker = createEmojiPicker({
   el,
   $,
   getState: () => state,
+  emojiSrc,
   isModPlus,
   toggleReaction,
   // Lazy: this factory runs at module-eval, before adminPanel is initialized.
@@ -2910,7 +2911,7 @@ const messageList = createMessageList({
   editorFor,
   buildLinkPreview,
   avatarSrc,
-  emojiURL: (code) => api.emojiURL(code),
+  emojiURL: emojiSrc,
   jumpToMessage: (channelId, messageId) => jumpToMessage(channelId, messageId),
   isLiveDeleted: (id) => liveDeleted.has(id),
 });
@@ -3650,6 +3651,7 @@ const mobileCtx = createMobileCtx({
   $,
   getState: () => state,
   api,
+  emojiSrc,
   emojiPicker,
   startReply,
   openForwardModal,
@@ -3847,6 +3849,18 @@ function avatarSrc(userId) {
   const u = state.users[userId];
   if (u && u.avatar_updated_at) return `${api.avatarURL(userId)}?v=${encodeURIComponent(u.avatar_updated_at)}`;
   return api.avatarURL(userId);
+}
+
+// emojiSrc returns a custom-emoji image URL with a ?v=<created_at> token so the
+// browser caches it immutably (matching avatarSrc). created_at is the version:
+// changing an emoji is delete + re-add, which mints a fresh created_at, so the URL
+// changes and busts the cache. An unknown/deleted shortcode falls back to the bare
+// URL (the server 404s the orphan anyway).
+function emojiSrc(code) {
+  const e = state.emojis[code];
+  return e && e.created_at
+    ? `${api.emojiURL(code)}?v=${encodeURIComponent(e.created_at)}`
+    : api.emojiURL(code);
 }
 
 // Image cache warming (avatars, viewport images, background blob sweep). See

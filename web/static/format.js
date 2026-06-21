@@ -545,8 +545,19 @@ function hasEmoji(emojis, name) {
   return !!emojis[name];
 }
 
-function emojiImg(name) {
-  return `<img class="emoji" src="/api/emojis/${name}/image" alt=":${name}:" title=":${name}:" loading="lazy">`;
+// emojiVersion pulls the created_at version token from the registry so emojiImg
+// can cache-bust. The registry may be a Set (no metadata) or an object keyed by
+// shortcode whose value carries created_at; either way a missing token yields a
+// bare URL (the server falls back to a 1h cache for those).
+function emojiVersion(emojis, name) {
+  if (!emojis || typeof emojis.has === "function") return null;
+  const e = emojis[name];
+  return e && e.created_at ? e.created_at : null;
+}
+
+function emojiImg(name, version) {
+  const v = version ? `?v=${encodeURIComponent(version)}` : "";
+  return `<img class="emoji" src="/api/emojis/${name}/image${v}" alt=":${name}:" title=":${name}:" loading="lazy">`;
 }
 
 function emojiGlyph(glyph, name) {
@@ -812,7 +823,7 @@ function inlineWithEmoji(seg, meLower, emojis, channels, embedImages, hideUrl, u
   while ((m = EMOJI_RE.exec(seg)) !== null) {
     const builtin = BUILTIN_EMOJI[m[1]];
     if (!builtin && !hasEmoji(emojis, m[1])) continue;
-    const rendered = builtin ? emojiGlyph(builtin, m[1]) : emojiImg(m[1]);
+    const rendered = builtin ? emojiGlyph(builtin, m[1]) : emojiImg(m[1], emojiVersion(emojis, m[1]));
     out += inlineWithBlobImages(seg.slice(last, m.index), meLower, channels, embedImages, hideUrl, usernames) + rendered;
     last = m.index + m[0].length;
   }

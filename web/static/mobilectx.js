@@ -8,7 +8,8 @@
 // wiring stay in app.js (wireMobileContextMenu), calling openMobileCtx/
 // closeMobileCtx. e2e/mobile-ctx.spec is the net.
 //
-// Deps: el, $, getState (() => state, read fresh), api (emojiURL), emojiPicker
+// Deps: el, $, getState (() => state, read fresh), emojiSrc (versioned
+// custom-emoji image URL), emojiPicker
 // (openForReaction), and the message actions startReply, openForwardModal,
 // startEdit, togglePin, toggleMessageRead, deleteMessage, removeEmbed (wrap a URL
 // in <> to drop its embed) + embedURLFor (the message's removable embed URL, or null).
@@ -16,7 +17,7 @@
 import { canModerate } from "./state.js";
 
 export function createMobileCtx({
-  el, $, getState, api, emojiPicker,
+  el, $, getState, emojiSrc, emojiPicker,
   startReply, openForwardModal, startEdit, togglePin, toggleMessageRead, deleteMessage,
   removeEmbed, embedURLFor,
 }) {
@@ -98,7 +99,7 @@ export function createMobileCtx({
         const ids = g.user_ids || [];
         const names = ids.map((id) => (state.users[id] ? state.users[id].display_name : "someone")).join(", ");
         const glyph = state.emojis[g.emoji]
-          ? el("img", { class: "emoji", src: api.emojiURL(g.emoji), alt: `:${g.emoji}:`, style: "height:1.3rem;width:auto;" })
+          ? el("img", { class: "emoji", src: emojiSrc(g.emoji), alt: `:${g.emoji}:`, style: "height:1.3rem;width:auto;" })
           : el("span", {}, g.emoji);
         panel.append(el("div", { class: "mobile-ctx-reaction-row" },
           el("span", { class: "mobile-ctx-reaction-emoji" }, glyph),

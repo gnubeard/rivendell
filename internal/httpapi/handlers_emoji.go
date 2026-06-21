@@ -92,10 +92,15 @@ func (s *Server) handleGetEmojiImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", mime)
-	// Emojis are immutable for a given shortcode (delete + re-add to change the
-	// image), so they cache well; longer than avatars since there's no per-id
-	// version bust on the client.
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	// Emojis are immutable for a given shortcode (changing one is delete + re-add,
+	// which mints a fresh created_at). A ?v=<created_at> URL is therefore safe to
+	// cache forever; a bare request (old client / direct link) falls back to 1h so
+	// a re-add still propagates without the version bust. Mirrors handleGetAvatar.
+	if r.URL.Query().Has("v") {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }

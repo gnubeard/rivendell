@@ -587,6 +587,14 @@ test("custom emoji: registry may be a plain object keyed by shortcode", () => {
   assert.ok(out.includes('src="/api/emojis/party/image"'));
 });
 
+test("custom emoji: a created_at registry entry cache-busts the image URL", () => {
+  const out = formatMessage(":party:", "me", { party: { shortcode: "party", created_at: "2026-06-21T05:00:00Z" } });
+  assert.ok(
+    out.includes('src="/api/emojis/party/image?v=2026-06-21T05%3A00%3A00Z"'),
+    "created_at is appended as a ?v= cache-buster",
+  );
+});
+
 test("custom emoji: no registry means shortcodes are inert", () => {
   assert.equal(formatMessage(":party:"), ":party:");
 });

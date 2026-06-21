@@ -23,11 +23,11 @@
 //   el          — element builder (app.js)
 //   $           — querySelector helper (app.js); $(sel) is scoped to document
 //   getState    — () => current app state (read at call time; state is reassigned)
+//   emojiSrc    — (code) => versioned custom-emoji image URL (cache-busted)
 //   isModPlus   — () => whether the current user is moderator+ (gates the ➕ footer)
 //   toggleReaction(messageId, value) — apply a reaction pick
 //   openEmojiManager() — open the custom-emoji manager modal (from the ➕ footer)
 //   loadRecentEmoji() / pushRecentEmoji(value, isCustom) — MRU recents (prefs.js)
-import { api } from "./api.js";
 import { BUILTIN_EMOJI_LIST } from "./format.js";
 
 // The quick Unicode palette is the renderer's ordered builtin list (single source
@@ -49,7 +49,7 @@ export function filterEmoji(query, commonEntries, customCodes) {
   };
 }
 
-export function createEmojiPicker({ el, $, getState, isModPlus, toggleReaction, openEmojiManager, loadRecentEmoji, pushRecentEmoji }) {
+export function createEmojiPicker({ el, $, getState, emojiSrc, isModPlus, toggleReaction, openEmojiManager, loadRecentEmoji, pushRecentEmoji }) {
   // The shared popup serves two targets: a text field (insert a token) and a
   // message reaction. pickerTarget tracks which, set when the popup is opened.
   let pickerTarget = { mode: "insert" };
@@ -197,7 +197,7 @@ export function createEmojiPicker({ el, $, getState, isModPlus, toggleReaction, 
     return makeChoice(glyph, false, `:${name}:`, el("span", { class: "emoji-uni" }, glyph));
   }
   function customChoice(code) {
-    return makeChoice(code, true, `:${code}:`, el("img", { class: "emoji", src: api.emojiURL(code), alt: `:${code}:` }));
+    return makeChoice(code, true, `:${code}:`, el("img", { class: "emoji", src: emojiSrc(code), alt: `:${code}:` }));
   }
 
   // section appends a labeled group of option buttons to the grid (a full-width
