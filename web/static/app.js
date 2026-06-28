@@ -1152,11 +1152,12 @@ function renderDMs() {
 function renderMembers() {
   const list = $("#member-list");
   list.innerHTML = "";
-  // Ordinary users don't see disabled accounts (matches the server roster);
-  // admins keep seeing them so they can manage them.
-  const isAdmin = S.isAdmin(state.me);
+  // Disabled accounts are hidden from the roster for everyone — including admins,
+  // who manage them in the admin panel instead (it fetches its own list). A
+  // disabled user is logged out and can't connect, so a stale roster row only
+  // misleads. Mirrors the bot rule: kept in state.users, filtered from the panel.
   const isMod = S.canModerate(state.me);
-  let users = Object.values(state.users).filter((u) => isAdmin || u.is_active !== false);
+  let users = Object.values(state.users).filter((u) => u.is_active !== false);
   // In a private channel/DM, restrict the panel to that channel's members.
   if (activeMemberIds) users = users.filter((u) => activeMemberIds.has(u.id));
   // Moderators+ can remove others from a real private channel (not DMs/public).

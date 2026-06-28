@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.1.14] - 2026-06-27
+
+### Changed
+- Disabled (banned) accounts are now hidden from the member roster for everyone, including admins. A disabled user is logged out and can't connect, so a lingering roster row only misled — admins still manage them in the admin panel, which lists every account regardless.
+
 ## [2.0.23] - 2026-06-17
 
 ### Fixed
