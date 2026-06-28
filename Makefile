@@ -17,9 +17,6 @@ RIVENDELL_WEB_DIR         ?= ./web
 #   resets it — the wipe SQL arrives as $E2E_RESET_SQL — in a git-ignored
 #   Makefile.local (see Makefile.local.example). Pass E2E_DB_RESET=off to skip the
 #   wipe and reuse the DB.
-# PLAYWRIGHT_INSTALL — omits `--with-deps`, which shells out to apt-get (Debian/
-#   Ubuntu only). If a freshly downloaded browser won't launch, install the OS libs
-#   once per host out of band (Debian: `cd web && npx playwright install-deps`).
 E2E_DB_RESET_CMD     ?=
 # E2E_WEBKIT — opt in to the WebKit (Safari-engine) smoke project. Empty by
 #   default so `make test-e2e` is Chromium-only and green on any host. This box
@@ -29,10 +26,13 @@ E2E_WEBKIT           ?=
 #   default, same as WebKit. Unlike WebKit, Gecko needs no native host stack on
 #   Linux, so there's no setup hook — Makefile.local just flips this to 1.
 E2E_FIREFOX          ?=
-# Chromium is always installed; WebKit/Firefox only when their opt-in smoke is
-# enabled (E2E_WEBKIT=1 / E2E_FIREFOX=1) — each is a separate ~100 MB download.
-# WebKit also needs a provisioned native stack (see docs/testing/cross-browser.md); Gecko
-# does not.
+# PLAYWRIGHT_INSTALL — omits `--with-deps`, which shells out to apt-get (Debian/
+#   Ubuntu only). If a freshly downloaded browser won't launch, install the OS libs
+#   once per host out of band (Debian: `cd web && npx playwright install-deps`).
+#   Chromium is always installed; WebKit/Firefox only when their opt-in smoke is
+#   enabled (E2E_WEBKIT=1 / E2E_FIREFOX=1) — each is a separate ~100 MB download.
+#   WebKit also needs a provisioned native stack (see docs/testing/cross-browser.md);
+#   Gecko does not.
 PLAYWRIGHT_INSTALL   ?= npx playwright install chromium $(if $(E2E_WEBKIT),webkit) $(if $(E2E_FIREFOX),firefox)
 
 # Per-host overrides (container names, ports, reset command) live here, untracked.
