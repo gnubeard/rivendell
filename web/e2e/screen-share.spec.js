@@ -8,10 +8,12 @@
 // which is headless-flaky and not ours to test. The stub gives a known-moving video
 // + a real audio track so the assertions below pin OUR behavior:
 //   1. start a share → the remote receives live screen VIDEO, and the shared AUDIO
-//      arrives mixed into the SAME per-peer <audio> element (one element, two
-//      tracks — the "shared msid → grouped stream, no receive-side change" design)
+//      arrives on its OWN msid, split onto a SECOND per-peer <audio> element (two
+//      elements, one track each — the design that lets the receiver give the share
+//      its own playout volume, independent of the peer's voice), and the DM header's
+//      separate "stream volume" slider appears
 //   2. switch to the camera → the video source swaps and the shared audio is dropped
-//      (back to mic-only on the remote), exercising the screen→camera path
+//      (back to mic-only, one element, on the remote), exercising the screen→camera path
 //
 // Frame-advance assertions (videoWidth > 0 AND currentTime increasing) match
 // dm-call.spec.js: a tile that decoded one frame and paused fails the second check.
@@ -79,8 +81,8 @@ async function assertLiveVideo(page, min = 1) {
 }
 
 // remoteAudioTrackCount totals the audio tracks across every <audio> element
-// voice.js created for remote peers. Mic-only = 1; mic + shared screen audio
-// (grouped into one element by the shared msid) = 2.
+// voice.js created for remote peers. Mic-only = 1; mic + shared screen audio = 2
+// (now split across TWO elements, one track each — totals the same 2).
 async function remoteAudioTrackCount(page) {
   return page.evaluate(() => {
     let n = 0;
@@ -92,10 +94,9 @@ async function remoteAudioTrackCount(page) {
 }
 
 // remoteLiveAudioCount totals the audio tracks that are actually carrying media
-// (not muted). This is "what the peer can hear" — distinct from the raw track
-// count, because stopping the shared audio (replaceTrack(null)) silences the track
-// but leaves it in the stream, muted, until a later renegotiation. So a released
-// share shows liveCount 1 (mic) even though the track count is still 2.
+// (not muted). This is "what the peer can hear". The screen share's audio is fully
+// REMOVED on stop (pc.removeTrack → the receiver's screen <audio> element is torn
+// down), so both the raw count and the live count fall back to 1 (mic) on release.
 async function remoteLiveAudioCount(page) {
   return page.evaluate(() => {
     let n = 0;
@@ -169,12 +170,23 @@ test("screen share reaches the remote as live video + mixed audio", async () => 
 
   // The remote receives live screen video...
   await assertLiveVideo(page2, 1);
-  // ...and the shared audio, mixed into the SAME <audio> element: one element
-  // carrying two tracks (mic + screen audio share the stream's msid by design),
-  // with both tracks actually flowing.
-  await expect.poll(() => page2.locator("audio").count(), { timeout: 20_000 }).toBe(1);
+  // ...and the shared audio on its OWN msid: split onto a SECOND <audio> element so
+  // it carries its own playout volume — two elements, one track each, both flowing.
+  await expect.poll(() => page2.locator("audio").count(), { timeout: 20_000 }).toBe(2);
   await expect.poll(() => remoteAudioTrackCount(page2), { timeout: 20_000 }).toBe(2);
   await expect.poll(() => remoteLiveAudioCount(page2), { timeout: 20_000 }).toBe(2);
+
+  // The remote's DM header now offers a SEPARATE "stream volume" slider (revealed
+  // by the 🔊 toggle), and moving it sets a screen gain distinct from the voice one.
+  await page2.click("#channel-dm-call");
+  await expect(page2.locator("#dm-screen-volume")).toBeVisible();
+  await page2.locator("#dm-screen-volume input").fill("0.3");
+  expect(await page2.evaluate(() => {
+    const a = document.getElementById("dm-screen-volume").querySelector("input").value;
+    const v = document.getElementById("dm-volume").value;
+    return [a, v];
+  })).toEqual(["0.3", "1"]); // screen turned down, voice untouched
+  await page2.click("#channel-dm-call"); // collapse again
 
   // Sharer UI: the share button is lit and the camera reads "off" (📷).
   await expect(page1.locator("#header-share-btn")).toHaveClass(/active/);
@@ -192,9 +204,10 @@ test("switching to the camera swaps the source and drops the shared audio", asyn
   // Camera video keeps flowing to the remote...
   await assertLiveVideo(page2, 1);
   // ...and the shared audio is fully released: stopScreenAudio removes the sender
-  // (renegotiation drops the m-line), so the remote's screen-audio track ends and
-  // it's back to mic-only — a clean drop in the raw track count, not just silence.
+  // (renegotiation drops the m-line), so the remote's screen-audio track ends, its
+  // separate <audio> element is torn down, and it's back to mic-only — one element.
   await expect.poll(() => remoteAudioTrackCount(page2), { timeout: 20_000 }).toBe(1);
+  await expect.poll(() => page2.locator("audio").count(), { timeout: 20_000 }).toBe(1);
   await expect(page1.locator("#header-share-btn")).not.toHaveClass(/active/);
 });
 

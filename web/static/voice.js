@@ -19,7 +19,9 @@ let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 let localStream = null;
 let peerConns = new Map();    // remoteUserId -> RTCPeerConnection
 let peerMeta = new Map();     // remoteUserId -> { restarts, timer } (reconnection bookkeeping)
-let audioEls = new Map();     // remoteUserId -> <audio> element
+let audioEls = new Map();     // remoteUserId -> mic/voice <audio> element
+let screenAudioEls = new Map(); // remoteUserId -> screen-share <audio> element (separate playout gain)
+let voiceStreamIds = new Map(); // remoteUserId -> msid of their VOICE stream (first audio stream seen)
 let videoEls = new Map();     // remoteUserId -> <video> element
 let localVideoEl = null;      // local preview <video> (muted, created on first camera use)
 let cameraEnabled = false;    // "sending video" master for the current call (camera OR screen)
@@ -27,6 +29,7 @@ let videoIsScreen = false;    // when sending video, is the source the screen (g
 let screenMotionState = { active: false, ticks: 0 }; // fps latch: is the shared screen playing video (favor framerate over detail)?
 let listenOnly = false;       // joined without a usable mic: we receive only (no local capture, recvonly peers)
 let screenAudioTrack = null;  // the tab/system audio track captured alongside a screen share (Chrome only), or null
+let screenAudioStream = null; // dedicated MediaStream that carries screenAudioTrack to peers under its OWN msid
 let activeChannelId = null;
 // callGen is bumped on every join. Call teardown (leave/end) defers the mic +
 // meter release behind the farewell-tone wait; if a new call starts during that
@@ -353,6 +356,9 @@ export async function leaveVoiceChannel() {
 async function finishTeardown() {
   closeAllPeers();
   videoEls.clear();
+  screenAudioEls.forEach(el => { el.srcObject = null; el.remove(); });
+  screenAudioEls.clear();
+  voiceStreamIds.clear();
   const gen = callGen;
   const myStream = localStream;
   if (onSelfLeaveTone) onSelfLeaveTone();
@@ -409,6 +415,7 @@ export function setVoiceMuted(m) {
 export function setVoiceDeafened(d) {
   deafened = d;
   audioEls.forEach(el => { el.muted = deafened; });
+  screenAudioEls.forEach(el => { el.muted = deafened; }); // deafen silences shared audio too
   notifyState();
 }
 
@@ -466,6 +473,54 @@ export function setVolumeForUser(userId, vol) {
   if (audio) audio.volume = v;
 }
 
+// --- per-user SCREEN-SHARE audio volume (persisted, independent of voice) ----
+//
+// A peer's shared desktop/tab audio rides its OWN m-line + own msid (see the send
+// path) and plays through a SEPARATE <audio> element from their mic, so it carries
+// its own playout gain — turn down a loud game/video without quieting their voice.
+// Same [0,1] element-.volume mechanism and same per-user-keyed persistence as the
+// voice volume above; just a distinct store key and a distinct element map.
+const SCREEN_VOLUME_STORE_KEY = "rivendell.voiceScreenVolumes";
+let screenVolumes = loadScreenVolumes();   // userId (number) -> 0..1
+
+function loadScreenVolumes() {
+  const m = new Map();
+  try {
+    const raw = localStorage.getItem(SCREEN_VOLUME_STORE_KEY);
+    if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) m.set(Number(k), clampVolume(v));
+  } catch { /* localStorage unavailable (node tests / private mode) or corrupt */ }
+  return m;
+}
+
+function persistScreenVolumes() {
+  try {
+    const obj = {};
+    for (const [k, v] of screenVolumes) if (v !== 1) obj[k] = v; // only store non-defaults
+    localStorage.setItem(SCREEN_VOLUME_STORE_KEY, JSON.stringify(obj));
+  } catch { /* non-fatal — volume just won't persist this session */ }
+}
+
+// getScreenVolumeForUser returns a user's stored screen-audio gain, or 1 (unchanged).
+export function getScreenVolumeForUser(userId) {
+  return screenVolumes.has(userId) ? screenVolumes.get(userId) : 1;
+}
+
+// setScreenVolumeForUser sets, persists, and live-applies a user's screen-audio gain.
+export function setScreenVolumeForUser(userId, vol) {
+  const v = clampVolume(vol);
+  screenVolumes.set(userId, v);
+  persistScreenVolumes();
+  const audio = screenAudioEls.get(userId);
+  if (audio) audio.volume = v;
+}
+
+// hasScreenAudio reports whether a peer is currently sending screen-share audio
+// (a live screen <audio> element exists for them) — drives whether the UI shows
+// that peer's separate stream-volume slider.
+export function hasScreenAudio(userId) {
+  return screenAudioEls.has(userId);
+}
+
 // idleVideoSender returns a peer's video RTCRtpSender whose track is currently
 // null — the dormant slot a turned-off screen share leaves behind (screen-off does
 // replaceTrack(null), unlike camera-off which keeps a disabled track). Reusing it
@@ -512,16 +567,19 @@ async function attachVideoToPeers(track) {
 }
 
 // attachScreenAudioToPeers adds a screen-share audio track (Chrome tab/system
-// audio) to every peer. The track is added INTO localStream by the caller so it
-// shares the mic's MediaStream msid — the remote then groups both audio tracks into
-// one stream and its single per-peer <audio> element plays them mixed (per-user
-// volume/deafen cover both). It rides its OWN m-line, separate from the mic, so
-// muting the mic never silences the shared audio (by design — you mute your voice,
-// the stream keeps playing). Always addTrack (no parked-sender reuse): the teardown
-// fully removes this track, so there's never a dormant audio sender to reuse.
+// audio) to every peer under its OWN dedicated MediaStream — so it advertises a
+// DISTINCT msid from the mic and the remote can split it onto a separate <audio>
+// element with its own playout gain (the per-stream volume control), rather than
+// mixing it into the mic element. It rides its OWN m-line, separate from the mic,
+// so muting the mic never silences the shared audio (it's not a member of
+// localStream, so setVoiceMuted's getAudioTracks() loop never touches it). Always
+// addTrack (no parked-sender reuse): teardown fully removes this track, so there's
+// never a dormant audio sender to reuse.
 async function attachScreenAudioToPeers(track) {
+  if (!screenAudioStream) screenAudioStream = new MediaStream();
+  if (!screenAudioStream.getTracks().includes(track)) screenAudioStream.addTrack(track);
   for (const pc of peerConns.values()) {
-    try { pc.addTrack(track, localStream); } catch { /* peer setup race */ }
+    try { pc.addTrack(track, screenAudioStream); } catch { /* peer setup race */ }
   }
 }
 
@@ -540,7 +598,8 @@ async function stopScreenAudio() {
     const sender = pc.getSenders().find(s => s.track === t);
     if (sender) { try { pc.removeTrack(sender); } catch { /* already gone */ } }
   }
-  if (localStream) { try { localStream.removeTrack(t); } catch { /* not in stream */ } }
+  if (screenAudioStream) { try { screenAudioStream.removeTrack(t); } catch { /* not in stream */ } }
+  screenAudioStream = null;
   try { t.stop(); } catch { /* already stopped */ }
 }
 
@@ -605,8 +664,11 @@ export async function setScreenShareEnabled(on) {
       await attachVideoToPeers(screenTrack);
     }
     localStream.addTrack(screenTrack);
-    // Screen audio (if the browser/user provided it): add it into localStream so it
-    // shares the mic's stream and plays mixed at the remote (see attachScreenAudioToPeers).
+    // Screen audio (if the browser/user provided it): attach on its OWN dedicated
+    // stream (own msid) so the remote plays it through a SEPARATE <audio> element
+    // with its own volume — NOT mixed into the mic. It is deliberately NOT added to
+    // localStream, so muting the mic (setVoiceMuted's getAudioTracks loop) leaves it
+    // playing (see attachScreenAudioToPeers).
     if (screenAudio) {
       // A leftover from a prior share shouldn't linger if we somehow re-enter.
       if (screenAudioTrack && screenAudioTrack !== screenAudio) await stopScreenAudio();
@@ -614,7 +676,6 @@ export async function setScreenShareEnabled(on) {
       // Ending screen audio independently (rare) should drop it cleanly, not wedge state.
       screenAudio.onended = () => { stopScreenAudio(); };
       await attachScreenAudioToPeers(screenAudio);
-      localStream.addTrack(screenAudio);
     }
     videoIsScreen = true;
     cameraEnabled = true;
@@ -2050,31 +2111,46 @@ function createPC(remoteUserId) {
 
   pc.ontrack = (e) => {
     if (e.track.kind === "audio") {
-      let audio = audioEls.get(remoteUserId);
+      const stream = e.streams[0];
+      if (!stream) return;
+      // A peer sends mic audio on their localStream's msid (negotiated first, at
+      // call setup) and — when they screen-share with audio — a SECOND audio track
+      // on a DISTINCT dedicated msid. Tell them apart by stream id: the first audio
+      // stream we ever see for this peer is their VOICE; any other is the SCREEN
+      // share. Each routes to its own <audio> element with its own playout gain, so
+      // the per-stream volume slider can quiet the share without touching the voice.
+      if (!voiceStreamIds.has(remoteUserId)) voiceStreamIds.set(remoteUserId, stream.id);
+      const isScreen = stream.id !== voiceStreamIds.get(remoteUserId);
+      const els = isScreen ? screenAudioEls : audioEls;
+      let audio = els.get(remoteUserId);
+      const fresh = !audio;
       if (!audio) {
         audio = document.createElement("audio");
         audio.autoplay = true;
         audio.muted = deafened;
-        audio.volume = getVolumeForUser(remoteUserId); // restore any saved per-user level
+        audio.volume = isScreen ? getScreenVolumeForUser(remoteUserId) : getVolumeForUser(remoteUserId);
         document.body.appendChild(audio);
-        audioEls.set(remoteUserId, audio);
+        els.set(remoteUserId, audio);
       }
-      // A peer can send a SECOND audio track mid-call: the tab/system audio from a
-      // screen share, grouped into the mic's msid stream so it arrives in this SAME
-      // `e.streams[0]`. The track is received and lands in the stream, but Chrome
-      // treats re-assigning the identical srcObject as a no-op and the <audio>
-      // element never starts RENDERING the newly-added track — received but unheard
-      // (the IRL "I hear their mic, not their share" bug). Null-flip srcObject to
-      // force the element to re-evaluate the stream's tracks, then kick playback.
-      // We keep the browser-owned stream (not a stream of our own) so that when the
-      // share's audio sender is later removed, the track drops out automatically.
-      const stream = e.streams[0];
-      if (stream) {
-        if (audio.srcObject === stream) audio.srcObject = null;
-        audio.srcObject = stream;
-        audio.play?.().catch(() => {}); // autoplay can need a kick after a re-bind
-        addMeter(remoteUserId, stream); // pulse their row while they talk
-        dbgEvent(remoteUserId, "audio-track", { tracks: stream.getAudioTracks().length });
+      // Chrome treats re-assigning the identical srcObject as a no-op and never
+      // starts RENDERING a newly-added track (the "received but unheard" bug), so
+      // null-flip before re-binding, then kick playback. We keep the browser-owned
+      // stream so a later sender-removal drops the track automatically.
+      if (audio.srcObject === stream) audio.srcObject = null;
+      audio.srcObject = stream;
+      audio.play?.().catch(() => {}); // autoplay can need a kick after a re-bind
+      if (!isScreen) addMeter(remoteUserId, stream); // pulse their row while THEY talk (not their share)
+      dbgEvent(remoteUserId, isScreen ? "screen-audio-track" : "audio-track", { tracks: stream.getAudioTracks().length });
+      if (isScreen) {
+        // When the sender stops sharing (pc.removeTrack → renegotiation), the track
+        // is REMOVED from this stream rather than reliably firing its own 'ended' —
+        // so key the teardown on the stream's removetrack (with 'ended' as a backup).
+        // Either way: drop the element and re-render so the per-stream slider hides.
+        e.track.onended = () => removeScreenAudio(remoteUserId);
+        stream.onremovetrack = () => {
+          if (stream.getAudioTracks().length === 0) removeScreenAudio(remoteUserId);
+        };
+        if (fresh) notifyState(); // a new shared-audio stream appeared → re-render the slider
       }
     } else if (e.track.kind === "video") {
       let video = videoEls.get(remoteUserId);
@@ -2158,11 +2234,25 @@ function closePeer(userId) {
     audio.remove();
     audioEls.delete(userId);
   }
+  removeScreenAudio(userId);
+  voiceStreamIds.delete(userId);
   const video = videoEls.get(userId);
   if (video) {
     video.srcObject = null;
     videoEls.delete(userId);
   }
+}
+
+// removeScreenAudio tears down a peer's screen-share <audio> element (on share
+// stop or peer teardown) and re-renders so the per-stream slider disappears.
+// No-op when the peer has no live shared audio.
+function removeScreenAudio(userId) {
+  const el = screenAudioEls.get(userId);
+  if (!el) return;
+  el.srcObject = null;
+  el.remove();
+  screenAudioEls.delete(userId);
+  notifyState();
 }
 
 function closeAllPeers() {
@@ -2178,7 +2268,11 @@ function stopLocalStream() {
   cameraEnabled = false;
   videoIsScreen = false;
   listenOnly = false;
-  screenAudioTrack = null; // its track was stopped with the rest of localStream above
+  // Screen audio rides its own dedicated stream now, not localStream, so stop it
+  // explicitly here (the loop above only stopped localStream's tracks).
+  if (screenAudioTrack) { try { screenAudioTrack.stop(); } catch { /* already stopped */ } }
+  screenAudioTrack = null;
+  screenAudioStream = null;
 }
 
 function notifyState() {

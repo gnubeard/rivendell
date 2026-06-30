@@ -138,13 +138,25 @@ Two screen-share corners worth keeping straight:
   The `CLIMB_AFTER_HEALTHY` streak gate and the soft ceiling itself are unchanged, so this
   does **not** brush the don't-touch invariant: the target still climbs only INTO the
   (slowly re-probing) soft ceiling and parks; it just takes a screen-sized step when it does.
-- **Audio teardown differs from video.** Shared tab/system audio (Chrome) is
-  `addTrack`ed into the mic's stream so the remote plays both through its one
-  `<audio>`, but rides its own m-line so muting the mic never silences it. On stop it
-  is **fully removed** (`pc.removeTrack`), not parked — audio has no
-  `video_muted`-style gate, so a parked-but-silent track would still be audible. Video
-  parks-and-reuses its sender; audio removes. `web/e2e/screen-share.spec.js` pins
-  share → receive → camera-swap → teardown.
+- **Audio teardown differs from video.** Shared tab/system audio (Chrome) rides its
+  **own dedicated `MediaStream`** (own msid), so the remote splits it onto a **second
+  per-peer `<audio>` element** — distinct from the mic — and gives it an
+  **independent playout volume** (the per-sharer "stream volume" slider, so a loud
+  game/video can be quieted without touching the peer's voice). It is deliberately NOT
+  a member of `localStream`, so muting the mic (which iterates `localStream`'s audio
+  tracks) leaves the share playing. On stop it is **fully removed** (`pc.removeTrack`),
+  not parked — audio has no `video_muted`-style gate, so a parked-but-silent track
+  would still be audible; the receiver tears its screen `<audio>` element down on the
+  track's `onended`. Video parks-and-reuses its sender; audio removes.
+  `web/e2e/screen-share.spec.js` pins share → receive (two elements + the separate
+  slider) → camera-swap → teardown.
+
+  > **Receiver split, by msid.** The receiver can't label tracks, so it records the
+  > FIRST audio stream it sees for a peer (`voiceStreamIds`) as the voice/mic stream;
+  > any later stream with a different msid is the screen share and routes to
+  > `screenAudioEls`. The mic m-line is always negotiated first (call setup), so the
+  > voice stream is recorded before any share can arrive. Deafen mutes both element
+  > maps; the screen volume persists separately (`rivendell.voiceScreenVolumes`).
 
 ## Capture aspect ratio & the FF-Android outbound-video freeze (reference)
 

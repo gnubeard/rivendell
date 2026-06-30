@@ -30,6 +30,8 @@ import {
   setCameraErrorCallback,
   setVolumeForUser,
   getVolumeForUser,
+  setScreenVolumeForUser,
+  getScreenVolumeForUser,
   registerDebug,
   reconcilePeers,
 } from "./voice.js";
@@ -1195,6 +1197,10 @@ function renderMembers() {
     // (their <audio> element exists only then). Adjusts that one person's
     // playout level (voice.js setVolumeForUser), persisted across calls.
     const volume = onCall && !isSelf ? voiceUI.volumeSlider(u) : null;
+    // Second, independent slider for a peer's shared desktop/tab audio — only while
+    // they're actually sharing audio (their separate screen <audio> element exists).
+    const screenVolume = onCall && !isSelf && voiceUI.hasScreenAudio(u.id)
+      ? voiceUI.screenVolumeSlider(u) : null;
     list.append(
       el("li", {
         "data-user-id": String(u.id),
@@ -1206,7 +1212,8 @@ function renderMembers() {
         el("div", { class: "member-text" },
           el("span", { class: "member-name" }, u.display_name),
           el("span", { class: "member-status", title: u.status_text || null }, statusLine),
-          volume),
+          volume,
+          screenVolume),
         callCue,
         remove
       )
@@ -1633,14 +1640,24 @@ function renderDMHeader(ch) {
   // makes sense while they're on the call (their <audio> element — the thing
   // .volume drives — exists only then), so bind/collapse it to that lifecycle.
   const dmVol = $("#dm-volume");
+  const dmScreenVol = $("#dm-screen-volume");
   if (otherOnCall) {
     if (dmVolumeChannelId !== ch.id) { dmVolumeChannelId = ch.id; dmVolumeOpen = false; }
     const v = getVolumeForUser(otherId);
     dmVol.value = String(v);
     dmVol.title = `Volume — ${Math.round(v * 100)}%`;
     dmVol.hidden = !dmVolumeOpen;
+    // Second slider for the partner's shared desktop audio — only while they share it.
+    const sharingAudio = voiceUI.hasScreenAudio(otherId);
+    if (sharingAudio) {
+      const sv = getScreenVolumeForUser(otherId);
+      const sInput = dmScreenVol.querySelector("input");
+      sInput.value = String(sv);
+      dmScreenVol.title = `Stream volume — ${Math.round(sv * 100)}%`;
+    }
+    dmScreenVol.hidden = !(dmVolumeOpen && sharingAudio);
   } else {
-    dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true;
+    dmVolumeChannelId = null; dmVolumeOpen = false; dmVol.hidden = true; dmScreenVol.hidden = true;
   }
   // Self-DM scratch pad — and bot DMs (bots can't take calls or do E2E key
   // exchange) — make calling/secret-chat meaningless: hide both buttons.
@@ -1707,6 +1724,7 @@ function renderRegularHeader(ch) {
   $("#secret-btn").hidden = true;
   $("#header-camera-btn").hidden = true;
   $("#dm-volume").hidden = true;
+  $("#dm-screen-volume").hidden = true;
   dmVolumeChannelId = null; dmVolumeOpen = false;
   if (ch && !ch.is_dm) {
     if (voiceUI.inCallOn(ch.id)) {
@@ -3967,6 +3985,14 @@ function wireDMVolume() {
     const v = Number(e.target.value);
     setVolumeForUser(otherId, v);
     e.target.title = `Volume — ${Math.round(v * 100)}%`;
+  };
+  $("#dm-screen-volume").querySelector("input").oninput = (e) => {
+    const ch = state.channels[state.activeChannelId];
+    const otherId = ch && ch.is_dm && S.otherDMParticipant(ch, state.me && state.me.id);
+    if (!otherId) return;
+    const v = Number(e.target.value);
+    setScreenVolumeForUser(otherId, v);
+    $("#dm-screen-volume").title = `Stream volume — ${Math.round(v * 100)}%`;
   };
 }
 

@@ -246,6 +246,20 @@ test("get/setVolumeForUser round-trips and defaults unset users to 1", () => {
   assert.equal(voice.getVolumeForUser(9999), 1);
 });
 
+test("get/setScreenVolumeForUser is independent of the voice volume", () => {
+  assert.equal(voice.getScreenVolumeForUser(8888), 1); // never set -> unchanged
+  voice.setVolumeForUser(8888, 0.8);
+  voice.setScreenVolumeForUser(8888, 0.2); // turning the share down...
+  assert.equal(voice.getScreenVolumeForUser(8888), 0.2);
+  assert.equal(voice.getVolumeForUser(8888), 0.8); // ...leaves the voice level untouched
+  voice.setScreenVolumeForUser(8888, -3); // clamped on the way in
+  assert.equal(voice.getScreenVolumeForUser(8888), 0);
+});
+
+test("hasScreenAudio is false for a peer with no live shared audio", () => {
+  assert.equal(voice.hasScreenAudio(7777), false);
+});
+
 // --- reconnection on peer failure (ICE restart) -----------------------------
 // The reconnection policy lives in two pure functions. The timer/RTCPeerConnection
 // plumbing is browser-only, but the decisions (who restarts, when, and when to

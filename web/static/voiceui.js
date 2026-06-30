@@ -38,6 +38,9 @@ import {
   handleVoiceSignal,
   setVolumeForUser,
   getVolumeForUser,
+  setScreenVolumeForUser,
+  getScreenVolumeForUser,
+  hasScreenAudio,
   pttShouldFire,
   pttKeyLabel,
   micErrorMessage,
@@ -637,6 +640,28 @@ export function createVoiceUI({
     });
   }
 
+  // screenVolumeSlider is the SECOND, independent slider for a peer's shared
+  // desktop/tab audio — shown (by app.js) only while they're actually sharing audio
+  // (hasScreenAudio). 🖥 glyph distinguishes it from the voice slider above; the
+  // value is applied + persisted by voice.js separately from the voice volume.
+  function screenVolumeSlider(u) {
+    const pct = (v) => `Stream volume — ${Math.round(v * 100)}%`;
+    return el("label", { class: "member-screen-vol", title: pct(getScreenVolumeForUser(u.id)),
+      onclick: (e) => e.stopPropagation() },
+      el("span", { class: "member-screen-vol-icon", "aria-hidden": "true" }, "🖥"),
+      el("input", {
+        type: "range", min: "0", max: "1", step: "0.05",
+        value: String(getScreenVolumeForUser(u.id)),
+        class: "member-volume",
+        "aria-label": `Stream volume for ${u.display_name}`,
+        oninput: (e) => {
+          const v = Number(e.target.value);
+          setScreenVolumeForUser(u.id, v);
+          e.currentTarget.parentNode.title = pct(v);
+        },
+      }));
+  }
+
   // --- mobile video/chat toggle label ----------------------------------------
 
   // applyHeaderCamLabel sets the mobile video/chat toggle button's glyph + title
@@ -679,6 +704,8 @@ export function createVoiceUI({
     onProfileOpen,
     // shared renders app.js needs
     volumeSlider,
+    screenVolumeSlider,
+    hasScreenAudio,
     applyHeaderCamLabel,
     applyHeaderShareBtn,
     resetVideoView,
