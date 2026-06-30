@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.1.16] - 2026-06-30
+
+### Fixed
+- Pressing Delete (forward-delete) in the message composer no longer drags the cursor one position to the left. The rich-text layer was applying the character-count change as if the deletion happened before the caret; now a forward delete (and word-delete-forward) correctly keeps the caret in place.
+
 ## [2.1.15] - 2026-06-29
 
 ### Added

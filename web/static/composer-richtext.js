@@ -267,6 +267,13 @@ export function createComposerRichText({ el, enabled = true, getContext = () => 
   // edit is a single contiguous replace at the selection, so the new caret is
   // deterministic: prevEnd + (newLength - prevLength). Text offsets are immune to
   // the decoration, so this is exact regardless of the spans.
+  //
+  // EXCEPTION — forward delete (Delete key / word-delete-forward): the removed
+  // range is AT/AFTER the caret, not before it, so the length delta is to the
+  // RIGHT of the anchor and must NOT be applied. The caret stays at the original
+  // selectionStart (true whether collapsed or a selection). We record that the
+  // edit was a forward delete (`forward`) and the original `start` so onInput can
+  // branch — applying the delta there dragged the caret one char left per Delete.
   let pendBefore = null;
   el.addEventListener("beforeinput", (e) => {
     if (composing) { pendBefore = null; return; }
@@ -286,7 +293,10 @@ export function createComposerRichText({ el, enabled = true, getContext = () => 
         return;
       }
     }
-    pendBefore = { value: el.value, end: el.selectionEnd };
+    // `*Forward` inputTypes (deleteContentForward, deleteWordForward,
+    // delete{Soft,Hard}LineForward) delete to the right of the caret.
+    const forward = (e.inputType || "").endsWith("Forward");
+    pendBefore = { value: el.value, start: el.selectionStart, end: el.selectionEnd, forward };
   });
 
   el.addEventListener("compositionstart", () => { composing = true; });
@@ -342,7 +352,12 @@ export function createComposerRichText({ el, enabled = true, getContext = () => 
   function onInput(start, end) {
     if (pendBefore && !composing) {
       const len = el.value.length;
-      const caret = Math.max(0, Math.min(len, pendBefore.end + (len - pendBefore.value.length)));
+      // Forward delete removes at/after the caret → the caret holds at the
+      // original selectionStart (don't apply the length delta, which is to the
+      // right). Every other single-range edit (insert / backspace / selection
+      // replace) happens at-or-before the caret, so prevEnd + lengthDelta is exact.
+      const raw = pendBefore.forward ? pendBefore.start : pendBefore.end + (len - pendBefore.value.length);
+      const caret = Math.max(0, Math.min(len, raw));
       start = caret; end = caret;
     }
     pendBefore = null;

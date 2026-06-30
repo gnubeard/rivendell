@@ -198,6 +198,35 @@ test("backspacing one backtick keeps the caret in place (does not jump to the st
   expect(await valueOf()).toBe("`xY");       // not "Y`x" — the caret didn't jump to the start
 });
 
+test("forward Delete removes the char to the RIGHT and the caret holds (does not drag left)", async () => {
+  // Regression: onInput applied the length delta unconditionally, so a forward
+  // delete (which removes AFTER the caret) dragged the caret one char left per
+  // press. Type "abcd", move the caret between b and c, Delete → "abd" with the
+  // caret still before d, so the next typed char lands there.
+  await input().click();
+  await page.keyboard.type("abcd");
+  await page.evaluate(() => document.querySelector("#composer-input").setSelectionRange(2, 2)); // caret: ab|cd
+  await page.keyboard.press("Delete");        // removes "c" (to the right)
+  expect(await valueOf()).toBe("abd");
+  await page.keyboard.type("X");              // caret held at ab|d → "abXd"
+  expect(await valueOf()).toBe("abXd");       // not "aXbd" — the caret didn't drag left
+  await page.evaluate(() => { document.querySelector("#composer-input").value = ""; });
+});
+
+test("word-forward delete (Ctrl/Alt-Delete) holds the caret too", async () => {
+  // The same bug, worse: a word-delete-forward shrank by several chars, dragging
+  // the caret that many positions left. Delete the trailing word forward from the
+  // start; the caret must hold at offset 0.
+  await input().click();
+  await page.keyboard.type("foo bar");
+  await page.evaluate(() => document.querySelector("#composer-input").setSelectionRange(0, 0)); // |foo bar
+  // Word-delete-forward: Ctrl+Delete on Win/Linux, Alt+Delete on macOS.
+  await page.keyboard.press(process.platform === "darwin" ? "Alt+Delete" : "Control+Delete");
+  await page.keyboard.type("X");              // lands at the held caret (offset 0)
+  expect(await valueOf()).toMatch(/^X/);      // X is at the FRONT, caret never dragged left
+  await page.evaluate(() => { document.querySelector("#composer-input").value = ""; });
+});
+
 test("known @mention and #channel are tinted live; an unknown one stays plain", async () => {
   await input().click();
   // USER2 is a real account, so @USER2 is a known mention; #zzznope is not a channel.
