@@ -5,6 +5,14 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.1.17] - 2026-06-30
+
+### Changed
+- Desktop screen sharing now streams at a much higher resolution and stays sharp. Screen shares get their own, far more generous bitrate budget (up to ~2.5 Mbps vs. the old 800 kbps that was sized for phone-camera video), a resolution ladder that actually holds native resolution across a broad range instead of pinning a soft half-resolution, the VP9 codec (markedly sharper text/UI at the same bitrate), and bandwidth tuning that no longer mistakes a busy encoder for a failing network. Camera/phone video calls are unchanged.
+
+### Added
+- When someone shares their screen with audio (e.g. a tab or game), you can now set the volume of that shared audio independently from their voice — a separate "stream volume" slider appears for them in the members panel and the DM header while they're sharing, so you can quiet a loud video without turning down the person.
+
 ## [2.1.16] - 2026-06-30
 
 ### Fixed

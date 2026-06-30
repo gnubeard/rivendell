@@ -1005,6 +1005,18 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   accent-color: var(--accent);
 }
 
+/* The peer's SEPARATE shared-screen audio slider — sits under the voice slider
+   with a 🖥 glyph so the two are distinguishable. The icon shrinks the slider so
+   they don't read as one control. */
+.member-screen-vol {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+}
+.member-screen-vol-icon { font-size: 0.75rem; line-height: 1; flex: none; opacity: 0.8; }
+.member-screen-vol .member-volume { margin-top: 0; }
+
 /* Header on-call cue for DMs (no roster there): the other party is connected.
    Doubles as a click target that toggles the partner's volume slider, so it
    gets a pointer and a hover hint. */
@@ -1014,6 +1026,12 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
 /* The DM partner's volume slider, revealed inline beside the header 🔊. Slim,
    fixed width (no roster column to span); mirrors .member-volume's look. */
 .header-volume { width: 90px; margin-left: 0.4rem; height: 4px; vertical-align: middle; cursor: pointer; accent-color: var(--accent); }
+
+/* The DM partner's SEPARATE shared-screen audio slider, beside the voice one with
+   a 🖥 glyph. Inline so both sit on the header row. */
+.header-screen-vol { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: 0.4rem; vertical-align: middle; }
+.header-screen-vol > span { font-size: 0.8rem; line-height: 1; opacity: 0.8; }
+.header-screen-vol .header-volume { margin-left: 0; }
 
 /* Desktop: lock the four "corner" bars to matched heights so the sidebar/main
    column dividers meet flush. The top pair (sidebar header + channel header) share

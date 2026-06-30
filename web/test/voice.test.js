@@ -246,6 +246,20 @@ test("get/setVolumeForUser round-trips and defaults unset users to 1", () => {
   assert.equal(voice.getVolumeForUser(9999), 1);
 });
 
+test("get/setScreenVolumeForUser is independent of the voice volume", () => {
+  assert.equal(voice.getScreenVolumeForUser(8888), 1); // never set -> unchanged
+  voice.setVolumeForUser(8888, 0.8);
+  voice.setScreenVolumeForUser(8888, 0.2); // turning the share down...
+  assert.equal(voice.getScreenVolumeForUser(8888), 0.2);
+  assert.equal(voice.getVolumeForUser(8888), 0.8); // ...leaves the voice level untouched
+  voice.setScreenVolumeForUser(8888, -3); // clamped on the way in
+  assert.equal(voice.getScreenVolumeForUser(8888), 0);
+});
+
+test("hasScreenAudio is false for a peer with no live shared audio", () => {
+  assert.equal(voice.hasScreenAudio(7777), false);
+});
+
 // --- reconnection on peer failure (ICE restart) -----------------------------
 // The reconnection policy lives in two pure functions. The timer/RTCPeerConnection
 // plumbing is browser-only, but the decisions (who restarts, when, and when to
@@ -710,6 +724,39 @@ test("orderVideoCodecsVP8First tolerates junk input", () => {
   assert.equal(out.length, 2);
 });
 
+// --- VP9-first codec ordering (screen-share: sharper text at equal bitrate) ---
+
+test("orderVideoCodecsVP9First puts VP9 then VP8 ahead of H.264", () => {
+  const input = [
+    { mimeType: "video/H264" },
+    { mimeType: "video/VP8" },
+    { mimeType: "video/VP9" },
+  ];
+  const out = voice.orderVideoCodecsVP9First(input).map(c => c.mimeType);
+  assert.deepEqual(out, ["video/VP9", "video/VP8", "video/H264"]);
+});
+
+test("orderVideoCodecsVP9First keeps all codecs and middle-rank relative order", () => {
+  const input = [
+    { mimeType: "video/H264" },
+    { mimeType: "video/rtx" },
+    { mimeType: "video/red" },
+    { mimeType: "video/VP9" },
+    { mimeType: "video/ulpfec" },
+  ];
+  const out = voice.orderVideoCodecsVP9First(input).map(c => c.mimeType);
+  assert.deepEqual(out, ["video/VP9", "video/rtx", "video/red", "video/ulpfec", "video/H264"]);
+});
+
+test("orderVideoCodecsVP9First tolerates junk input", () => {
+  assert.deepEqual(voice.orderVideoCodecsVP9First(null), []);
+  assert.deepEqual(voice.orderVideoCodecsVP9First(undefined), []);
+  assert.deepEqual(voice.orderVideoCodecsVP9First("nope"), []);
+  const out = voice.orderVideoCodecsVP9First([{}, { mimeType: "video/VP9" }]);
+  assert.equal(out[0].mimeType, "video/VP9");
+  assert.equal(out.length, 2);
+});
+
 // --- Phase 2 hardening: Perfect Negotiation role + effective state + bitrate cap
 
 test("politeFor: the higher user_id is the polite peer", () => {
@@ -799,17 +846,18 @@ test("videoScaleForTarget: sheds resolution/framerate as the target falls", () =
 });
 
 test("videoScaleForTarget: a screen steps resolution DOWN willingly on its own thresholds", () => {
-  // Native res only with real headroom (≥ SCREEN_FULL = 700k): a 1080p+ screen needs
-  // near the full uplink budget, so holding native res below that starves the pipe.
-  assert.deepEqual(voice.videoScaleForTarget(800000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(700000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  // The broad middle (350k–700k) drops to ½ — this is the band the AIMD target actually
-  // lives in under congestion, where the old ladder wrongly pinned native res.
-  assert.deepEqual(voice.videoScaleForTarget(675000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(500000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(350000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
-  // Floor (< 350k): the extra step — ¼ res. Detail eases fps to 24.
-  assert.deepEqual(voice.videoScaleForTarget(300000, true), { scaleResolutionDownBy: 4, maxFramerate: 24 });
+  // Native res only with real headroom (≥ SCREEN_FULL = 1.6M, ≈64% of the 2.5M screen
+  // ceiling). The key fix vs. the old ladder (700k under an 800k ceiling) is that native
+  // now lives across a BROAD band (≈1.6M–2.5M), so a single stress blip — soft ceiling to
+  // ~0.85×, target to ~0.75× — stays IN the native band instead of dropping straight off it.
+  assert.deepEqual(voice.videoScaleForTarget(2500000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(1600000, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
+  // The broad middle (600k–1.6M) drops to ½.
+  assert.deepEqual(voice.videoScaleForTarget(1500000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(800000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(600000, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  // Floor (< 600k): the extra step — ¼ res. Detail eases fps to 24.
+  assert.deepEqual(voice.videoScaleForTarget(599999, true), { scaleResolutionDownBy: 4, maxFramerate: 24 });
   assert.deepEqual(voice.videoScaleForTarget(150000, true), { scaleResolutionDownBy: 4, maxFramerate: 24 });
   // A fresh sender with no congestion data yet starts at native res, 30fps.
   assert.deepEqual(voice.videoScaleForTarget(undefined, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
@@ -818,8 +866,8 @@ test("videoScaleForTarget: a screen steps resolution DOWN willingly on its own t
 test("videoScaleForTarget: a screen playing video (motion) holds framerate at the floor", () => {
   // Same resolution ladder as detail; motion only keeps framerate up at the ¼ floor
   // (smoothness is the point of a video/game share), where detail eases to 24.
-  assert.deepEqual(voice.videoScaleForTarget(800000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
-  assert.deepEqual(voice.videoScaleForTarget(500000, true, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(2500000, true, true), { scaleResolutionDownBy: 1, maxFramerate: 30 });
+  assert.deepEqual(voice.videoScaleForTarget(800000, true, true), { scaleResolutionDownBy: 2, maxFramerate: 30 });
   assert.deepEqual(voice.videoScaleForTarget(150000, true, true), { scaleResolutionDownBy: 4, maxFramerate: 30 });
   // motion only applies to a screen source: a camera ignores the flag and uses its ladder.
   assert.deepEqual(voice.videoScaleForTarget(400000, false, true), { scaleResolutionDownBy: 2, maxFramerate: 20 });
@@ -860,6 +908,15 @@ test("detectScreenMotion: a mid-range or interrupted sample resets the streak", 
   assert.deepEqual(s, { active: false, ticks: 0 });
 });
 
+test("linkStressed: loss or RTT trips, but a CPU-pinned encoder does NOT (the decoupling)", () => {
+  assert.equal(voice.linkStressed({ lossFrac: 0.10, rttMs: 100 }), true);  // loss
+  assert.equal(voice.linkStressed({ lossFrac: 0, rttMs: 700 }), true);     // RTT
+  // CPU limitation is NOT a link signal — the bandwidth soft ceiling must not learn from it.
+  assert.equal(voice.linkStressed({ lossFrac: 0, rttMs: 100, cpuLimited: true }), false);
+  assert.equal(voice.linkStressed({ lossFrac: 0.01, rttMs: 100 }), false); // healthy
+  assert.equal(voice.linkStressed({ lossFrac: null, rttMs: null }), false); // no signal
+});
+
 test("uplinkStressed: loss, RTT, or local CPU limitation each trip stress", () => {
   assert.equal(voice.uplinkStressed({ lossFrac: 0.10, rttMs: 100 }), true);  // loss
   assert.equal(voice.uplinkStressed({ lossFrac: 0, rttMs: 700 }), true);     // RTT
@@ -889,6 +946,19 @@ test("bitrateCapFor: per-sender slice shrinks as the roster grows, floored", () 
 test("bitrateCapFor: non-video kinds return the plain ceiling, not the budget", () => {
   assert.equal(voice.bitrateCapFor(6, "audio"), 800000);
   assert.equal(voice.bitrateCapFor(6, "screen"), 800000);
+});
+
+test("bitrateCapFor: a screen share rides its own, far higher budget", () => {
+  // 2-party DM share (one sender): the full screen ceiling, well above the 800k camera cap.
+  assert.equal(voice.bitrateCapFor(2, "video", true), 2500000);
+  assert.equal(voice.bitrateCapFor(1, "video", true), 2500000);
+  // Group shares still shrink with roster size: SCREEN_TOTAL 4.5M ÷ (N-1), ceilinged 2.5M.
+  assert.equal(voice.bitrateCapFor(3, "video", true), 2250000); // 4.5M/2
+  assert.equal(voice.bitrateCapFor(4, "video", true), 1500000); // 4.5M/3
+  assert.equal(voice.bitrateCapFor(7, "video", true), 750000);  // 4.5M/6
+  // The camera path is untouched when isScreen is false / omitted.
+  assert.equal(voice.bitrateCapFor(2, "video", false), 800000);
+  assert.equal(voice.bitrateCapFor(2, "video"), 800000);
 });
 
 test("uplinkLossFraction: delta loss over delta sent, guarding resets", () => {
@@ -930,6 +1000,17 @@ test("congestionTarget: climbs only after a long healthy streak; holds when band
   assert.equal(voice.congestionTarget(400000, ceiling, { lossFrac: null, rttMs: null, limited: false, healthyStreak: 4 }), 440000);
 });
 
+test("congestionTarget: a screen source climbs by the larger screen step", () => {
+  const ceiling = 2500000;
+  const settled = { lossFrac: 0.01, rttMs: 120, limited: false, healthyStreak: 4 };
+  // Over the wider ~2.5M screen range the camera's +40k step would crawl ~3× slower, so a
+  // screen climbs +150k instead — same streak gate, just a proportionate step.
+  assert.equal(voice.congestionTarget(1600000, ceiling, settled, true), 1750000);
+  assert.equal(voice.congestionTarget(1600000, ceiling, settled, false), 1640000);
+  // Back-off is unchanged (×0.75 on stress), regardless of source.
+  assert.equal(voice.congestionTarget(1600000, ceiling, { lossFrac: 0.2, rttMs: 100 }, true), 1200000);
+});
+
 test("softCeilingFor: ratchets down on stress to under the level that broke; re-probes slowly", () => {
   const hard = 800000;
   // No prior ceiling, healthy → stays at the hard ceiling (ideal conditions, no regression).
@@ -948,19 +1029,38 @@ test("softCeilingFor: ratchets down on stress to under the level that broke; re-
   assert.equal(voice.softCeilingFor(799000, hard, 780000, { lossFrac: 0, rttMs: 100, healthyStreak: 9 }), 800000);
 });
 
+test("softCeilingFor: a CPU-pinned encoder does NOT ratchet the bandwidth cap (decoupled)", () => {
+  const hard = 800000;
+  // CPU stress on a clean link must NOT teach a false link cap. The monitor zeroes the
+  // healthyStreak on any uplinkStressed interval (CPU included), so neither branch fires
+  // and the learned cap holds — the congestion TARGET still backs off on CPU separately.
+  assert.equal(voice.softCeilingFor(680000, hard, 680000, { lossFrac: 0, rttMs: 100, cpuLimited: true, healthyStreak: 0 }), 680000);
+  // Contrast: real LINK stress (loss) at the same point still ratchets down to 0.85×.
+  assert.equal(voice.softCeilingFor(680000, hard, 680000, { lossFrac: 0.2, rttMs: 100 }), 578000);
+});
+
+test("softCeilingFor: a screen source re-probes upward by the larger screen step", () => {
+  const hard = 2500000;
+  // Settled + healthy on a screen → +20k (vs +5k camera), so the wider range recovers in
+  // proportion instead of crawling ~3× slower.
+  assert.equal(voice.softCeilingFor(2000000, hard, 1900000, { lossFrac: 0, rttMs: 100, healthyStreak: 4 }, true), 2020000);
+  // The camera step is unchanged when isScreen is false.
+  assert.equal(voice.softCeilingFor(2000000, hard, 1900000, { lossFrac: 0, rttMs: 100, healthyStreak: 4 }, false), 2005000);
+});
+
 test("resolutionWithHysteresis: coarsens immediately, refines one tier at a time with margin", () => {
   // No prior scale: defer to the raw mapping (a fresh sender starts where the target says).
-  assert.equal(voice.resolutionWithHysteresis(undefined, 800000, true).scaleResolutionDownBy, 1);
+  assert.equal(voice.resolutionWithHysteresis(undefined, 2000000, true).scaleResolutionDownBy, 1);
   // COARSENING is immediate — target cratered from native to the ¼ floor in one step.
   assert.equal(voice.resolutionWithHysteresis(1, 300000, true).scaleResolutionDownBy, 4);
   // REFINING needs headroom: at ½ (prev=2), a target that only just clears the native
-  // threshold (700k) does NOT upshift — 700k×0.8 = 560k still maps to ½.
-  assert.equal(voice.resolutionWithHysteresis(2, 700000, true).scaleResolutionDownBy, 2);
+  // threshold (1.6M) does NOT upshift — 1.6M×0.8 = 1.28M still maps to ½.
+  assert.equal(voice.resolutionWithHysteresis(2, 1600000, true).scaleResolutionDownBy, 2);
   // ...but it keeps the higher framerate the bigger target affords at the held resolution.
-  assert.equal(voice.resolutionWithHysteresis(2, 700000, true).maxFramerate, 30);
-  // With real headroom (≥ 700k/0.8 = 875k, clamped here by a high target) it refines — but
-  // only ONE tier per call: ¼ → ½, never ¼ → native in a single jump.
-  assert.equal(voice.resolutionWithHysteresis(4, 1000000, true).scaleResolutionDownBy, 2);
+  assert.equal(voice.resolutionWithHysteresis(2, 1600000, true).maxFramerate, 30);
+  // With real headroom (≥ 1.6M/0.8 = 2.0M) it refines — but only ONE tier per call:
+  // ¼ → ½, never ¼ → native in a single jump.
+  assert.equal(voice.resolutionWithHysteresis(4, 2500000, true).scaleResolutionDownBy, 2);
   // From ½ with ample headroom, one more tier to native.
-  assert.equal(voice.resolutionWithHysteresis(2, 1000000, true).scaleResolutionDownBy, 1);
+  assert.equal(voice.resolutionWithHysteresis(2, 2500000, true).scaleResolutionDownBy, 1);
 });
