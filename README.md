@@ -258,6 +258,7 @@ journalctl --user -u claude-bridge.service -f
 
 The `post-commit` hook restarts the service whenever `scripts/claude-bridge`
 changes, so new versions take effect on the next `develop` commit.
+
 ---
 
 ## License
