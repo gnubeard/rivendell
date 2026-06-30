@@ -29,7 +29,11 @@
 # Optional env:
 #   RIVENDELL_CLAUDE_CHANNEL         Channel name to watch (default: claude)
 #   RIVENDELL_REPO_DIR               Repo directory Claude runs in (default: parent of this script)
-#   RIVENDELL_POLL_INTERVAL          Seconds between polls (default: 3)
+#   RIVENDELL_POLL_INTERVAL          Seconds between polls (default: 15)
+#   RIVENDELL_DM_DISCOVERY_INTERVAL  Seconds between DM-channel rediscovery (default: 60).
+#                                    Known channels are still polled every cycle; only the
+#                                    GET /channels listing that finds NEW DMs runs this slowly,
+#                                    so a brand-new DM is picked up within this window.
 #   RIVENDELL_STATE_DIR              Where to persist the last-seen message id (default: /tmp)
 #   RIVENDELL_WORKING_EMOJI          "In progress" reaction (default: 👍 — a literal
 #                                    Unicode emoji, which every instance accepts with no
@@ -59,7 +63,8 @@ RIVENDELL_BOT_TOKEN="${RIVENDELL_BOT_TOKEN:?RIVENDELL_BOT_TOKEN not set}"
 CHANNEL_NAME="${RIVENDELL_CLAUDE_CHANNEL:-claude}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="${RIVENDELL_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-POLL_INTERVAL="${RIVENDELL_POLL_INTERVAL:-3}"
+POLL_INTERVAL="${RIVENDELL_POLL_INTERVAL:-15}"
+DM_DISCOVERY_INTERVAL="${RIVENDELL_DM_DISCOVERY_INTERVAL:-60}"
 STATE_DIR="${RIVENDELL_STATE_DIR:-/tmp}"
 STATE_FILE="$STATE_DIR/rivendell-bridge-lastid"
 JOBS_DIR="$STATE_DIR/rivendell-bridge-jobs"  # one file per channel with a live job: "<pid> <msg_id>"
@@ -660,6 +665,13 @@ update_status() {
     fi
 }
 
+# DM-channel discovery cache. Re-listing every channel each cycle just to spot a
+# new DM was the bulk of the bridge's request volume; instead we refresh the id
+# list on a slower cadence (DM_DISCOVERY_INTERVAL) and reuse it in between. Known
+# DMs are still polled every cycle below — only NEW-DM discovery is throttled.
+DM_IDS=""
+LAST_DM_DISCOVERY=-1   # sentinel: force a discovery on the first cycle
+
 while true; do
     sleep "$POLL_INTERVAL" || true   # interrupted sleep (on signal) must not trigger errexit
     [ "$SHUTDOWN" -eq 1 ] && do_cleanup
@@ -668,13 +680,19 @@ while true; do
     handle_channel "$CHANNEL_ID" "normal"
     [ "$SHUTDOWN" -eq 1 ] && do_cleanup
 
-    # DM channels — discover dynamically each cycle, handle in low-effort mode.
-    # These dispatch in parallel with each other and with the main channel, so a
-    # DM question is answered even while a long job is still running.
+    # Refresh the DM id list only when the discovery window has elapsed; a brand-new
+    # DM is therefore picked up within DM_DISCOVERY_INTERVAL seconds. SECONDS is the
+    # bash builtin wall-clock since start, so this stays correct if POLL_INTERVAL is
+    # overridden. The cached list is then polled — DMs dispatch in parallel with each
+    # other and the main channel, so a DM question is answered even mid-job.
+    if [ "$LAST_DM_DISCOVERY" -lt 0 ] || [ "$((SECONDS - LAST_DM_DISCOVERY))" -ge "$DM_DISCOVERY_INTERVAL" ]; then
+        DM_IDS=$(api GET /channels 2>/dev/null \
+            | jq -r '[.[] | select(.is_dm == true)] | .[].id' 2>/dev/null || true)
+        LAST_DM_DISCOVERY=$SECONDS
+    fi
     while IFS= read -r dm_id; do
         [ -n "$dm_id" ] && handle_channel "$dm_id" "dm"
-    done < <(api GET /channels 2>/dev/null \
-        | jq -r '[.[] | select(.is_dm == true)] | .[].id' 2>/dev/null || true)
+    done <<< "$DM_IDS"
 
     update_status
 done
