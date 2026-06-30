@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.1.18] - 2026-06-30
+
+### Fixed
+- On iOS Safari, focusing the message composer no longer leaves the app stranded near the top of the screen with a big dead gap above the on-screen keyboard. The layout now anchors itself to the visible area (the part not covered by the keyboard) instead of relying on a Chromium-only viewport hint that Safari ignores, so the composer sits just above the keyboard as it should.
+
 ## [2.1.17] - 2026-06-30
 
 ### Changed

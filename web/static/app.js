@@ -229,9 +229,17 @@ const ACTIVE_CHANNEL_KEY = "rivendell.activeChannel";
 // ▌ seeds state, paints the first frame, and wires everything before realtime.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // --- mobile viewport height --------------------------------------------------
-// Pin a --app-height var to the *visual* viewport so the app fits the area not
-// covered by the on-screen keyboard. Without this, focusing the composer makes
-// the browser scroll the whole page and the header disappears off the top.
+// Pin the app shell to the *visual* viewport so it fills the area not covered by
+// the on-screen keyboard. `.app` is `position: fixed` driven by two vars:
+// --app-height (visualViewport.height) and --app-top (visualViewport.offsetTop).
+//
+// Height alone is enough on Chromium, where `interactive-widget=resizes-content`
+// resizes the layout viewport for us (offsetTop stays 0). iOS Safari ignores that
+// token: it shrinks the *visual* viewport for the keyboard but leaves the layout
+// viewport full-height and unscrolled, so a normal-flow box anchored at layout-top
+// floats above the keyboard with dead space below. Pinning --app-top to
+// offsetTop re-anchors the fixed shell to the visual viewport on Safari while
+// staying a no-op (offset 0) on Chromium.
 function trackViewportHeight() {
   const vv = window.visualViewport;
   const set = () => {
@@ -241,7 +249,10 @@ function trackViewportHeight() {
     const ml = $("#message-list");
     const atBottom = ml && isNearBottom(ml.scrollHeight, ml.scrollTop, ml.clientHeight);
     const h = Math.round(vv ? vv.height : window.innerHeight);
-    document.documentElement.style.setProperty("--app-height", `${h}px`);
+    const top = Math.round(vv ? vv.offsetTop : 0);
+    const root = document.documentElement.style;
+    root.setProperty("--app-height", `${h}px`);
+    root.setProperty("--app-top", `${top}px`);
     if (atBottom && ml) {
       // After the layout reflows to the new height, re-pin to the bottom.
       requestAnimationFrame(() => { ml.scrollTop = ml.scrollHeight; });

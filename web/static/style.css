@@ -141,7 +141,13 @@ html, body {
   height: 100%;
   /* The page itself never scrolls — the message list / drawers scroll inside a
      viewport-sized app. This stops mobile keyboards from scrolling the header
-     off the top when the composer is focused. */
+     off the top when the composer is focused. On iOS Safari overflow:hidden
+     isn't enough (it still scroll-into-views the layout viewport behind the
+     keyboard), so the body is pinned with position:fixed to fully lock it; the
+     .app shell then re-anchors to the visual viewport via --app-top. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
@@ -224,6 +230,15 @@ button.primary:hover { filter: brightness(1.08); }
   display: grid;
   grid-template-columns: 240px 1fr 200px;
   grid-template-rows: 100%;
+  /* Fixed + driven by --app-top/--app-height so the shell tracks the visual
+     viewport (offset and all) when the on-screen keyboard opens — see
+     trackViewportHeight. --app-top is 0 on Chromium, the keyboard offset on
+     iOS Safari. No transform/filter here, so position:fixed descendants (the
+     drawer backdrop) still resolve against the viewport, not .app. */
+  position: fixed;
+  top: var(--app-top, 0);
+  left: 0;
+  width: 100%;
   height: var(--app-height, 100%);
   overflow: hidden; /* the page itself never scrolls; columns scroll internally */
 }
