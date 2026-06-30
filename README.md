@@ -105,7 +105,7 @@ Copy [`.env.example`](.env.example) to `.env` as a starting point.
 **Default link-preview allowlist:** `github.com`, `wikipedia.org`, `cnn.com`,
 `bbc.com`, `bbc.co.uk`, `nytimes.com`, `theguardian.com`, `arstechnica.com`,
 `wired.com`, `techcrunch.com`, `twitter.com`, `x.com`, `theatlantic.com`,
-`apnews.com`, `nature.com`.
+`apnews.com`, `nature.com`, `bsky.app`.
 
 ---
 

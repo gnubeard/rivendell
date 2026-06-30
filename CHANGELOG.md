@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.1.15] - 2026-06-29
+
+### Added
+- Bluesky (`bsky.app`) is now on the default link-preview allowlist, so Bluesky links render og: preview cards out of the box.
+
 ## [2.1.14] - 2026-06-27
 
 ### Changed
