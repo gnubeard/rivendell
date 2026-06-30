@@ -5,6 +5,9 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+### Changed
+- Desktop screen sharing now streams at a much higher resolution and stays sharp. Screen shares get their own, far more generous bitrate budget (up to ~2.5 Mbps vs. the old 800 kbps that was sized for phone-camera video), a resolution ladder that actually holds native resolution across a broad range instead of pinning a soft half-resolution, the VP9 codec (markedly sharper text/UI at the same bitrate), and bandwidth tuning that no longer mistakes a busy encoder for a failing network. Camera/phone video calls are unchanged.
+
 ## [2.1.15] - 2026-06-29
 
 ### Added

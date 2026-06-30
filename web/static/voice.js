@@ -169,6 +169,21 @@ const VIDEO_MAX_BITRATE_BPS = 800000;
 const TOTAL_VIDEO_UPLINK_BPS = 1600000;
 const MIN_VIDEO_BITRATE_BPS = 150000;
 
+// Screen share gets its OWN, far more generous bitrate budget. The camera caps above
+// were sized for ~360p-class phone-camera video on phone uplinks; a desktop screen
+// share is a different beast — high native resolution and lots of high-contrast
+// text/edges where every extra kbps buys legibility — and it is desktop-only by nature,
+// so it rides a typically far better uplink. 800 kbps simply cannot carry a crisp 1080p+
+// desktop (industry screen-share targets are ~1.5–3 Mbps), so a screen source selects
+// these instead of VIDEO_MAX/TOTAL whenever videoIsScreen (see bitrateCapFor). This does
+// NOT widen the camera/phone budget that the marginal-wifi AIMD soft-ceiling invariant
+// protects (see docs/design/video.md) — that path is untouched. In a 2-party DM (the
+// common share) the sharer has the whole pipe, so it gets the full SCREEN_MAX; the
+// per-sender slice still shrinks with roster size for group shares (SCREEN_TOTAL ÷
+// senders), since the mesh pays each sender's cost (N-1)× on the uplink.
+const SCREEN_MAX_BITRATE_BPS = 2500000;
+const SCREEN_TOTAL_UPLINK_BPS = 4500000;
+
 // Microphone capture constraints. Hoisted to module scope because the mid-call
 // camera-enable path re-acquires a combined audio+video stream (see
 // acquireCameraStream) and must request the mic identically to the join path.
@@ -555,6 +570,12 @@ export async function setScreenShareEnabled(on) {
       // frameRate ideal 30: maxFramerate in the encoding only *limits*, so the captured
       // track must actually run at 30 for the top of the screen ladder to reach it (some
       // browsers default the display capture lower).
+      // Resolution is deliberately UNCONSTRAINED: getDisplayMedia captures the surface at
+      // its native resolution by default, and any width/height constraint risks DOWN-scaling
+      // a 1440p/4K screen toward the requested size (the very thing we're trying to avoid).
+      // The downscale we DO want is governed solely by the adaptive ladder on the encoder
+      // (videoScaleForTarget, isScreen=true) — capture native, then let congestion control
+      // decide how much to shed — so the picture is as crisp as the live link can carry.
       display = await md.getDisplayMedia({ video: { frameRate: { ideal: 30 } }, audio: true });
     } catch (err) {
       // Dismissing the OS picker rejects with NotAllowedError/AbortError — that's a
@@ -1263,11 +1284,48 @@ export function orderVideoCodecsVP8First(codecs) {
     .map(([c]) => c);
 }
 
-// videoCodecPreferenceList builds (once, cached) the VP8-first capability list
-// from the receiver's supported codecs. Empty on browsers without
-// getCapabilities — preferVideoCodec then no-ops and default negotiation stands.
-let preferredVideoCodecs = null;
-function videoCodecPreferenceList() {
+// orderVideoCodecsVP9First is the SCREEN-SHARE sibling of orderVideoCodecsVP8First: it
+// ranks VP9 ahead of VP8, keeping H.264 last and every other codec (rtx/red/ulpfec) in
+// its middle relative order. VP8 has no screen-content coding tools, while VP9 renders
+// text/UI dramatically sharper at the same bitrate — which matters MOST exactly when
+// bitrate is scarce, i.e. a screen share. Screen sharing is desktop-only and every
+// desktop browser (Chrome/Firefox/Safari) supports VP9, so this is a low-risk win
+// orthogonal to the VP8-first cross-browser default (and to the FF-Android freeze, which
+// is upstream and phone-only — a phone won't be the one sharing a screen). VP9 stays in
+// the list either way, so a peer that can't encode it just falls back. Pure — exported
+// for unit testing.
+export function orderVideoCodecsVP9First(codecs) {
+  if (!Array.isArray(codecs)) return [];
+  const rank = (c) => {
+    const m = (c && c.mimeType ? c.mimeType : "").toLowerCase();
+    if (m === "video/vp9") return 0;
+    if (m === "video/vp8") return 1;
+    if (m === "video/h264") return 3;
+    return 2; // rtx/red/ulpfec and anything else keep the middle, relative order
+  };
+  return codecs
+    .map((c, i) => [c, i])
+    .sort((a, b) => (rank(a[0]) - rank(b[0])) || (a[1] - b[1]))
+    .map(([c]) => c);
+}
+
+// videoCodecPreferenceList builds (once, cached per kind) the capability list from the
+// receiver's supported codecs: VP8-first for the camera, VP9-first for a screen share.
+// Empty on browsers without getCapabilities — preferVideoCodec then no-ops and default
+// negotiation stands. The two lists are cached independently so the per-source ordering
+// is computed at most once each.
+let preferredVideoCodecs = null;       // camera (VP8-first)
+let preferredScreenCodecs = null;      // screen (VP9-first)
+function videoCodecPreferenceList(isScreen) {
+  if (isScreen) {
+    if (preferredScreenCodecs !== null) return preferredScreenCodecs;
+    preferredScreenCodecs = [];
+    try {
+      const caps = RTCRtpReceiver.getCapabilities("video");
+      if (caps && caps.codecs) preferredScreenCodecs = orderVideoCodecsVP9First(caps.codecs);
+    } catch { /* leave empty -> no preference applied */ }
+    return preferredScreenCodecs;
+  }
   if (preferredVideoCodecs !== null) return preferredVideoCodecs;
   preferredVideoCodecs = [];
   try {
@@ -1277,12 +1335,17 @@ function videoCodecPreferenceList() {
   return preferredVideoCodecs;
 }
 
-// preferVideoCodec reorders each video transceiver's codec list VP8-first. Must
-// run before createOffer/createAnswer to land in the SDP; idempotent, so calling
-// it on both peers and on every (re)negotiation is safe. No-op without
-// setCodecPreferences (older Safari).
+// preferVideoCodec reorders each video transceiver's codec list for the live video
+// source — VP8-first for the camera, VP9-first for a screen share (videoIsScreen). Must
+// run before createOffer/createAnswer to land in the SDP; idempotent, so calling it on
+// both peers and on every (re)negotiation is safe. Keying on the LOCAL source is correct:
+// only the SHARER need bias VP9 (it picks the send codec); a peer that isn't sharing keeps
+// VP8-first but still lists VP9, so it decodes the sharer's VP9 fine. A camera↔screen swap
+// is a replaceTrack with no renegotiation, so the new source's preference lands on the
+// next offer/answer — the common "start a share" path renegotiates and applies it. No-op
+// without setCodecPreferences (older Safari).
 function preferVideoCodec(pc) {
-  const codecs = videoCodecPreferenceList();
+  const codecs = videoCodecPreferenceList(videoIsScreen);
   if (!codecs.length) return;
   for (const t of pc.getTransceivers()) {
     const kind = t.sender?.track?.kind || t.receiver?.track?.kind;
@@ -1318,14 +1381,18 @@ export function withVideoEncodingCaps(params, caps) {
 // bitrateCapFor returns the per-sender maxBitrate for a node in an N-participant
 // call: the total uplink budget split across the (N-1) video senders, ceilinged
 // at the per-sender stability cap and floored so a crowded call still shows
-// something. numPeers is the total participant count (including self). Only
-// "video" is budgeted today; other kinds return the plain ceiling. Pure;
-// exported for unit testing.
-export function bitrateCapFor(numPeers, kind) {
+// something. numPeers is the total participant count (including self). isScreen
+// selects the screen budget (SCREEN_MAX/SCREEN_TOTAL) over the camera one, so a
+// desktop share gets its higher ceiling while the camera/phone path is unchanged
+// (callers pass videoIsScreen). Only "video" is budgeted today; other kinds return
+// the plain camera ceiling. Pure; exported for unit testing.
+export function bitrateCapFor(numPeers, kind, isScreen = false) {
   if (kind !== "video") return VIDEO_MAX_BITRATE_BPS;
+  const ceiling = isScreen ? SCREEN_MAX_BITRATE_BPS : VIDEO_MAX_BITRATE_BPS;
+  const total = isScreen ? SCREEN_TOTAL_UPLINK_BPS : TOTAL_VIDEO_UPLINK_BPS;
   const senders = Math.max(1, (numPeers || 0) - 1);
-  const per = Math.floor(TOTAL_VIDEO_UPLINK_BPS / senders);
-  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(VIDEO_MAX_BITRATE_BPS, per));
+  const per = Math.floor(total / senders);
+  return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, per));
 }
 
 // --- congestion-adaptive video bitrate -------------------------------------
@@ -1369,6 +1436,18 @@ const RES_UPSHIFT_MARGIN = 0.2;       // headroom (frac of target) required to s
 // converges to its sustainable rate (a small wiggle near it, not the full cliff dive).
 const SOFT_CEILING_BACKOFF = 0.85;    // on stress, cap to 85% of the bitrate that just broke
 const SOFT_CEILING_RECOVER_BPS = 5000; // slow upward re-probe per settled interval (~2 kbps/s)
+// Screen-scoped recovery steps. The camera steps above (+40k target, +5k soft ceiling)
+// were sized for the 800 kbps camera range; over the much larger ~2.5 Mbps screen range
+// they crawl proportionally ~3× slower, so a desktop share would take MINUTES to restore
+// resolution after a single blip — re-creating "parks too low" in absolute terms even
+// after the higher ceiling. These larger steps keep the recovery *cadence* (≈% of range
+// per interval) the same on the wider screen range. This does NOT touch the don't-touch
+// AIMD invariant: the CLIMB_AFTER_HEALTHY streak gate and the soft ceiling itself are
+// unchanged — the target still climbs only INTO the (still-slowly-re-probing) soft ceiling
+// and parks; it just takes a proportionate step when it does. Screen is desktop-only, not
+// the marginal-wifi phone-camera path the invariant protects (see docs/design/video.md).
+const SCREEN_CONGESTION_INCREASE_BPS = 150000; // target climb step for a screen source
+const SCREEN_SOFT_CEILING_RECOVER_BPS = 20000; // soft-ceiling re-probe step for a screen source
 // Motion-on-a-constrained-link resolution bias. A screen playing video/a game emits
 // expensive frames (a tab switch is a near-full keyframe); on a link that has shown stress
 // (soft ceiling ratcheted below MOTION_CONSTRAINED_FRAC of the hard ceiling) we bias the
@@ -1384,14 +1463,20 @@ const MOTION_RES_BIAS = 0.5;          // bias factor on the resolution target fo
 // (¼ pixels); 4× quarters them.
 const VIDEO_SCALE_FULL_BPS = 500000;  // ≥ this → native resolution (camera)
 const VIDEO_SCALE_HALF_BPS = 300000;  // ≥ this → ½-scale; below → ¼-scale (camera)
-// Screen sources scale on their OWN, more aggressive thresholds: a shared screen is
-// high-resolution (often 1080p+), so native res needs near the full uplink budget.
-// Holding native res on a constrained link just emits frames too big to drain — the
-// classic ~0.5s-smooth / ~0.5s-stall pacing oscillation observed in the wild — so a
-// screen prefers resolution only with real headroom, then steps DOWN willingly:
-// ½ across the broad middle, ¼ at the floor (a 1080p screen still reads at ¼).
-const VIDEO_SCALE_SCREEN_FULL_BPS = 700000;     // ≥ this → native res (needs near-ceiling headroom)
-const VIDEO_SCALE_SCREEN_QUARTER_BPS = 350000;  // < this → ¼-scale; in between → ½-scale
+// Screen sources scale on their OWN thresholds, sized to the screen ceiling
+// (SCREEN_MAX_BITRATE_BPS). A shared screen is high-resolution (often 1080p+) where
+// holding native res on a too-tight link emits frames too big to drain — the classic
+// ~0.5s-smooth / ~0.5s-stall pacing oscillation observed in the wild — so a screen
+// prefers native only with real headroom, then steps DOWN willingly: ½ across a broad
+// middle, ¼ at the floor (a 1080p screen still reads at ¼). The key fix vs. the old
+// ladder: these thresholds sat 100 kbps under the *old* 800 kbps ceiling, so native res
+// lived only in the top ~12% of the budget — the AIMD target almost never stayed there
+// and the share pinned ½ for its whole life. Pegged to the new, higher ceiling, native
+// now lives across a broad band (≈64%–100% of the 2.5 Mbps ceiling), so a single stress
+// blip — which ratchets the soft ceiling to ~0.85× and the target to ~0.75× — stays
+// comfortably IN the native band instead of dropping straight off it.
+const VIDEO_SCALE_SCREEN_FULL_BPS = 1600000;    // ≥ this → native res (≈64% of the 2.5 Mbps screen ceiling)
+const VIDEO_SCALE_SCREEN_QUARTER_BPS = 600000;  // < this → ¼-scale; in between → ½-scale
 const CONGESTION_INTERVAL_MS = 2500;  // monitor cadence
 // Screen-share motion detection. The encoder's outbound fps is a clean proxy for what
 // the shared screen is doing: a static document/code editor encodes ~0–2 fps (the
@@ -1415,15 +1500,27 @@ export function uplinkLossFraction(sentNow, lostNow, sentPrev, lostPrev) {
   return Math.min(1, dLost / dSent);
 }
 
-// uplinkStressed classifies one interval's signals as stressed: remote-reported
-// loss at/above LOSS_STRESS, RTT at/above RTT_STRESS_MS, or the LOCAL encoder
-// reporting it's CPU-limited (cpuLimited). CPU pressure belongs here because the
-// only relief is a smaller frame, which the back-off → lower target → coarser
-// scale path delivers. Pure; exported so the monitor can keep the streak in sync.
-export function uplinkStressed(sig) {
+// linkStressed classifies one interval's NETWORK signals as stressed: remote-reported
+// loss at/above LOSS_STRESS or RTT at/above RTT_STRESS_MS. This is "the link broke" —
+// deliberately EXCLUSIVE of a CPU-pinned encoder — and is what the bandwidth soft ceiling
+// learns from (softCeilingFor). Keeping CPU out of it is the decoupling fix: a desktop
+// encoding a 1080p/1440p/4K screen at 30 fps in software, separately per mesh peer, hits
+// CPU limitation routinely, and conflating that with link failure let a busy encoder
+// ratchet the bandwidth cap down and PIN bitrate low long after the CPU spike passed.
+// Pure; exported for unit testing.
+export function linkStressed(sig) {
   return (sig.lossFrac != null && sig.lossFrac >= LOSS_STRESS) ||
-         (sig.rttMs != null && sig.rttMs >= RTT_STRESS_MS) ||
-         !!sig.cpuLimited;
+         (sig.rttMs != null && sig.rttMs >= RTT_STRESS_MS);
+}
+
+// uplinkStressed is linkStressed OR a CPU-pinned local encoder (cpuLimited). The
+// congestion TARGET and the healthy-streak back off on this: CPU's only relief is a
+// smaller frame, which the back-off → lower target → coarser scale/framerate path
+// delivers. The soft ceiling, by contrast, learns only from linkStressed (see
+// softCeilingFor) — so CPU drops the live target without teaching a false link cap.
+// Pure; exported so the monitor can keep the streak in sync.
+export function uplinkStressed(sig) {
+  return linkStressed(sig) || !!sig.cpuLimited;
 }
 
 // congestionTarget runs one AIMD step: given the previous target, the roster
@@ -1433,8 +1530,10 @@ export function uplinkStressed(sig) {
 // intervals (sig.healthyStreak, maintained by the caller) and the encoder isn't
 // already bandwidth-limited. The streak gate is the oscillation fix: without it a
 // single clean sample bounced the target back up while RTT was still elevated.
-// Always clamped to [MIN_VIDEO_BITRATE_BPS, ceiling]. Pure; exported for testing.
-export function congestionTarget(prev, ceiling, sig) {
+// isScreen selects the larger screen climb step (the gate is unchanged — see
+// SCREEN_CONGESTION_INCREASE_BPS). Always clamped to [MIN_VIDEO_BITRATE_BPS,
+// ceiling]. Pure; exported for testing.
+export function congestionTarget(prev, ceiling, sig, isScreen = false) {
   let target = typeof prev === "number" && prev > 0 ? prev : ceiling;
   if (uplinkStressed(sig)) {
     target = Math.floor(target * CONGESTION_DECREASE);
@@ -1442,7 +1541,8 @@ export function congestionTarget(prev, ceiling, sig) {
     const lossOk = sig.lossFrac == null || sig.lossFrac <= LOSS_OK;
     const rttOk = sig.rttMs == null || sig.rttMs < RTT_STRESS_MS;
     const settled = (sig.healthyStreak || 0) >= CLIMB_AFTER_HEALTHY;
-    if (lossOk && rttOk && settled && !sig.limited) target += CONGESTION_INCREASE_BPS;
+    const step = isScreen ? SCREEN_CONGESTION_INCREASE_BPS : CONGESTION_INCREASE_BPS;
+    if (lossOk && rttOk && settled && !sig.limited) target += step;
   }
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, target));
 }
@@ -1450,19 +1550,23 @@ export function congestionTarget(prev, ceiling, sig) {
 // softCeilingFor tracks a LEARNED cap below the hard roster ceiling — "this is where the
 // link breaks". The plain climb has no memory: every time loss clears (because we backed
 // off, not because the link healed) the target creeps back to the ceiling and re-chokes,
-// a sawtooth that eventually drops the call. On stress we ratchet the cap down to just
-// under the bitrate that broke (SOFT_CEILING_BACKOFF of prevTarget), so the target climbs
-// only INTO this cap and PARKS. When the link is settled it re-probes upward by a slow
-// creep (SOFT_CEILING_RECOVER_BPS), so a genuinely-improved connection recovers over ~a
+// a sawtooth that eventually drops the call. On LINK stress we ratchet the cap down to
+// just under the bitrate that broke (SOFT_CEILING_BACKOFF of prevTarget), so the target
+// climbs only INTO this cap and PARKS. It learns from linkStressed (loss/RTT), NOT from a
+// CPU-pinned encoder: a busy software encoder is not the link failing, and letting it
+// ratchet this cap pinned bitrate low after the spike passed (the congestion target still
+// backs off on CPU via congestionTarget — only this learned cap ignores it). When the
+// link is settled it re-probes upward by a slow creep (SOFT_CEILING_RECOVER_BPS, or the
+// larger screen step when isScreen), so a genuinely-improved connection recovers over ~a
 // minute while a persistently-bad one converges to its sustainable rate. Clamped to
 // [MIN, hardCeiling]. Pure; exported for testing.
-export function softCeilingFor(prev, hardCeiling, prevTarget, sig) {
+export function softCeilingFor(prev, hardCeiling, prevTarget, sig, isScreen = false) {
   let sc = typeof prev === "number" && prev > 0 ? prev : hardCeiling;
-  if (uplinkStressed(sig)) {
+  if (linkStressed(sig)) {
     const brokeAt = typeof prevTarget === "number" && prevTarget > 0 ? prevTarget : sc;
     sc = Math.min(sc, Math.floor(brokeAt * SOFT_CEILING_BACKOFF));
   } else if ((sig.healthyStreak || 0) >= CLIMB_AFTER_HEALTHY) {
-    sc += SOFT_CEILING_RECOVER_BPS;
+    sc += isScreen ? SCREEN_SOFT_CEILING_RECOVER_BPS : SOFT_CEILING_RECOVER_BPS;
   }
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(hardCeiling, sc));
 }
@@ -1584,7 +1688,7 @@ function readUplinkSignals(report, prev) {
 // effectiveVideoCap is the live per-sender bitrate for a peer: the roster
 // ceiling, lowered to the peer's current congestion target when one is set.
 function effectiveVideoCap(remoteUserId) {
-  const ceiling = bitrateCapFor(participants.length, "video");
+  const ceiling = bitrateCapFor(participants.length, "video", videoIsScreen);
   const meta = peerMeta.get(remoteUserId);
   if (!meta || typeof meta.videoTarget !== "number") return ceiling;
   return Math.max(MIN_VIDEO_BITRATE_BPS, Math.min(ceiling, meta.videoTarget));
@@ -1595,7 +1699,7 @@ function effectiveVideoCap(remoteUserId) {
 // skipped silently so it never disturbs a call.
 async function monitorCongestion() {
   if (activeChannelId === null) return;
-  const ceiling = bitrateCapFor(participants.length, "video");
+  const ceiling = bitrateCapFor(participants.length, "video", videoIsScreen);
   let maxFps = null; // highest outbound fps across peers this tick (drives the screen-motion latch)
   for (const [uid, pc] of peerConns) {
     const meta = peerMeta.get(uid);
@@ -1613,9 +1717,9 @@ async function monitorCongestion() {
     const prevTarget = typeof meta.videoTarget === "number" ? meta.videoTarget : ceiling;
     // Learn where this link breaks and climb only into that soft ceiling, so the target
     // parks near the sustainable rate instead of re-probing the hard ceiling every cycle.
-    meta.softCeiling = softCeilingFor(meta.softCeiling, ceiling, prevTarget, sig);
+    meta.softCeiling = softCeilingFor(meta.softCeiling, ceiling, prevTarget, sig, videoIsScreen);
     const effCeiling = Math.min(ceiling, meta.softCeiling);
-    const next = congestionTarget(prevTarget, effCeiling, sig);
+    const next = congestionTarget(prevTarget, effCeiling, sig, videoIsScreen);
     if (next !== meta.videoTarget) {
       meta.videoTarget = next;
       applyVideoBitrateCaps(uid, pc);
@@ -1668,7 +1772,7 @@ function resetVideoScaleHysteresis() {
 function applyVideoBitrateCaps(remoteUserId, pc) {
   const cap = effectiveVideoCap(remoteUserId);
   const meta = peerMeta.get(remoteUserId);
-  const hardCeiling = bitrateCapFor(participants.length, "video");
+  const hardCeiling = bitrateCapFor(participants.length, "video", videoIsScreen);
   const motion = videoIsScreen && screenMotionState.active;
   // A link that has shown real stress ratchets its soft ceiling below the hard ceiling.
   const constrained = !!meta && typeof meta.softCeiling === "number" && meta.softCeiling < hardCeiling * MOTION_CONSTRAINED_FRAC;
@@ -1815,7 +1919,7 @@ async function sendOffer(remoteUserId, pc) {
   if (pc.signalingState !== "stable") { if (meta) meta.renegotiatePending = true; return; }
   try {
     if (meta) { meta.makingOffer = true; meta.renegotiatePending = false; }
-    preferVideoCodec(pc); // VP8-first on the newly-added video track
+    preferVideoCodec(pc); // VP8-first (camera) / VP9-first (screen) on the newly-added video track
     await pc.setLocalDescription(); // no-arg: implicit createOffer
     sendFn({ type: "voice.offer", to_user_id: remoteUserId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
     dbgEvent(remoteUserId, "offer-sent", { reason: "reneg" });
@@ -1865,7 +1969,7 @@ async function onOffer(payload) {
   if (collision) dbgEvent(fromId, "glare-rollback", {});
   await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
   await drainPendingCandidates(fromId); // apply any buffered trickle-ICE candidates
-  preferVideoCodec(pc); // VP8-first on transceivers materialized by the remote offer
+  preferVideoCodec(pc); // VP8/VP9-first (per our live source) on transceivers materialized by the remote offer
   await pc.setLocalDescription(); // no-arg: implicit createAnswer
   sendFn({ type: "voice.answer", to_user_id: fromId, channel_id: activeChannelId, sdp: pc.localDescription.sdp });
   applyVideoBitrateCaps(fromId, pc); // encodings exist once the answer is local
@@ -1934,7 +2038,8 @@ function createPC(remoteUserId) {
     try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch { /* older engines */ }
     try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { /* older engines */ }
   }
-  // Prefer VP8 on any video transceiver addTrack just created (offerer side).
+  // Bias the codec on any video transceiver addTrack just created (offerer side):
+  // VP8-first for the camera, VP9-first for a screen share (see preferVideoCodec).
   preferVideoCodec(pc);
 
   pc.onicecandidate = (e) => {

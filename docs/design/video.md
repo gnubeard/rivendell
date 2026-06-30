@@ -85,24 +85,59 @@ congestion controller:
 
 Two screen-share corners worth keeping straight:
 
+- **Screen share has its OWN, far higher bitrate budget.** The camera caps
+  (`VIDEO_MAX_BITRATE_BPS` 800k / `TOTAL_VIDEO_UPLINK_BPS` 1.6M) were sized for
+  ~360p-class phone-camera video on phone uplinks; a desktop screen share is a different
+  beast (high native res, high-contrast text/edges where bitrate buys legibility) and is
+  desktop-only by nature, so a screen source selects `SCREEN_MAX_BITRATE_BPS` (2.5 Mbps)
+  / `SCREEN_TOTAL_UPLINK_BPS` (4.5 Mbps) instead whenever `videoIsScreen`
+  (`bitrateCapFor(n, "video", isScreen)`). 800 kbps simply cannot carry a crisp 1080p+
+  desktop (industry targets are ~1.5–3 Mbps); the first real-world share parked soft at
+  ≤800k because the ceiling AND the native-res threshold both sat at ~800k. The camera /
+  phone path is byte-for-byte unchanged — this does **not** widen the marginal-wifi budget
+  the AIMD soft-ceiling invariant protects. In a 2-party DM the sharer has the whole pipe
+  (full 2.5M); the per-sender slice still shrinks with roster size for group shares
+  (`SCREEN_TOTAL ÷ senders`), since the mesh pays each sender's cost (N-1)× on the uplink.
 - **Encoding steps resolution DOWN for screen content under congestion.** A share runs
   `contentHint="detail"` + `videoScaleForTarget(t, isScreen=true)`, captured at
-  `frameRate: { ideal: 30 }`. A shared screen is high-resolution (often 1080p+), so it
-  scales on its OWN thresholds (`VIDEO_SCALE_SCREEN_FULL_BPS` 700k /
-  `VIDEO_SCALE_SCREEN_QUARTER_BPS` 350k), more aggressive than the camera's: **native
-  res only with real headroom (≥700k), ½ across the broad middle (350–700k), ¼ at the
-  floor (<350k)** — framerate stays at 30. The earlier "hold native res, shed framerate"
-  design was wrong here: a 1080p+ frame too big for the link stalls in bursts (the
-  observed ~0.5 s-smooth / ~0.5 s-hiccup oscillation — telemetry showed `out.v.res`
-  pinned at full while `out.v.fps` swung 5↔21 under 13–40 % loss). Crisp-but-laggy is
-  worse than soft-but-fluid; small frames pace smoothly. The AIMD target (loss/RTT +
-  CPU-bound encoder) is what drops us, so resolution only gives once the controller has
-  judged the link can't carry native res. `detectScreenMotion` (hysteretic, watching the
-  encoder's outbound `framesPerSecond`: ~0–2 fps static, ~24+ playing) flips
-  `contentHint` to "motion" and keeps 30 fps even at the ¼ floor (a static doc eases to
-  24 there). Fully automatic, no UI. `track.onended` catches the native "Stop sharing" bar.
+  `frameRate: { ideal: 30 }` with resolution UNCONSTRAINED (native capture; any
+  width/height constraint risks down-scaling a 1440p/4K screen, so the only downscale is
+  the adaptive ladder's). A shared screen is high-resolution (often 1080p+), so it scales
+  on its OWN thresholds, now PEGGED TO THE SCREEN CEILING
+  (`VIDEO_SCALE_SCREEN_FULL_BPS` 1.6M ≈ 64 % of 2.5M / `VIDEO_SCALE_SCREEN_QUARTER_BPS`
+  600k): **native res across a broad band (≥1.6M), ½ across the broad middle (600k–1.6M),
+  ¼ at the floor (<600k)** — framerate stays at 30. The old thresholds (700k/350k) sat
+  ~100k under the *old* 800k ceiling, so native lived only in the top ~12 % of the budget
+  and the AIMD target almost never stayed there — the share pinned ½ for its whole life.
+  Pegged to the higher ceiling, native lives across a broad band, so a single stress blip
+  (soft ceiling → ~0.85×, target → ~0.75×) stays IN the native band instead of dropping
+  straight off it. The earlier "hold native res, shed framerate" design was wrong here: a
+  1080p+ frame too big for the link stalls in bursts (the observed ~0.5 s-smooth /
+  ~0.5 s-hiccup oscillation — telemetry showed `out.v.res` pinned at full while
+  `out.v.fps` swung 5↔21 under 13–40 % loss). Crisp-but-laggy is worse than soft-but-fluid;
+  small frames pace smoothly. The AIMD target (loss/RTT + CPU-bound encoder) is what drops
+  us, so resolution only gives once the controller has judged the link can't carry native
+  res. `detectScreenMotion` (hysteretic, watching the encoder's outbound `framesPerSecond`:
+  ~0–2 fps static, ~24+ playing) flips `contentHint` to "motion" and keeps 30 fps even at
+  the ¼ floor (a static doc eases to 24 there). Fully automatic, no UI. `track.onended`
+  catches the native "Stop sharing" bar.
   **DON'T** revert a screen to the camera's "hold resolution, shed framerate" rule — it
   was tried here and produced exactly the smooth/stall oscillation above.
+- **CPU limitation is decoupled from the bandwidth soft ceiling.** `uplinkStressed`
+  (= `linkStressed` loss/RTT **OR** `cpuLimited`) still backs off the live congestion
+  TARGET on a CPU-pinned encoder — its only relief is a smaller frame. But the LEARNED
+  soft ceiling (`softCeilingFor`) ratchets only on `linkStressed`, never on CPU: a desktop
+  software-encoding a 1080p/1440p/4K screen per mesh peer hits CPU limitation routinely,
+  and conflating that with link failure pinned bitrate low long after the spike passed.
+  CPU relief (drop the frame) and link-capacity learning (where the network breaks) are
+  now separate. **DON'T** re-route CPU back into `softCeilingFor`.
+- **Recovery steps are scaled to the screen range.** The camera AIMD steps (+40k target,
+  +5k soft-ceiling re-probe) were sized for the 800k range; over the ~2.5M screen range
+  they crawl ~3× slower, so a screen uses `SCREEN_CONGESTION_INCREASE_BPS` (150k) /
+  `SCREEN_SOFT_CEILING_RECOVER_BPS` (20k) — a proportionate cadence, NOT a faster gate.
+  The `CLIMB_AFTER_HEALTHY` streak gate and the soft ceiling itself are unchanged, so this
+  does **not** brush the don't-touch invariant: the target still climbs only INTO the
+  (slowly re-probing) soft ceiling and parks; it just takes a screen-sized step when it does.
 - **Audio teardown differs from video.** Shared tab/system audio (Chrome) is
   `addTrack`ed into the mic's stream so the remote plays both through its one
   `<audio>`, but rides its own m-line so muting the mic never silences it. On stop it
@@ -166,8 +201,14 @@ was understood as an upstream bug.
 
 - **Capture:** `VIDEO_CONSTRAINTS = { frameRate: { ideal: 24 } }` — frame-rate ideal
   only, no spatial constraint (see #1).
-- **Codec:** VP8-first (`orderVideoCodecsVP8First`) as a safe cross-browser default;
-  it does **not** fix the freeze (#2).
+- **Codec:** VP8-first (`orderVideoCodecsVP8First`) as a safe cross-browser default for
+  the camera; it does **not** fix the freeze (#2). A **screen share prefers VP9**
+  (`orderVideoCodecsVP9First`, selected when `videoIsScreen`) — VP8 has no screen-content
+  coding tools, and VP9 renders text/UI markedly sharper at equal bitrate, which matters
+  most when bitrate is scarce. Screen sharing is desktop-only and every desktop browser
+  supports VP9; `preferVideoCodec` keys on the LOCAL source, so only the sharer biases VP9
+  (a non-sharing peer keeps VP8-first but still decodes the sharer's VP9). Orthogonal to
+  the FF-Android freeze (upstream, phone-only — a phone won't be sharing a screen).
 - **Render:** `object-fit` on the tiles absorbs any aspect ratio.
 - **Bandwidth:** the per-sender `maxBitrate` ceiling (`VIDEO_MAX_BITRATE_BPS`,
   800 kbps) is bandwidth hygiene, not a freeze cure. An earlier live bitrate cap was
