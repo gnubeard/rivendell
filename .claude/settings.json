@@ -3,7 +3,6 @@
     "defaultMode": "acceptEdits",
     "allow": [
       "Bash(git *)",
-      "Bash(GIT_SSH_COMMAND='ssh -i .creds/claude' git *)",
       "Bash(make *)",
       "Bash(go *)",
       "Bash(gofmt *)",
