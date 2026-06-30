@@ -5,6 +5,11 @@ Internal-only changes (refactors, tests, tooling, docs) are omitted.
 
 ## [Unreleased]
 
+## [2.1.19] - 2026-06-30
+
+### Fixed
+- On iOS Safari, focusing a text field (the message composer, search, login, etc.) no longer zooms the page in and leaves it stuck zoomed until you pinch back out. Editable fields are now at least 16px on touch devices, which is the size below which mobile Safari force-zooms on focus. Desktop appearance is unchanged.
+
 ## [2.1.18] - 2026-06-30
 
 ### Fixed

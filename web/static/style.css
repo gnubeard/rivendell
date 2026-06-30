@@ -1145,3 +1145,17 @@ button.primary.small { padding: 0.2rem 0.7rem; font-size: 0.82rem; width: auto; 
   body.members-open .members { transform: translateX(0); }
   .link-preview-desc { -webkit-line-clamp: 10; }
 }
+
+/* iOS Safari zooms in on any focused text field whose computed font-size is
+   under 16px and never zooms back out — so on iPhone every composer/input focus
+   left the page zoomed in until the user manually pinched back. Raise editable
+   fields to 16px on touch devices to defeat the heuristic; desktop typography
+   (pointer: fine) is untouched. The bug is iOS-only, but `pointer: coarse` is the
+   conventional scope (no clean iOS-only CSS query exists) and 16px fields are
+   harmless on Android. The class-styled fields are listed explicitly because
+   their (0,1,0) selectors outrank a bare `input`. Selects are omitted — iOS
+   opens a native picker for them, so they never trip the zoom. */
+@media (pointer: coarse) {
+  input, textarea, #composer-input,
+  .topic-edit, .emoji-search, .user-card-note { font-size: 16px; }
+}
