@@ -2090,6 +2090,14 @@ function createPC(remoteUserId) {
 
   if (localStream) {
     for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+    // Screen-share audio is deliberately NOT a member of localStream — it rides its own
+    // dedicated stream/msid so the remote can volume it separately (see
+    // attachScreenAudioToPeers). The loop above therefore misses it, so a peer joining
+    // an in-progress share would get the screen VIDEO (which IS in localStream) but not
+    // its audio. Re-attach it here on its own stream so a late joiner hears the share too.
+    if (screenAudioTrack && screenAudioStream) {
+      try { pc.addTrack(screenAudioTrack, screenAudioStream); } catch { /* peer setup race */ }
+    }
   } else if (isOfferer(remoteUserId)) {
     // Listen-only (no mic/camera): with no local tracks our offer would carry no
     // m-lines and we'd negotiate — and receive — nothing. Add recvonly
